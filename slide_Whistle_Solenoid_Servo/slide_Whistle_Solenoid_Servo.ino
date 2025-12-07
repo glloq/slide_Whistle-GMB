@@ -1,9 +1,13 @@
 /*
- * MIDI Slide Whistle Controller - VERSION SOLÉNOÏDE + SERVO
+ * MIDI Slide Whistle Controller - VERSION SOLÉNOÏDE + SERVO (Avancé)
  *
  * Contrôle un pipeau à coulisse via MIDI USB
  * - Moteur pas à pas pour le slider (position de la note)
- * - Solénoïde/valve pour ouvrir/fermer l'arrivée d'air
+ * - Solénoïde/valve avec PWM intelligent :
+ *     → Ouverture : PWM 100% (12V) pendant 50ms
+ *     → Maintien : PWM 47% (5.6V) → réduit chauffe
+ * - Buffer/délai avant ouverture (moteur en position)
+ * - Gestion legato (notes rapides sans coupure)
  * - Servomoteur pour moduler le débit selon la vélocité
  * - Pitch bend pour glissando
  * - Aftertouch pour vibrato
@@ -13,7 +17,7 @@
  * - Driver moteur pas à pas (A4988, DRV8825, etc.)
  * - Moteur pas à pas NEMA
  * - Capteur fin de course
- * - Solénoïde/valve 12V
+ * - Solénoïde/valve 12V (Pin PWM requise!)
  * - Servomoteur
  *
  * Bibliothèques requises :
@@ -101,6 +105,7 @@ void setup() {
   Serial.println(F("\n========================================"));
   Serial.println(F("   MIDI Slide Whistle Controller"));
   Serial.println(F("   VERSION: SOLÉNOÏDE + SERVO"));
+  Serial.println(F("   (Advanced: PWM + Legato)"));
   Serial.println(F("========================================\n"));
   #endif
 
@@ -213,8 +218,11 @@ void loop() {
     Serial.print(F("Position: "));
     Serial.print(stepper.getCurrentPositionMM());
     Serial.println(F(" mm"));
-    Serial.print(F("Solenoid: "));
-    Serial.println(air.isSolenoidOpen() ? "OPEN" : "CLOSED");
+    Serial.print(F("Solenoid state: "));
+    Serial.print(air.getStateName());
+    Serial.print(F(" ("));
+    Serial.print(air.isSolenoidOpen() ? "OPEN" : "CLOSED");
+    Serial.println(F(")"));
     Serial.print(F("Last note: "));
     Serial.println(midi.getLastNote());
     Serial.print(F("Pitch bend: "));

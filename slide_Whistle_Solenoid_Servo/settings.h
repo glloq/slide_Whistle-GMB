@@ -1,9 +1,14 @@
 /*
  * MIDI Slide Whistle - Configuration Settings
- * VERSION: SOLÉNOÏDE + SERVOMOTEUR
+ * VERSION: SOLÉNOÏDE + SERVOMOTEUR (Avancé)
  *
  * Tous les paramètres de l'instrument sont centralisés ici
- * Le solénoïde ouvre/ferme l'arrivée d'air, le servo module le débit
+ *
+ * FONCTIONNALITÉS AVANCÉES :
+ * - Buffer/délai avant ouverture (moteur en position)
+ * - PWM intelligent (ouverture forte, maintien économique)
+ * - Gestion legato (notes rapides sans coupure)
+ * - Machine à états complète
  */
 
 #ifndef SETTINGS_H
@@ -65,12 +70,23 @@
 #define VIBRATO_SPEED_HZ     5.0   // Fréquence du vibrato en Hz
 
 // ============================================================================
-// CONFIGURATION CONTRÔLE D'AIR - VERSION SOLÉNOÏDE
+// CONFIGURATION CONTRÔLE D'AIR - VERSION SOLÉNOÏDE AVANCÉE
 // ============================================================================
 
-// Solénoïde/Valve (ouverture/fermeture)
-#define SOLENOID_PIN         6     // Pin de contrôle du solénoïde
-#define SOLENOID_ACTIVE_STATE HIGH // État actif (HIGH ou LOW)
+// Solénoïde/Valve (ouverture/fermeture avec PWM)
+#define SOLENOID_PIN         6     // Pin de contrôle du solénoïde (DOIT être PWM!)
+
+// PWM du solénoïde (0-255)
+#define SOLENOID_PWM_FULL    255   // PWM ouverture (100% = 12V)
+#define SOLENOID_PWM_HOLD    120   // PWM maintien (47% = 5.6V, réduit chauffe)
+
+// Délais machine à états (ms)
+#define POSITION_WAIT_DELAY     200  // Délai avant ouverture (moteur + servo en position)
+#define SOLENOID_OPEN_DURATION  50   // Durée PWM pleine puissance (ouverture rapide)
+#define SOLENOID_CLOSE_DELAY    50   // Délai avant fermeture (éviter coupure brusque)
+
+// Gestion notes rapides (legato)
+#define LEGATO_THRESHOLD        300  // Si note < 300ms après précédente = legato (pas de coupure)
 
 // Servomoteur (contrôle du débit)
 #define SERVO_PIN            9     // Pin PWM pour le servomoteur
@@ -81,12 +97,7 @@
 #define SERVO_DEFAULT_ANGLE  90    // Position par défaut
 
 // Mapping vélocité MIDI -> angle servo
-// Vélocité MIDI: 0-127
-// La vélocité MIDI contrôle l'angle du servo pour varier le débit
-
-// Délais de réponse
-#define SOLENOID_OPEN_DELAY  20    // Délai après ouverture solénoïde (ms)
-#define SOLENOID_CLOSE_DELAY 50    // Délai avant fermeture après note off (ms)
+// Vélocité MIDI: 0-127 contrôle l'angle du servo
 
 // ============================================================================
 // CONFIGURATION SYSTÈME
