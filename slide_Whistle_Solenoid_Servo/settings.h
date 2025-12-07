@@ -139,4 +139,66 @@
 // Lissage du pitch bend (ms)
 #define PITCHBEND_SMOOTH_TIME 20   // Temps de lissage des mouvements
 
+// ============================================================================
+// TABLE DE LOOKUP DES POSITIONS (LUT)
+// ============================================================================
+
+// Activer l'utilisation de la LUT (mettre false pour mapping linéaire)
+#define USE_POSITION_LUT     false  // Mettre true après calibration
+
+// Table de lookup des positions (à calibrer avec Calibration_Tool)
+// Plage: Note 48 (C3) à Note 84 (C6) - 37 notes
+//
+// VALEURS PAR DÉFAUT (mapping linéaire) :
+// Remplacer ces valeurs par celles générées par le Calibration_Tool
+// pour obtenir une justesse parfaite !
+//
+// Pour calibrer :
+// 1. Téléverser Calibration_Tool/Calibration_Tool.ino
+// 2. Suivre le processus de calibration (voir README_CALIBRATION.md)
+// 3. Copier-coller le code généré ici
+// 4. Mettre USE_POSITION_LUT à true
+// 5. Recompiler et téléverser cette version
+
+const float NOTE_POSITION_LUT[] PROGMEM = {
+  // Valeurs par défaut (linéaires) - À REMPLACER après calibration
+    0.00,  // 48 - C3
+    8.33,  // 49 - C#3
+   16.67,  // 50 - D3
+   25.00,  // 51 - D#3
+   33.33,  // 52 - E3
+   41.67,  // 53 - F3
+   50.00,  // 54 - F#3
+   58.33,  // 55 - G3
+   66.67,  // 56 - G#3
+   75.00,  // 57 - A3
+   83.33,  // 58 - A#3
+   91.67,  // 59 - B3
+  100.00,  // 60 - C4
+  108.33,  // 61 - C#4
+  116.67,  // 62 - D4
+  125.00,  // 63 - D#4
+  133.33,  // 64 - E4
+  141.67,  // 65 - F4
+  150.00,  // 66 - F#4
+  158.33,  // 67 - G4
+  166.67,  // 68 - G#4
+  175.00,  // 69 - A4
+  183.33,  // 70 - A#4
+  191.67,  // 71 - B4
+  200.00,  // 72 - C5
+  208.33,  // 73 - C#5
+  216.67,  // 74 - D5
+  225.00,  // 75 - D#5
+  233.33,  // 76 - E5
+  241.67,  // 77 - F5
+  250.00,  // 78 - F#5
+  258.33,  // 79 - G5
+  266.67,  // 80 - G#5
+  275.00,  // 81 - A5
+  283.33,  // 82 - A#5
+  291.67,  // 83 - B5
+  300.00   // 84 - C6
+};
+
 #endif // SETTINGS_H

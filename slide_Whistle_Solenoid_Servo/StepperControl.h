@@ -170,6 +170,27 @@ public:
     #endif
   }
 
+  // Obtenir la position pour une note depuis la LUT
+  float getPositionForNote(byte note) {
+    #if USE_POSITION_LUT
+    // Utiliser la table de lookup calibrée
+    if (note < MIDI_NOTE_MIN || note > MIDI_NOTE_MAX) {
+      return 0.0;
+    }
+    int index = note - MIDI_NOTE_MIN;
+    return pgm_read_float(&NOTE_POSITION_LUT[index]);
+    #else
+    // Mapping linéaire (par défaut)
+    note = constrain(note, MIDI_NOTE_MIN, MIDI_NOTE_MAX);
+    float positionMM = map(note,
+                          MIDI_NOTE_MIN,
+                          MIDI_NOTE_MAX,
+                          0,
+                          (long)(SLIDER_TRAVEL_MM * 100)) / 100.0;
+    return positionMM;
+    #endif
+  }
+
   // Déplacer vers une note MIDI
   void moveToMidiNote(byte note) {
     if (!isHomed) {
@@ -182,12 +203,8 @@ public:
     // Limiter la note dans la plage définie
     note = constrain(note, MIDI_NOTE_MIN, MIDI_NOTE_MAX);
 
-    // Calculer la position en mm en fonction de la note
-    float positionMM = map(note,
-                          MIDI_NOTE_MIN,
-                          MIDI_NOTE_MAX,
-                          0,
-                          (long)(SLIDER_TRAVEL_MM * 100)) / 100.0;
+    // Obtenir la position (LUT ou linéaire selon config)
+    float positionMM = getPositionForNote(note);
 
     baseNoteMM = positionMM;
     updateTargetPosition();
@@ -197,7 +214,12 @@ public:
     Serial.print(note);
     Serial.print(F(" -> "));
     Serial.print(positionMM);
-    Serial.println(F(" mm"));
+    Serial.print(F(" mm"));
+    #if USE_POSITION_LUT
+    Serial.println(F(" [LUT]"));
+    #else
+    Serial.println(F(" [LINEAR]"));
+    #endif
     #endif
   }
 
