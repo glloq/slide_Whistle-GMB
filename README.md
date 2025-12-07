@@ -50,10 +50,46 @@ Solénoïde avec PWM intelligent et machine à états avancée.
 | Fonctionnalité | Description |
 |----------------|-------------|
 | **Positionnement précis** | Moteur pas à pas avec calculs en mm |
+| **Table de Lookup (LUT)** | Justesse parfaite note par note |
 | **Pitch Bend** | Glissando fluide (±2 demi-tons) |
 | **Aftertouch** | Vibrato expressif en temps réel |
 | **Homing automatique** | Initialisation au démarrage |
 | **MIDI USB** | Arduino Leonardo/Micro |
+| **Outil de calibration** | Interface série pour calibrer chaque note |
+
+---
+
+## 🎯 Calibration et Justesse
+
+### 📐 Pourquoi calibrer ?
+
+Les flûtes à coulisse ne suivent **pas une relation linéaire** entre position et note :
+- Fréquence ∝ 1/Longueur (relation hyperbolique)
+- Mapping linéaire → **erreur jusqu'à 45mm** sur les graves !
+
+### ✨ Solution : Table de Lookup (LUT)
+
+Le système utilise une **table de lookup** pour une justesse parfaite :
+
+| Mode | Justesse | Configuration |
+|------|----------|---------------|
+| **Linéaire** (défaut) | Approximative | `USE_POSITION_LUT = false` |
+| **LUT calibrée** | Parfaite ✓ | `USE_POSITION_LUT = true` |
+
+### 🛠️ [Outil de Calibration](Calibration_Tool/)
+
+Programme interactif pour calibrer chaque note :
+
+```
+1. Téléverser Calibration_Tool.ino
+2. Ajuster chaque note avec +/- (tuner nécessaire)
+3. Copier-coller le tableau généré dans settings.h
+4. Activer USE_POSITION_LUT = true
+```
+
+**Temps de calibration** : 15-20 minutes pour 37 notes
+
+👉 **[Guide complet de calibration →](Calibration_Tool/README_CALIBRATION.md)**
 
 ---
 
@@ -155,7 +191,7 @@ slide_Whistle/
 │
 ├── slide_Whistle_Fan_Servo/          🌀 Version Ventilateur
 │   ├── README.md                      ← Documentation détaillée
-│   ├── settings.h
+│   ├── settings.h                     (avec LUT)
 │   ├── StepperControl.h
 │   ├── MIDIHandler.h
 │   ├── AirControl.h
@@ -163,12 +199,18 @@ slide_Whistle/
 │
 ├── slide_Whistle_Solenoid_Servo/     ⚡ Version Solénoïde
 │   ├── README.md                      ← Documentation détaillée
-│   ├── settings.h
+│   ├── settings.h                     (avec LUT)
 │   ├── StepperControl.h
 │   ├── MIDIHandler.h
 │   ├── AirControl.h
 │   └── slide_Whistle_Solenoid_Servo.ino
 │
+├── Calibration_Tool/                  🎯 Outil de calibration
+│   ├── README_CALIBRATION.md          ← Guide de calibration
+│   ├── Calibration_Tool.ino           Programme de calibration
+│   └── settings.h                     Configuration hardware
+│
+├── POULIE_ANALYSIS.md                 📐 Analyse poulies GT2
 ├── INSTALLATION.md                    📖 Guide installation
 ├── COMPONENTS_LIST.md                 🛒 Liste d'achat
 ├── CONFIGURATION_EXAMPLES.md          ⚙️ Exemples configs
@@ -183,8 +225,10 @@ slide_Whistle/
 2. **Acheter** les composants (voir COMPONENTS_LIST.md)
 3. **Câbler** selon le schéma (voir README de la version)
 4. **Configurer** settings.h
-5. **Téléverser** le code
-6. **Jouer** ! 🎵
+5. **Téléverser** le code (mapping linéaire par défaut)
+6. **Tester** le fonctionnement
+7. **Calibrer** avec Calibration_Tool pour justesse parfaite (optionnel mais recommandé)
+8. **Jouer** ! 🎵
 
 ---
 
