@@ -1,6 +1,9 @@
 /*
  * AirControl.h
- * Gestion du flux d'air via ventilateur/solénoïde et servomoteur
+ * Gestion du flux d'air - VERSION VENTILATEUR
+ *
+ * Le ventilateur tourne en continu pendant les notes
+ * Le servomoteur module le débit selon la vélocité
  */
 
 #ifndef AIR_CONTROL_H
@@ -12,56 +15,54 @@
 class AirControl {
 private:
   Servo airServo;
-  bool fanActive;
-  unsigned long fanOffTime;
-  bool delayedOffPending;
+  bool fanRunning;
   byte currentVelocity;
+  unsigned long servoCloseTime;
+  bool delayedClosePending;
 
 public:
   // Constructeur
   AirControl()
-    : fanActive(false),
-      fanOffTime(0),
-      delayedOffPending(false),
-      currentVelocity(0) {
+    : fanRunning(false),
+      currentVelocity(0),
+      servoCloseTime(0),
+      delayedClosePending(false) {
   }
 
   // Initialisation
   void begin() {
-    // Configuration du ventilateur/solénoïde
+    // Configuration du ventilateur
     pinMode(FAN_PIN, OUTPUT);
     setFanState(false);
 
     // Configuration du servomoteur
-    #if SERVO_ENABLED
     airServo.attach(SERVO_PIN);
-    airServo.write(SERVO_DEFAULT_ANGLE);
+    airServo.write(SERVO_CLOSED_ANGLE); // Fermé au départ
     delay(500); // Laisser le servo se positionner
-    #endif
 
     #if DEBUG_MODE
-    Serial.println(F("AirControl: Initialized"));
+    Serial.println(F("AirControl: Initialized (FAN mode)"));
     Serial.print(F("AirControl: Fan pin "));
     Serial.println(FAN_PIN);
-    #if SERVO_ENABLED
     Serial.print(F("AirControl: Servo pin "));
     Serial.println(SERVO_PIN);
-    #endif
+    Serial.println(F("AirControl: Fan runs continuously, servo modulates airflow"));
     #endif
   }
 
-  // Activer l'air (appelé lors d'un Note On)
+  // Démarrer l'air (appelé lors d'un Note On)
   void startAir(byte velocity) {
     currentVelocity = velocity;
-    delayedOffPending = false;
+    delayedClosePending = false;
 
-    // Activer le ventilateur
-    setFanState(true);
+    // Démarrer le ventilateur
+    if (!fanRunning) {
+      setFanState(true);
+      delay(FAN_STARTUP_DELAY); // Laisser le ventilateur démarrer
+    }
 
-    // Ajuster le servomoteur en fonction de la vélocité
-    #if SERVO_ENABLED
+    // Ouvrir le servo selon la vélocité
     setServoFromVelocity(velocity);
-    #endif
 
     #if DEBUG_MODE
     Serial.print(F("AirControl: Air ON, velocity "));
@@ -69,17 +70,14 @@ public:
     #endif
   }
 
-  // Désactiver l'air (appelé lors d'un Note Off)
+  // Arrêter l'air (appelé lors d'un Note Off)
   void stopAir() {
-    // Programmer l'arrêt avec délai
-    if (AIR_OFF_DELAY > 0) {
-      delayedOffPending = true;
-      fanOffTime = millis() + AIR_OFF_DELAY;
+    // Programmer la fermeture du servo avec délai
+    if (SERVO_CLOSE_DELAY > 0) {
+      delayedClosePending = true;
+      servoCloseTime = millis() + SERVO_CLOSE_DELAY;
     } else {
-      setFanState(false);
-      #if SERVO_ENABLED
-      airServo.write(SERVO_DEFAULT_ANGLE);
-      #endif
+      closeAir();
     }
 
     #if DEBUG_MODE
@@ -87,25 +85,28 @@ public:
     #endif
   }
 
+  // Fermer l'air immédiatement
+  void closeAir() {
+    airServo.write(SERVO_CLOSED_ANGLE);
+    setFanState(false);
+    delayedClosePending = false;
+
+    #if DEBUG_MODE
+    Serial.println(F("AirControl: Air closed"));
+    #endif
+  }
+
   // Mettre à jour (à appeler dans loop)
   void update() {
-    // Gérer l'arrêt différé du ventilateur
-    if (delayedOffPending && millis() >= fanOffTime) {
-      setFanState(false);
-      #if SERVO_ENABLED
-      airServo.write(SERVO_DEFAULT_ANGLE);
-      #endif
-      delayedOffPending = false;
-
-      #if DEBUG_MODE
-      Serial.println(F("AirControl: Air OFF executed"));
-      #endif
+    // Gérer la fermeture différée du servo
+    if (delayedClosePending && millis() >= servoCloseTime) {
+      closeAir();
     }
   }
 
   // Définir l'état du ventilateur
   void setFanState(bool state) {
-    fanActive = state;
+    fanRunning = state;
     digitalWrite(FAN_PIN, state ? FAN_ACTIVE_STATE : !FAN_ACTIVE_STATE);
 
     #if LED_ENABLED
@@ -115,31 +116,35 @@ public:
 
   // Définir manuellement l'angle du servo (0-180)
   void setServoAngle(byte angle) {
-    #if SERVO_ENABLED
-    angle = constrain(angle, 0, 180);
+    angle = constrain(angle, SERVO_CLOSED_ANGLE, SERVO_OPEN_ANGLE);
     airServo.write(angle);
 
     #if DEBUG_MODE
     Serial.print(F("AirControl: Servo angle set to "));
     Serial.println(angle);
     #endif
-    #endif
   }
 
   // Définir l'angle du servo depuis la vélocité MIDI (0-127)
   void setServoFromVelocity(byte velocity) {
-    #if SERVO_ENABLED
     // Mapper la vélocité MIDI (0-127) vers l'angle du servo
     byte angle = map(velocity,
                     0, 127,
-                    SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
+                    SERVO_CLOSED_ANGLE, SERVO_OPEN_ANGLE);
     setServoAngle(angle);
+
+    #if DEBUG_MODE
+    Serial.print(F("AirControl: Velocity "));
+    Serial.print(velocity);
+    Serial.print(F(" -> Servo "));
+    Serial.print(angle);
+    Serial.println(F("°"));
     #endif
   }
 
   // Obtenir l'état du ventilateur
-  bool isFanActive() {
-    return fanActive;
+  bool isFanRunning() {
+    return fanRunning;
   }
 
   // Obtenir la vélocité actuelle
@@ -149,24 +154,22 @@ public:
 
   // Test du servomoteur (balayage)
   void testServo() {
-    #if SERVO_ENABLED
     #if DEBUG_MODE
     Serial.println(F("AirControl: Testing servo..."));
     #endif
 
-    for (int angle = SERVO_MIN_ANGLE; angle <= SERVO_MAX_ANGLE; angle += 5) {
+    for (int angle = SERVO_CLOSED_ANGLE; angle <= SERVO_OPEN_ANGLE; angle += 5) {
       airServo.write(angle);
       delay(50);
     }
-    for (int angle = SERVO_MAX_ANGLE; angle >= SERVO_MIN_ANGLE; angle -= 5) {
+    for (int angle = SERVO_OPEN_ANGLE; angle >= SERVO_CLOSED_ANGLE; angle -= 5) {
       airServo.write(angle);
       delay(50);
     }
-    airServo.write(SERVO_DEFAULT_ANGLE);
+    airServo.write(SERVO_CLOSED_ANGLE);
 
     #if DEBUG_MODE
     Serial.println(F("AirControl: Servo test complete"));
-    #endif
     #endif
   }
 

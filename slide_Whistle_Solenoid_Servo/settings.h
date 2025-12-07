@@ -1,6 +1,9 @@
 /*
  * MIDI Slide Whistle - Configuration Settings
+ * VERSION: SOLÉNOÏDE + SERVOMOTEUR
+ *
  * Tous les paramètres de l'instrument sont centralisés ici
+ * Le solénoïde ouvre/ferme l'arrivée d'air, le servo module le débit
  */
 
 #ifndef SETTINGS_H
@@ -18,12 +21,19 @@
 // Paramètres mécaniques
 #define STEPS_PER_REVOLUTION  200  // Nombre de pas par tour (moteur NEMA standard)
 #define MICROSTEPS           16    // Microstepping du driver (1, 2, 4, 8, 16, 32)
-#define STEPPER_SPEED        1000  // Vitesse en pas/seconde
-#define STEPPER_ACCELERATION 500   // Accélération en pas/seconde²
+#define STEPS_PER_MM         40.0  // Nombre de pas par millimètre (à calibrer)
+                                   // Exemple: poulie 20 dents GT2 = (200*16)/(20*2) = 80 pas/mm
 
-// Course du slider (en pas)
-#define TOTAL_TRAVEL_STEPS   10000 // Course totale du slider en pas
-#define HOME_OFFSET_STEPS    500   // Offset depuis le capteur fin de course
+// Vitesse et accélération
+#define STEPPER_SPEED_MM_S   25.0  // Vitesse en mm/seconde
+#define STEPPER_ACCEL_MM_S2  15.0  // Accélération en mm/seconde²
+
+// Course du slider
+#define SLIDER_TRAVEL_MM     300.0 // Course totale du slider en millimètres
+#define HOME_OFFSET_MM       5.0   // Offset depuis le capteur fin de course (mm)
+
+// Direction du moteur
+#define INVERT_MOTOR_DIR     false // true = inverser le sens vers le capteur FDC
 
 // ============================================================================
 // CONFIGURATION CAPTEUR FIN DE COURSE
@@ -33,8 +43,8 @@
 #define ENDSTOP_ACTIVE_STATE LOW   // État actif du capteur (LOW = normalement fermé)
 
 // Paramètres de homing
-#define HOMING_SPEED         400   // Vitesse de retour à l'origine (pas/sec)
-#define HOMING_BACKOFF_STEPS 100   // Recul après détection du capteur
+#define HOMING_SPEED_MM_S    10.0  // Vitesse de retour à l'origine (mm/sec)
+#define HOMING_BACKOFF_MM    2.0   // Recul après détection du capteur (mm)
 
 // ============================================================================
 // CONFIGURATION MIDI
@@ -45,37 +55,42 @@
 #define MIDI_NOTE_MAX        84    // Note MIDI la plus haute (C6)
 #define MIDI_CHANNEL         1     // Canal MIDI à écouter (1-16, 0 = tous)
 
-// Mapping notes -> positions
-// Position calculée linéairement entre 0 et TOTAL_TRAVEL_STEPS
-// Vous pouvez ajuster la courbe dans le code si nécessaire
+// Pitch Bend
+#define PITCHBEND_ENABLED    true  // Activer le pitch bend
+#define PITCHBEND_RANGE_SEMITONES 2.0  // Plage en demi-tons (+/- 2 = 4 demi-tons total)
+
+// Aftertouch (vibrato)
+#define AFTERTOUCH_ENABLED   true  // Activer l'aftertouch
+#define VIBRATO_DEPTH_MM     2.0   // Profondeur du vibrato en mm
+#define VIBRATO_SPEED_HZ     5.0   // Fréquence du vibrato en Hz
 
 // ============================================================================
-// CONFIGURATION CONTRÔLE D'AIR
+// CONFIGURATION CONTRÔLE D'AIR - VERSION SOLÉNOÏDE
 // ============================================================================
 
-// Ventilateur / Solénoïde
-#define FAN_PIN              6     // Pin de contrôle du ventilateur/solénoïde
-#define FAN_ACTIVE_STATE     HIGH  // État actif (HIGH ou LOW)
+// Solénoïde/Valve (ouverture/fermeture)
+#define SOLENOID_PIN         6     // Pin de contrôle du solénoïde
+#define SOLENOID_ACTIVE_STATE HIGH // État actif (HIGH ou LOW)
 
 // Servomoteur (contrôle du débit)
 #define SERVO_PIN            9     // Pin PWM pour le servomoteur
-#define SERVO_ENABLED        true  // Activer/désactiver le servomoteur
 
 // Positions servomoteur (en degrés, 0-180)
-#define SERVO_MIN_ANGLE      30    // Angle minimum (débit minimum)
-#define SERVO_MAX_ANGLE      150   // Angle maximum (débit maximum)
+#define SERVO_CLOSED_ANGLE   30    // Angle fermé (débit minimum)
+#define SERVO_OPEN_ANGLE     150   // Angle ouvert (débit maximum)
 #define SERVO_DEFAULT_ANGLE  90    // Position par défaut
 
 // Mapping vélocité MIDI -> angle servo
 // Vélocité MIDI: 0-127
 // La vélocité MIDI contrôle l'angle du servo pour varier le débit
 
+// Délais de réponse
+#define SOLENOID_OPEN_DELAY  20    // Délai après ouverture solénoïde (ms)
+#define SOLENOID_CLOSE_DELAY 50    // Délai avant fermeture après note off (ms)
+
 // ============================================================================
 // CONFIGURATION SYSTÈME
 // ============================================================================
-
-// Délai pour l'arrêt du ventilateur après note off (ms)
-#define AIR_OFF_DELAY        50    // Petit délai pour éviter les coupures brusques
 
 // LED de statut (optionnel)
 #define STATUS_LED_PIN       13    // LED intégrée Arduino
@@ -89,15 +104,11 @@
 // CALIBRATION AVANCÉE
 // ============================================================================
 
-// Courbe de réponse du slider (linéaire par défaut)
-// Options: LINEAR, LOGARITHMIC, EXPONENTIAL
-#define POSITION_CURVE       LINEAR
-
-// Compensation de la vélocité
-#define VELOCITY_COMPENSATION true // Ajuste la position selon la vélocité
-
 // Limites de sécurité
 #define ENABLE_SOFT_LIMITS   true  // Active les limites logicielles
 #define MAX_HOMING_TIME      10000 // Timeout pour le homing (ms)
+
+// Lissage du pitch bend (ms)
+#define PITCHBEND_SMOOTH_TIME 20   // Temps de lissage des mouvements
 
 #endif // SETTINGS_H
