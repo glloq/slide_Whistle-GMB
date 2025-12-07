@@ -1,18 +1,22 @@
 /*
- * MIDI Slide Whistle Controller
+ * MIDI Slide Whistle Controller - VERSION VENTILATEUR + SERVO
  *
  * Contrôle un pipeau à coulisse via MIDI USB
  * - Moteur pas à pas pour le slider (position de la note)
- * - Ventilateur/solénoïde pour l'air
- * - Servomoteur optionnel pour contrôler le débit
+ * - Ventilateur tournant EN CONTINU (toujours allumé)
+ * - Servomoteur pour DIRIGER le flux d'air :
+ *     → Note ON  : Air dirigé vers le bec du pipeau (son produit)
+ *     → Note OFF : Air dirigé ailleurs (pas de son)
+ * - Pitch bend pour glissando
+ * - Aftertouch pour vibrato
  *
  * Hardware requis :
  * - Arduino compatible MIDIUSB (Leonardo, Micro, Due, etc.)
  * - Driver moteur pas à pas (A4988, DRV8825, etc.)
  * - Moteur pas à pas NEMA
  * - Capteur fin de course
- * - Ventilateur ou solénoïde
- * - Servomoteur (optionnel)
+ * - Ventilateur 12V (toujours allumé)
+ * - Servomoteur (dirige le flux d'air)
  *
  * Bibliothèques requises :
  * - AccelStepper
@@ -47,13 +51,13 @@ SystemState currentState = STATE_INIT;
 // Callback appelé lors d'un Note On
 void onMidiNoteOn(byte note, byte velocity) {
   if (currentState != STATE_READY) {
-    return; // Ignorer si le système n'est pas prêt
+    return;
   }
 
   // Déplacer le slider vers la note
   stepper.moveToMidiNote(note);
 
-  // Activer l'air
+  // Diriger l'air vers le bec (vélocité ignorée)
   air.startAir(velocity);
 }
 
@@ -63,11 +67,29 @@ void onMidiNoteOff(byte note) {
     return;
   }
 
-  // Arrêter l'air
+  // Diriger l'air ailleurs (loin du bec)
   air.stopAir();
 
-  // Option : retourner à la position centrale après la note
-  // stepper.moveToCenter();
+  // Arrêter le vibrato si actif
+  stepper.setVibrato(false, 0);
+}
+
+// Callback appelé lors d'un Pitch Bend
+void onMidiPitchBend(float semitones) {
+  if (currentState != STATE_READY) {
+    return;
+  }
+
+  stepper.setPitchBend(semitones);
+}
+
+// Callback appelé lors d'un Aftertouch
+void onMidiAftertouch(bool active, byte pressure) {
+  if (currentState != STATE_READY) {
+    return;
+  }
+
+  stepper.setVibrato(active, pressure);
 }
 
 // ============================================================================
@@ -77,16 +99,19 @@ void onMidiNoteOff(byte note) {
 void setup() {
   #if DEBUG_MODE
   Serial.begin(SERIAL_BAUD_RATE);
-  while (!Serial && millis() < 3000); // Attendre Serial max 3s
+  while (!Serial && millis() < 3000);
   Serial.println(F("\n========================================"));
   Serial.println(F("   MIDI Slide Whistle Controller"));
+  Serial.println(F("   VERSION: VENTILATEUR + SERVO"));
+  Serial.println(F("   Fan: Always ON"));
+  Serial.println(F("   Servo: Directs airflow"));
   Serial.println(F("========================================\n"));
   #endif
 
   // LED de statut
   #if LED_ENABLED
   pinMode(STATUS_LED_PIN, OUTPUT);
-  digitalWrite(STATUS_LED_PIN, HIGH); // Allumer pendant l'init
+  digitalWrite(STATUS_LED_PIN, HIGH);
   #endif
 
   currentState = STATE_INIT;
@@ -103,14 +128,14 @@ void setup() {
   // Enregistrer les callbacks MIDI
   midi.setNoteOnCallback(onMidiNoteOn);
   midi.setNoteOffCallback(onMidiNoteOff);
+  midi.setPitchBendCallback(onMidiPitchBend);
+  midi.setAftertouchCallback(onMidiAftertouch);
 
   // Tests optionnels au démarrage
   #if DEBUG_MODE
   Serial.println(F("\nRunning self-tests..."));
   air.testFan();
-  #if SERVO_ENABLED
   air.testServo();
-  #endif
   #endif
 
   // Procédure de homing
@@ -120,7 +145,6 @@ void setup() {
 
   currentState = STATE_HOMING;
   #if LED_ENABLED
-  // Clignoter pendant le homing
   for (int i = 0; i < 5; i++) {
     digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
     delay(100);
@@ -140,13 +164,15 @@ void setup() {
     #endif
 
     #if LED_ENABLED
-    digitalWrite(STATUS_LED_PIN, LOW); // Éteindre la LED
+    digitalWrite(STATUS_LED_PIN, LOW);
     #endif
 
-    // Signal sonore optionnel (bip court)
-    air.setFanState(true);
+    // Signal sonore (bip court)
+    air.startAir(100);
     delay(100);
-    air.setFanState(false);
+    air.stopAir();
+    delay(200);
+    air.update();
 
   } else {
     currentState = STATE_ERROR;
@@ -159,7 +185,6 @@ void setup() {
     #endif
 
     #if LED_ENABLED
-    // Clignoter rapidement en cas d'erreur
     while (true) {
       digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
       delay(200);
@@ -173,48 +198,36 @@ void setup() {
 // ============================================================================
 
 void loop() {
-  // Vérifier l'état du système
   if (currentState != STATE_READY) {
     return;
   }
 
   // Mettre à jour les modules
   midi.update();      // Lire les messages MIDI
-  stepper.update();   // Mettre à jour le moteur
-  air.update();       // Gérer les délais d'arrêt de l'air
+  stepper.update();   // Mettre à jour le moteur (inclut vibrato)
+  air.update();       // Gérer les délais de fermeture
 
-  // Affichage de debug périodique (optionnel)
+  // Debug périodique
   #if DEBUG_MODE
   static unsigned long lastDebugTime = 0;
-  if (millis() - lastDebugTime > 5000) { // Toutes les 5 secondes
+  if (millis() - lastDebugTime > 5000) {
     lastDebugTime = millis();
 
     Serial.println(F("\n--- Status ---"));
-    Serial.print(F("Stepper position: "));
-    Serial.println(stepper.getCurrentPosition());
-    Serial.print(F("Fan active: "));
-    Serial.println(air.isFanActive() ? "YES" : "NO");
-    Serial.print(F("Last MIDI note: "));
+    Serial.print(F("Position: "));
+    Serial.print(stepper.getCurrentPositionMM());
+    Serial.println(F(" mm"));
+    Serial.print(F("Fan: "));
+    Serial.println(air.isFanRunning() ? "ON (continuous)" : "OFF");
+    Serial.print(F("Air to beak: "));
+    Serial.println(air.isAirDirectedToBeak() ? "YES" : "NO");
+    Serial.print(F("Last note: "));
     Serial.println(midi.getLastNote());
+    Serial.print(F("Pitch bend: "));
+    Serial.println(midi.getPitchBendValue());
+    Serial.print(F("Aftertouch: "));
+    Serial.println(midi.getAftertouchPressure());
     Serial.println();
   }
   #endif
-}
-
-// ============================================================================
-// FONCTIONS UTILITAIRES (optionnel)
-// ============================================================================
-
-// Reset du système (peut être appelé via Serial ou bouton)
-void resetSystem() {
-  #if DEBUG_MODE
-  Serial.println(F("Resetting system..."));
-  #endif
-
-  air.setFanState(false);
-  stepper.resetHoming();
-  currentState = STATE_INIT;
-
-  // Redémarrer le setup
-  setup();
 }
