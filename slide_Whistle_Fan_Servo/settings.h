@@ -22,12 +22,17 @@
 // Paramètres mécaniques
 #define STEPS_PER_REVOLUTION  200  // Nombre de pas par tour (moteur NEMA standard)
 #define MICROSTEPS           16    // Microstepping du driver (1, 2, 4, 8, 16, 32)
-#define STEPS_PER_MM         40.0  // Nombre de pas par millimètre (à calibrer)
-                                   // Exemple: poulie 20 dents GT2 = (200*16)/(20*2) = 80 pas/mm
 
-// Vitesse et accélération
-#define STEPPER_SPEED_MM_S   25.0  // Vitesse en mm/seconde
-#define STEPPER_ACCEL_MM_S2  15.0  // Accélération en mm/seconde²
+// IMPORTANT : Choisir la poulie selon vitesse/précision souhaitée (voir POULIE_ANALYSIS.md)
+#define STEPS_PER_MM         44.4  // Poulie 36 dents GT2 (RECOMMANDÉ pour rapidité)
+                                   // Calcul: (200 × 16) / (36 × 2) = 44.4 pas/mm
+                                   // Autres options :
+                                   // - 30 dents: 53.3 pas/mm (compromis)
+                                   // - 20 dents: 80.0 pas/mm (trop lent)
+
+// Vitesse et accélération (optimisées pour poulie 36 dents)
+#define STEPPER_SPEED_MM_S   45.0  // Vitesse maximale en mm/seconde
+#define STEPPER_ACCEL_MM_S2  30.0  // Accélération en mm/seconde²
 
 // Course du slider
 #define SLIDER_TRAVEL_MM     300.0 // Course totale du slider en millimètres

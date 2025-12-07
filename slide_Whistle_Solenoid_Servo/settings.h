@@ -26,12 +26,21 @@
 // Paramètres mécaniques
 #define STEPS_PER_REVOLUTION  200  // Nombre de pas par tour (moteur NEMA standard)
 #define MICROSTEPS           16    // Microstepping du driver (1, 2, 4, 8, 16, 32)
-#define STEPS_PER_MM         40.0  // Nombre de pas par millimètre (à calibrer)
-                                   // Exemple: poulie 20 dents GT2 = (200*16)/(20*2) = 80 pas/mm
+
+// IMPORTANT : Choisir la poulie selon vitesse/précision souhaitée
+// Voir POULIE_ANALYSIS.md pour analyse complète
+#define STEPS_PER_MM         44.4  // Poulie 36 dents GT2 (RECOMMANDÉ - rapide)
+                                   // Calcul: (200 × 16) / (36 × 2) = 44.4 pas/mm
+                                   //
+                                   // Autres poulies disponibles :
+                                   // - 20 dents : 80 pas/mm (lent, déconseillé)
+                                   // - 24 dents : 66.7 pas/mm (acceptable)
+                                   // - 30 dents : 53.3 pas/mm (bon compromis)
+                                   // - 36 dents : 44.4 pas/mm (optimal vitesse)
 
 // Vitesse et accélération
-#define STEPPER_SPEED_MM_S   25.0  // Vitesse en mm/seconde
-#define STEPPER_ACCEL_MM_S2  15.0  // Accélération en mm/seconde²
+#define STEPPER_SPEED_MM_S   45.0  // Vitesse en mm/seconde (adapté poulie 36 dents)
+#define STEPPER_ACCEL_MM_S2  30.0  // Accélération en mm/seconde² (plus rapide)
 
 // Course du slider
 #define SLIDER_TRAVEL_MM     300.0 // Course totale du slider en millimètres
@@ -81,7 +90,15 @@
 #define SOLENOID_PWM_HOLD    120   // PWM maintien (47% = 5.6V, réduit chauffe)
 
 // Délais machine à états (ms)
-#define POSITION_WAIT_DELAY     200  // Délai avant ouverture (moteur + servo en position)
+// OPTIMISÉ pour poulie 36 dents (voir POULIE_ANALYSIS.md)
+#define POSITION_WAIT_DELAY     150  // Délai avant ouverture (moteur + servo en position)
+                                     // Poulie 36 dents : 150ms (notes rapprochées)
+                                     // Poulie 30 dents : 180ms
+                                     // Poulie 20 dents : 500ms (déconseillé)
+                                     //
+                                     // Peut descendre à 100ms si notes < 3 demi-tons
+                                     // Augmenter si sauts d'octave fréquents (300ms)
+
 #define SOLENOID_OPEN_DURATION  50   // Durée PWM pleine puissance (ouverture rapide)
 #define SOLENOID_CLOSE_DELAY    50   // Délai avant fermeture (éviter coupure brusque)
 
