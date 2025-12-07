@@ -3,8 +3,10 @@
  *
  * Contrôle un pipeau à coulisse via MIDI USB
  * - Moteur pas à pas pour le slider (position de la note)
- * - Ventilateur en continu pour l'air
- * - Servomoteur pour moduler le débit selon la vélocité
+ * - Ventilateur tournant EN CONTINU (toujours allumé)
+ * - Servomoteur pour DIRIGER le flux d'air :
+ *     → Note ON  : Air dirigé vers le bec du pipeau (son produit)
+ *     → Note OFF : Air dirigé ailleurs (pas de son)
  * - Pitch bend pour glissando
  * - Aftertouch pour vibrato
  *
@@ -13,8 +15,8 @@
  * - Driver moteur pas à pas (A4988, DRV8825, etc.)
  * - Moteur pas à pas NEMA
  * - Capteur fin de course
- * - Ventilateur 12V
- * - Servomoteur
+ * - Ventilateur 12V (toujours allumé)
+ * - Servomoteur (dirige le flux d'air)
  *
  * Bibliothèques requises :
  * - AccelStepper
@@ -55,7 +57,7 @@ void onMidiNoteOn(byte note, byte velocity) {
   // Déplacer le slider vers la note
   stepper.moveToMidiNote(note);
 
-  // Activer l'air avec vélocité
+  // Diriger l'air vers le bec (vélocité ignorée)
   air.startAir(velocity);
 }
 
@@ -65,7 +67,7 @@ void onMidiNoteOff(byte note) {
     return;
   }
 
-  // Arrêter l'air
+  // Diriger l'air ailleurs (loin du bec)
   air.stopAir();
 
   // Arrêter le vibrato si actif
@@ -101,6 +103,8 @@ void setup() {
   Serial.println(F("\n========================================"));
   Serial.println(F("   MIDI Slide Whistle Controller"));
   Serial.println(F("   VERSION: VENTILATEUR + SERVO"));
+  Serial.println(F("   Fan: Always ON"));
+  Serial.println(F("   Servo: Directs airflow"));
   Serial.println(F("========================================\n"));
   #endif
 
@@ -214,7 +218,9 @@ void loop() {
     Serial.print(stepper.getCurrentPositionMM());
     Serial.println(F(" mm"));
     Serial.print(F("Fan: "));
-    Serial.println(air.isFanRunning() ? "ON" : "OFF");
+    Serial.println(air.isFanRunning() ? "ON (continuous)" : "OFF");
+    Serial.print(F("Air to beak: "));
+    Serial.println(air.isAirDirectedToBeak() ? "YES" : "NO");
     Serial.print(F("Last note: "));
     Serial.println(midi.getLastNote());
     Serial.print(F("Pitch bend: "));

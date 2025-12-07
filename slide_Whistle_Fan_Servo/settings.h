@@ -3,7 +3,8 @@
  * VERSION: VENTILATEUR + SERVOMOTEUR
  *
  * Tous les paramètres de l'instrument sont centralisés ici
- * Le ventilateur tourne en continu, le servo module le débit
+ * Le ventilateur tourne EN CONTINU (toujours allumé)
+ * Le servo dirige le flux d'air vers le bec (Note ON) ou ailleurs (Note OFF)
  */
 
 #ifndef SETTINGS_H
@@ -68,25 +69,22 @@
 // CONFIGURATION CONTRÔLE D'AIR - VERSION VENTILATEUR
 // ============================================================================
 
-// Ventilateur (tourne en continu)
+// Ventilateur (tourne EN CONTINU, toujours allumé)
 #define FAN_PIN              6     // Pin de contrôle du ventilateur
 #define FAN_ACTIVE_STATE     HIGH  // État actif (HIGH ou LOW)
-#define FAN_STARTUP_DELAY    500   // Délai de démarrage du ventilateur (ms)
+#define FAN_ALWAYS_ON        true  // Le ventilateur tourne en permanence
 
-// Servomoteur (contrôle du débit)
+// Servomoteur (direction du flux d'air)
+// Le servo DIRIGE le flux vers le bec du pipeau (Note ON) ou ailleurs (Note OFF)
 #define SERVO_PIN            9     // Pin PWM pour le servomoteur
 
 // Positions servomoteur (en degrés, 0-180)
-#define SERVO_CLOSED_ANGLE   30    // Angle fermé (pas d'air)
-#define SERVO_OPEN_ANGLE     150   // Angle ouvert (débit maximum)
-#define SERVO_DEFAULT_ANGLE  90    // Position par défaut
+// Seulement 2 positions : vers le bec ou à côté
+#define SERVO_NOTE_ON_ANGLE  90    // Angle dirigeant l'air VERS le bec du pipeau
+#define SERVO_NOTE_OFF_ANGLE 30    // Angle dirigeant l'air AILLEURS (à côté du bec)
 
-// Mapping vélocité MIDI -> angle servo
-// Vélocité MIDI: 0-127
-// La vélocité MIDI contrôle l'angle du servo pour varier le débit
-
-// Temps de réponse du servo
-#define SERVO_CLOSE_DELAY    100   // Délai avant fermeture après note off (ms)
+// Temps de transition du servo
+#define SERVO_TRANSITION_DELAY 50  // Délai pour laisser le servo se positionner (ms)
 
 // ============================================================================
 // CONFIGURATION SYSTÈME
