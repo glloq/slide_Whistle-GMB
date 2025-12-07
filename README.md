@@ -2,7 +2,6 @@
 
 Transformez un pipeau à coulisse en instrument MIDI contrôlable par ordinateur.
 
-<img src="https://github.com/glloq/slide_Whistle/blob/main/img/schemas%20principe.png" alt="Schéma de principe" width=70% height=70%/>
 
 ---
 
@@ -11,6 +10,7 @@ Transformez un pipeau à coulisse en instrument MIDI contrôlable par ordinateur
 ### 🌀 [Version VENTILATEUR + SERVO](slide_Whistle_Fan_Servo/)
 
 Le ventilateur tourne en continu, le servomoteur dirige le flux d'air.
+<img src="https://github.com/glloq/slide_Whistle/blob/main/img/schemas%20principe.png" alt="Schéma de principe" width=70% height=70%/>
 
 **Principe** :
 - Ventilateur : Toujours allumé
@@ -28,6 +28,7 @@ Le ventilateur tourne en continu, le servomoteur dirige le flux d'air.
 ### ⚡ [Version SOLÉNOÏDE + SERVO](slide_Whistle_Solenoid_Servo/)
 
 Solénoïde avec PWM intelligent et machine à états avancée.
+<img src="https://github.com/glloq/slide_Whistle/blob/main/img/solenoid.png" alt="Schéma de principe" width=70% height=70%/>
 
 **Principe** :
 - Solénoïde : PWM 100% ouverture, 47% maintien
