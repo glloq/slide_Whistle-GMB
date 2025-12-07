@@ -1,90 +1,90 @@
 # 🎵 MIDI Slide Whistle Controller
 
-Transformez un pipeau à coulisse en instrument MIDI contrôlable par ordinateur !
+Transformez un pipeau à coulisse en instrument MIDI contrôlable par ordinateur.
 
 <img src="https://github.com/glloq/slide_Whistle/blob/main/img/schemas%20principe.png" alt="Schéma de principe" width=70% height=70%/>
 
-## 🎯 Description
+---
 
-Ce projet Arduino permet de contrôler automatiquement un pipeau à coulisse via des messages MIDI USB. Le système positionne précisément le slider pour chaque note et gère le flux d'air de manière synchronisée.
+## 🎯 Deux versions disponibles
 
-### ✨ Fonctionnalités
+### 🌀 [Version VENTILATEUR + SERVO](slide_Whistle_Fan_Servo/)
 
-- ✅ **Réception MIDI USB** - Contrôle direct depuis votre DAW ou clavier MIDI
-- ✅ **Positionnement précis** - Moteur pas à pas avec homing automatique (calculs en mm)
-- ✅ **Pitch Bend** - Glissando fluide entre les notes
-- ✅ **Aftertouch** - Vibrato expressif en temps réel
-- ✅ **2 versions disponibles** - Ventilateur continu ou solénoïde ON/OFF
-- ✅ **Contrôle du débit** - Servomoteur modulant selon la vélocité MIDI
-- ✅ **Configuration facile** - Tous les paramètres dans `settings.h`
-- ✅ **Modulaire** - Code organisé en modules réutilisables
-- ✅ **Debug complet** - Moniteur série avec informations détaillées
+Le ventilateur tourne en continu, le servomoteur dirige le flux d'air.
 
-## 🛠️ Choix techniques
+**Principe** :
+- Ventilateur : Toujours allumé
+- Servo : 2 positions (vers le bec / ailleurs)
 
-- **Moteur pas à pas** NEMA 17 avec driver A4988/DRV8825
-- **Capteur fin de course** normalement fermé (NF) pour le homing
-- **Contrôle d'air** : 2 versions disponibles
-  - **Version Fan** : Ventilateur radial 12V (tourne en continu)
-  - **Version Solenoid** : Solénoïde/valve 12V (ouverture ON/OFF)
-- **Servomoteur** pour moduler le débit selon la vélocité
-- **Arduino Leonardo/Micro** pour support MIDI USB natif
+**Avantages** :
+- ✅ Simple et fiable
+- ✅ Réactif instantané
+- ✅ Autonome (pas de compresseur)
 
-## 📂 Deux versions disponibles
+👉 **[Documentation complète →](slide_Whistle_Fan_Servo/README.md)**
 
-### Version Ventilateur + Servo (`slide_Whistle_Fan_Servo/`)
-Le ventilateur tourne en continu pendant les notes. Le servomoteur module le débit d'air selon la vélocité MIDI.
-- **Avantages** : Démarrage instantané, contrôle fluide
-- **Usage** : Instruments nécessitant un flux d'air constant
+---
 
-### Version Solénoïde + Servo (`slide_Whistle_Solenoid_Servo/`)
-Le solénoïde ouvre/ferme l'arrivée d'air de façon binaire. Le servomoteur module le débit.
-- **Avantages** : Économie d'énergie, contrôle précis ON/OFF
-- **Usage** : Instruments avec source d'air externe (compresseur)
+### ⚡ [Version SOLÉNOÏDE + SERVO](slide_Whistle_Solenoid_Servo/)
 
-## 📚 Documentation
+Solénoïde avec PWM intelligent et machine à états avancée.
 
-### Guides d'utilisation
+**Principe** :
+- Solénoïde : PWM 100% ouverture, 47% maintien
+- Buffer 200ms avant ouverture
+- Legato intelligent (notes rapides)
 
-- **[Guide d'installation](INSTALLATION.md)** - Installation complète, câblage, premier démarrage
-- **[Liste des composants](COMPONENTS_LIST.md)** - Tous les composants nécessaires avec prix
-- **[Exemples de configuration](CONFIGURATION_EXAMPLES.md)** - Configurations pour différents cas d'usage
+**Avantages** :
+- ✅ Contrôle du volume (vélocité)
+- ✅ Legato fluide
+- ✅ Économie d'énergie
+- ✅ Son précis
 
-### Fichiers du projet
+👉 **[Documentation complète →](slide_Whistle_Solenoid_Servo/README.md)**
 
-```
-slide_Whistle/
-├── slide_Whistle_Fan_Servo/          # Version Ventilateur
-│   ├── slide_Whistle_Fan_Servo.ino   # Programme principal
-│   ├── settings.h                    # Configuration
-│   ├── StepperControl.h              # Moteur + vibrato + pitch bend
-│   ├── MIDIHandler.h                 # MIDI avec aftertouch
-│   └── AirControl.h                  # Ventilateur + servo
-│
-├── slide_Whistle_Solenoid_Servo/     # Version Solénoïde
-│   ├── slide_Whistle_Solenoid_Servo.ino
-│   ├── settings.h
-│   ├── StepperControl.h              # (identique)
-│   ├── MIDIHandler.h                 # (identique)
-│   └── AirControl.h                  # Solénoïde + servo
-│
-├── INSTALLATION.md                   # Guide d'installation
-├── COMPONENTS_LIST.md                # Liste d'achat
-└── CONFIGURATION_EXAMPLES.md         # Exemples de configs
-```
+---
+
+## 🎼 Fonctionnalités communes
+
+| Fonctionnalité | Description |
+|----------------|-------------|
+| **Positionnement précis** | Moteur pas à pas avec calculs en mm |
+| **Pitch Bend** | Glissando fluide (±2 demi-tons) |
+| **Aftertouch** | Vibrato expressif en temps réel |
+| **Homing automatique** | Initialisation au démarrage |
+| **MIDI USB** | Arduino Leonardo/Micro |
+
+---
+
+## 📊 Comparaison rapide
+
+| Critère | 🌀 Ventilateur | ⚡ Solénoïde |
+|---------|----------------|--------------|
+| **Complexité** | Simple | Avancée |
+| **Source air** | Ventilateur intégré | Compresseur externe |
+| **Contrôle volume** | ❌ Non | ✅ Oui (vélocité) |
+| **Legato** | N/A | ✅ Intelligent |
+| **Latence** | Instantané | Buffer 200ms |
+| **Budget** | ~100€ | ~130€ |
+
+---
 
 ## 🚀 Démarrage rapide
 
-### 1. Installer les bibliothèques Arduino
+### 1. Choisir votre version
+
+- Ventilateur intégré → **Version Fan**
+- Compresseur externe → **Version Solenoid**
+
+### 2. Installer les bibliothèques
+
+```
+Arduino IDE → Gestionnaire de bibliothèques
+```
 
 - **AccelStepper** (≥ 1.64)
 - **MIDIUSB** (≥ 1.0.5)
 - **Servo** (incluse)
-
-### 2. Choisir votre version
-
-- **`slide_Whistle_Fan_Servo/`** si vous utilisez un ventilateur
-- **`slide_Whistle_Solenoid_Servo/`** si vous utilisez un solénoïde
 
 ### 3. Configurer `settings.h`
 
@@ -94,109 +94,121 @@ slide_Whistle/
 #define STEPPER_DIR_PIN    3
 #define ENDSTOP_PIN        5
 
-// Mécanique (en millimètres !)
-#define STEPS_PER_MM       40.0   // À calibrer
-#define SLIDER_TRAVEL_MM   300.0  // Course totale
-#define INVERT_MOTOR_DIR   false  // Inverser direction si nécessaire
+// Mécanique
+#define STEPS_PER_MM       80.0   // À calibrer
+#define SLIDER_TRAVEL_MM   300.0  // Course en mm
+#define INVERT_MOTOR_DIR   false  // Inverser si besoin
 
 // MIDI
 #define MIDI_NOTE_MIN      48     // C3
 #define MIDI_NOTE_MAX      84     // C6
-#define PITCHBEND_ENABLED  true   // Pitch bend
-#define AFTERTOUCH_ENABLED true   // Vibrato
 ```
 
-### 4. Téléverser le code
+### 4. Téléverser et tester
 
-1. Ouvrir `slide_Whistle_Fan_Servo.ino` (ou `slide_Whistle_Solenoid_Servo.ino`)
-2. Sélectionner **Arduino Leonardo** (ou Micro)
-3. Téléverser
+```
+Arduino IDE → Téléverser
+Moniteur série → 115200 bauds
+```
 
-### 5. Premier test
+---
 
-Au démarrage, le système :
-1. Effectue un homing automatique
-2. Se positionne au centre
-3. Attend les messages MIDI
+## 📚 Documentation complète
 
-Connectez votre clavier MIDI et jouez !
+- **[Installation](INSTALLATION.md)** - Câblage, premier démarrage, calibration
+- **[Composants](COMPONENTS_LIST.md)** - Liste d'achat complète avec prix
+- **[Configuration](CONFIGURATION_EXAMPLES.md)** - Exemples pour différents usages
 
-## 🎹 Utilisation
+---
 
-Le système reçoit des messages MIDI et réagit :
+## 🛠️ Hardware minimal
 
-### Messages MIDI supportés
+| Composant | Spécification |
+|-----------|---------------|
+| Arduino | Leonardo/Micro (MIDIUSB) |
+| Driver moteur | A4988 ou DRV8825 |
+| Moteur | NEMA 17, 200 pas/tour |
+| Capteur | Fin de course NF |
+| Alimentation | 12V 2-3A |
+
+**+ Version Fan** : Ventilateur 12V, Servo
+**+ Version Solenoid** : Solénoïde 12V, Servo, Compresseur
+
+---
+
+## 🎹 Messages MIDI supportés
 
 | Message | Action |
 |---------|--------|
-| **Note On** | Positionne le slider + ouvre l'air + ajuste débit (vélocité) |
-| **Note Off** | Ferme l'air (avec délai) + arrête vibrato |
-| **Pitch Bend** | Glissando fluide (±2 demi-tons par défaut) |
-| **Aftertouch** | Vibrato (profondeur et vitesse configurables) |
-| **CC 1 (Modulation)** | Vibrato alternatif (si aftertouch non disponible) |
+| **Note On/Off** | Position + Air |
+| **Pitch Bend** | Glissando (±2 demi-tons) |
+| **Aftertouch** | Vibrato (profondeur/vitesse configurables) |
+| **CC 1 (Modulation)** | Vibrato alternatif |
 
-### Expressions musicales
+---
 
-- **Glissando** : Utilisez la molette de pitch bend
-- **Vibrato** : Appuyez sur les touches après le Note On (aftertouch)
-- **Variations de débit** : Jouez avec différentes vélocités (pianissimo à fortissimo)
+## 📂 Structure du projet
 
-## 🔧 Calibration
-
-La calibration se fait en **millimètres** dans `settings.h` :
-
-```cpp
-// 1. Calculer les pas par mm
-// Pour une poulie GT2 20 dents : (200 × 16) / (20 × 2) = 80 pas/mm
-#define STEPS_PER_MM      80.0
-
-// 2. Mesurer la course totale du slider
-#define SLIDER_TRAVEL_MM  300.0  // En millimètres
-
-// 3. Inverser la direction si le moteur va dans le mauvais sens
-#define INVERT_MOTOR_DIR  false  // true pour inverser
-
-// 4. Ajuster vibrato et pitch bend
-#define VIBRATO_DEPTH_MM  2.0    // Profondeur du vibrato (mm)
-#define PITCHBEND_RANGE_SEMITONES 2.0  // Plage pitch bend (±2 demi-tons)
+```
+slide_Whistle/
+│
+├── slide_Whistle_Fan_Servo/          🌀 Version Ventilateur
+│   ├── README.md                      ← Documentation détaillée
+│   ├── settings.h
+│   ├── StepperControl.h
+│   ├── MIDIHandler.h
+│   ├── AirControl.h
+│   └── slide_Whistle_Fan_Servo.ino
+│
+├── slide_Whistle_Solenoid_Servo/     ⚡ Version Solénoïde
+│   ├── README.md                      ← Documentation détaillée
+│   ├── settings.h
+│   ├── StepperControl.h
+│   ├── MIDIHandler.h
+│   ├── AirControl.h
+│   └── slide_Whistle_Solenoid_Servo.ino
+│
+├── INSTALLATION.md                    📖 Guide installation
+├── COMPONENTS_LIST.md                 🛒 Liste d'achat
+├── CONFIGURATION_EXAMPLES.md          ⚙️ Exemples configs
+└── README.md                          📄 Ce fichier
 ```
 
-Voir [CONFIGURATION_EXAMPLES.md](CONFIGURATION_EXAMPLES.md) pour des exemples détaillés.
+---
 
-## 🎼 Nouvelles fonctionnalités v2.0
+## 💡 Pour commencer
 
-- ✅ **Pitch Bend** - Glissando fluide et expressif
-- ✅ **Vibrato via Aftertouch** - Expression naturelle en appuyant sur les touches
-- ✅ **Calculs en mm** - Configuration intuitive avec `STEPS_PER_MM`
-- ✅ **Inversion moteur** - Variable `INVERT_MOTOR_DIR` pour faciliter le câblage
-- ✅ **Deux versions** - Fan et Solenoid pour différents usages
+1. **Lire** le README de la version choisie
+2. **Acheter** les composants (voir COMPONENTS_LIST.md)
+3. **Câbler** selon le schéma (voir README de la version)
+4. **Configurer** settings.h
+5. **Téléverser** le code
+6. **Jouer** ! 🎵
 
-## 💡 Améliorations futures
-
-- [ ] Courbes de réponse personnalisables (exponentielle, logarithmique)
-- [ ] Polyphonie (plusieurs pipeaux)
-- [ ] Enregistrement/replay de séquences
-- [ ] Interface web de configuration
-- [ ] Support d'autres protocoles MIDI (DIN, Bluetooth)
+---
 
 ## 🤝 Contribution
 
-Les contributions sont les bienvenues ! N'hésitez pas à :
+Les contributions sont bienvenues :
 - Signaler des bugs
 - Proposer des améliorations
 - Partager vos configurations
 - Ajouter des schémas 3D
 
+---
+
 ## 📄 Licence
 
-Ce projet est open-source sous licence MIT.
+MIT License - Open source
+
+---
 
 ## 🙏 Remerciements
 
 - **AccelStepper** par Mike McCauley
 - **MIDIUSB** par Arduino Team
-- La communauté maker et Arduino
+- La communauté maker Arduino
 
 ---
 
-**Bon contrôle MIDI ! 🎵**
+**🎵 Bon contrôle MIDI !**
