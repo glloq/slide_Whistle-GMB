@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slide Whistle Controller</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --card: #16213e;
+    --accent: #0f3460;
+    --green: #00d084;
+    --orange: #e94560;
+    --text: #e0e0e0;
+    --muted: #888;
+    --border: #2a2a4a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; font-size: 14px; }
+
+  header {
+    background: var(--accent);
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border-bottom: 2px solid var(--green);
+  }
+  header h1 { font-size: 18px; font-weight: 600; }
+  .badge {
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+  .badge-ready   { background: var(--green); color: #000; }
+  .badge-homing  { background: #ffaa00; color: #000; }
+  .badge-error   { background: var(--orange); color: #fff; }
+  .badge-init    { background: var(--muted); color: #fff; }
+
+  nav {
+    display: flex;
+    gap: 2px;
+    padding: 10px 16px;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+  }
+  nav button {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 6px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all .15s;
+  }
+  nav button.active, nav button:hover {
+    background: var(--accent);
+    color: var(--text);
+    border-color: var(--green);
+  }
+
+  .page { display: none; padding: 16px; }
+  .page.active { display: block; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .card h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 12px; }
+
+  .stat { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .stat-label { color: var(--muted); font-size: 13px; }
+  .stat-value { font-size: 20px; font-weight: 700; color: var(--green); }
+  .stat-value.red { color: var(--orange); }
+
+  .progress-bar {
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 8px 0;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--green);
+    border-radius: 4px;
+    transition: width .15s;
+  }
+
+  /* Piano keyboard */
+  .piano { display: flex; gap: 2px; align-items: flex-end; padding: 10px 0; overflow-x: auto; }
+  .key {
+    border-radius: 0 0 4px 4px;
+    cursor: pointer;
+    border: 1px solid #333;
+    transition: background .05s;
+    flex-shrink: 0;
+  }
+  .key.white { width: 28px; height: 80px; background: #e8e8e8; }
+  .key.black { width: 20px; height: 52px; background: #222; margin: 0 -10px; z-index: 2; }
+  .key.white:hover, .key.white.active { background: var(--green); }
+  .key.black:hover, .key.black.active { background: #00a060; }
+
+  /* Controls */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px;
+    border-radius: 7px;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: opacity .15s;
+  }
+  .btn:hover { opacity: .85; }
+  .btn-green  { background: var(--green);  color: #000; }
+  .btn-red    { background: var(--orange); color: #fff; }
+  .btn-blue   { background: #1a6bb5;      color: #fff; }
+  .btn-gray   { background: var(--border); color: var(--text); }
+  .btn-sm     { padding: 5px 12px; font-size: 12px; }
+
+  .jog-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+
+  label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; margin-top: 10px; }
+  input[type=number], input[type=text], input[type=password], select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--green); }
+
+  .range-row { display: flex; align-items: center; gap: 10px; }
+  input[type=range] { flex: 1; accent-color: var(--green); }
+
+  /* LUT table */
+  .lut-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .lut-table th { text-align: left; color: var(--muted); padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  .lut-table td { padding: 3px 8px; border-bottom: 1px solid #1e1e3a; }
+  .lut-table tr.calibrated td { color: var(--green); }
+  .lut-table tr:not(.calibrated) td { color: var(--muted); }
+  .lut-table input[type=number] { padding: 2px 6px; width: 80px; }
+
+  .note-select { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+
+  .ws-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--orange);
+    display: inline-block;
+    margin-right: 4px;
+  }
+  .ws-dot.connected { background: var(--green); }
+
+  .toast {
+    position: fixed; bottom: 20px; right: 20px;
+    background: var(--accent); border: 1px solid var(--green);
+    padding: 10px 16px; border-radius: 8px;
+    font-size: 13px; opacity: 0; transition: opacity .3s;
+    pointer-events: none; z-index: 999;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎵 Slide Whistle Controller</h1>
+  <span id="sysBadge" class="badge badge-init">INIT</span>
+  <span style="margin-left:auto;font-size:12px;color:var(--muted)">
+    <span class="ws-dot" id="wsDot"></span><span id="wsLabel">déconnecté</span>
+  </span>
+</header>
+
+<nav>
+  <button class="active" onclick="showPage('dashboard',this)">Tableau de bord</button>
+  <button onclick="showPage('play',this)">Jeu</button>
+  <button onclick="showPage('calibration',this)">Calibration</button>
+  <button onclick="showPage('config',this)">Configuration</button>
+  <button onclick="showPage('wifi',this)">WiFi</button>
+</nav>
+
+<!-- ============================================================ DASHBOARD -->
+<div id="page-dashboard" class="page active">
+  <div class="grid">
+    <div class="card">
+      <h3>Position coulisse</h3>
+      <div class="stat">
+        <span class="stat-label">Position</span>
+        <span class="stat-value" id="stPos">—</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="stBar" style="width:0%"></div>
+      </div>
+      <div class="stat">
+        <span class="stat-label">État</span>
+        <span id="stMoving" class="badge badge-init">—</span>
+      </div>
+      <div class="stat" style="margin-top:8px">
+        <span class="stat-label">Homed</span>
+        <span id="stHomed">—</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Air</h3>
+      <div class="stat">
+        <span class="stat-label">Solénoïde</span>
+        <span class="stat-value" id="airState">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Vélocité</span>
+        <span id="airVel">—</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>MIDI</h3>
+      <div class="stat">
+        <span class="stat-label">Dernière note</span>
+        <span class="stat-value" id="midiNote">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Active</span>
+        <span id="midiActive">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Pitch bend</span>
+        <span id="midiPB">0</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Actions rapides</h3>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-top:4px">
+        <button class="btn btn-blue" onclick="doHoming()">⌂ Homing</button>
+        <button class="btn btn-gray" onclick="apiPost('/api/test/air')">Test air</button>
+        <button class="btn btn-red btn-sm" onclick="apiPost('/api/note',{note:60,velocity:0,on:false})">Stop air</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ JEU -->
+<div id="page-play" class="page">
+  <div class="card" style="margin-bottom:12px">
+    <h3>Clavier MIDI</h3>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:8px">Cliquer pour jouer — C3 (48) à C6 (84)</p>
+    <div class="piano" id="piano"></div>
+  </div>
+  <div class="card">
+    <h3>Contrôles manuels</h3>
+    <div class="jog-row">
+      <span style="color:var(--muted);font-size:12px">Jog moteur :</span>
+      <button class="btn btn-gray btn-sm" onclick="jog(-10)">−10mm</button>
+      <button class="btn btn-gray btn-sm" onclick="jog(-1)">−1mm</button>
+      <button class="btn btn-gray btn-sm" onclick="jog(-0.5)">−0.5mm</button>
+      <button class="btn btn-gray btn-sm" onclick="jog(0.5)">+0.5mm</button>
+      <button class="btn btn-gray btn-sm" onclick="jog(1)">+1mm</button>
+      <button class="btn btn-gray btn-sm" onclick="jog(10)">+10mm</button>
+    </div>
+    <label>Position absolue (mm)</label>
+    <div class="range-row">
+      <input type="range" id="jogSlider" min="0" max="300" step="0.5" value="150"
+             oninput="document.getElementById('jogSliderVal').textContent=this.value+'mm'">
+      <span id="jogSliderVal" style="width:60px;text-align:right">150mm</span>
+      <button class="btn btn-blue btn-sm" onclick="jogAbsolute()">Aller</button>
+    </div>
+    <label style="margin-top:12px">Pitch bend (demi-tons)</label>
+    <div class="range-row">
+      <input type="range" id="pbRange" min="-2" max="2" step="0.01" value="0"
+             oninput="sendPitchBend(this.value)">
+      <span id="pbVal" style="width:50px;text-align:right">0</span>
+      <button class="btn btn-gray btn-sm" onclick="document.getElementById('pbRange').value=0;sendPitchBend(0)">Reset</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ CALIBRATION -->
+<div id="page-calibration" class="page">
+  <div class="card" style="margin-bottom:12px">
+    <h3>Calibration assistée</h3>
+    <div class="note-select">
+      <label style="margin:0">Note courante :</label>
+      <select id="calNote" style="width:120px" onchange="calNoteChanged()"></select>
+      <button class="btn btn-gray btn-sm" onclick="calPrevNote()">◀ Grave</button>
+      <button class="btn btn-gray btn-sm" onclick="calNextNote()">Aigu ▶</button>
+    </div>
+    <div class="jog-row">
+      <span style="color:var(--muted);font-size:12px">Ajust. position :</span>
+      <button class="btn btn-gray btn-sm" onclick="jog(-5)">−5mm</button>
+      <button class="btn btn-gray btn-sm" onclick="jog(-1)">−1mm</button>
+      <button class="btn btn-gray btn-sm" onclick="jog(-0.2)">−0.2</button>
+      <button class="btn btn-gray btn-sm" onclick="jog(0.2)">+0.2</button>
+      <button class="btn btn-gray btn-sm" onclick="jog(1)">+1mm</button>
+      <button class="btn btn-gray btn-sm" onclick="jog(5)">+5mm</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn btn-green" onclick="calTestNote()">▶ Tester note (1s)</button>
+      <button class="btn btn-blue" onclick="calSavePoint()">💾 Sauvegarder position</button>
+      <button class="btn btn-gray btn-sm" onclick="doHoming()">⌂ Re-homing</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Table LUT <span id="calProgress" style="color:var(--green);margin-left:8px"></span></h3>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <button class="btn btn-blue btn-sm" onclick="loadLUT()">Recharger</button>
+      <button class="btn btn-red btn-sm" onclick="resetLUT()">Réinitialiser (linéaire)</button>
+    </div>
+    <div style="max-height:400px;overflow-y:auto">
+      <table class="lut-table">
+        <thead><tr><th>Note</th><th>Nom</th><th>Position (mm)</th><th></th></tr></thead>
+        <tbody id="lutBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ CONFIG -->
+<div id="page-config" class="page">
+  <div class="grid">
+    <div class="card">
+      <h3>Moteur</h3>
+      <label>Vitesse max (mm/s)</label>
+      <input type="number" id="cfgSpeed" min="5" max="300" step="1">
+      <label>Accélération (mm/s²)</label>
+      <input type="number" id="cfgAccel" min="100" max="5000" step="50">
+    </div>
+    <div class="card">
+      <h3>Air / Solénoïde</h3>
+      <label>Délai attente position (ms)</label>
+      <input type="number" id="cfgWait" min="50" max="500" step="10">
+      <label>Legato seuil (ms)</label>
+      <input type="number" id="cfgLegato" min="100" max="1000" step="10">
+      <label>PWM ouverture (0-255)</label>
+      <input type="number" id="cfgPwmFull" min="0" max="255">
+      <label>PWM maintien (0-255)</label>
+      <input type="number" id="cfgPwmHold" min="0" max="255">
+    </div>
+    <div class="card">
+      <h3>MIDI</h3>
+      <label>Canal (1-16, 0=tous)</label>
+      <input type="number" id="cfgMidiCh" min="0" max="16">
+      <label>Note min (MIDI)</label>
+      <input type="number" id="cfgNoteMin" min="0" max="127">
+      <label>Note max (MIDI)</label>
+      <input type="number" id="cfgNoteMax" min="0" max="127">
+      <label style="margin-top:12px">
+        <input type="checkbox" id="cfgUseLUT" style="width:auto;margin-right:6px">
+        Utiliser LUT calibrée
+      </label>
+    </div>
+  </div>
+  <div style="margin-top:12px;display:flex;gap:8px">
+    <button class="btn btn-green" onclick="saveConfig()">💾 Sauvegarder</button>
+    <button class="btn btn-gray" onclick="loadConfig()">↺ Recharger</button>
+  </div>
+</div>
+
+<!-- ============================================================ WIFI -->
+<div id="page-wifi" class="page">
+  <div class="grid">
+    <div class="card">
+      <h3>État WiFi</h3>
+      <div id="wifiStatus" style="font-size:13px;line-height:1.8"></div>
+      <button class="btn btn-gray btn-sm" style="margin-top:10px" onclick="loadWifiStatus()">Actualiser</button>
+    </div>
+    <div class="card">
+      <h3>Connexion réseau externe (STA)</h3>
+      <label>SSID</label>
+      <input type="text" id="staSsid" placeholder="Mon réseau WiFi">
+      <label>Mot de passe</label>
+      <input type="password" id="staPass" placeholder="••••••••">
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn btn-blue" onclick="saveWifi()">Connecter</button>
+        <button class="btn btn-red btn-sm" onclick="forgetWifi()">Oublier</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================ WebSocket
+let ws, wsRetry = 0;
+const state = {};
+
+function connectWS() {
+  ws = new WebSocket('ws://' + location.host + '/ws');
+  ws.onopen = () => {
+    wsRetry = 0;
+    document.getElementById('wsDot').className   = 'ws-dot connected';
+    document.getElementById('wsLabel').textContent = 'connecté';
+  };
+  ws.onmessage = e => { try { updateDashboard(JSON.parse(e.data)); } catch(_){} };
+  ws.onclose = () => {
+    document.getElementById('wsDot').className   = 'ws-dot';
+    document.getElementById('wsLabel').textContent = 'reconnexion...';
+    setTimeout(connectWS, Math.min(500 * ++wsRetry, 5000));
+  };
+}
+connectWS();
+
+// ============================================================ Dashboard update
+const noteNames = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+function midiName(n) {
+  return noteNames[n%12] + (Math.floor(n/12)-1);
+}
+
+function updateDashboard(d) {
+  Object.assign(state, d);
+
+  // Position
+  if (d.position_mm !== undefined) {
+    const pct = Math.min(100, Math.max(0, d.position_mm / 300 * 100));
+    document.getElementById('stPos').textContent = d.position_mm.toFixed(1) + ' mm';
+    document.getElementById('stBar').style.width = pct + '%';
+  }
+  if (d.moving !== undefined) {
+    const el = document.getElementById('stMoving');
+    el.textContent = d.moving ? 'En mouvement' : 'Arrêté';
+    el.className   = 'badge ' + (d.moving ? 'badge-homing' : 'badge-ready');
+  }
+  if (d.homed !== undefined)
+    document.getElementById('stHomed').textContent = d.homed ? '✓ Oui' : '✗ Non';
+
+  // Air
+  if (d.air_state !== undefined) {
+    const el = document.getElementById('airState');
+    el.textContent = d.air_state;
+    el.className   = 'stat-value ' + (d.air_open ? '' : 'red');
+  }
+  if (d.velocity !== undefined)
+    document.getElementById('airVel').textContent = d.velocity;
+
+  // MIDI
+  if (d.last_note !== undefined)
+    document.getElementById('midiNote').textContent = d.last_note + ' (' + midiName(d.last_note) + ')';
+  if (d.note_active !== undefined)
+    document.getElementById('midiActive').textContent = d.note_active ? '● Active' : '○ Non';
+  if (d.pitchbend !== undefined)
+    document.getElementById('midiPB').textContent = d.pitchbend;
+
+  // Badge système
+  // (pas d'info sysState dans le JSON actuel — à étendre si besoin)
+}
+
+// ============================================================ API helpers
+async function apiGet(path) {
+  const r = await fetch(path);
+  return r.json();
+}
+
+async function apiPost(path, body = {}) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return r.json();
+}
+
+async function apiDelete(path) {
+  const r = await fetch(path, { method: 'DELETE' });
+  return r.json();
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ============================================================ Navigation
+function showPage(id, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  btn.classList.add('active');
+  if (id === 'calibration') { buildCalNotes(); loadLUT(); }
+  if (id === 'config')      loadConfig();
+  if (id === 'wifi')        loadWifiStatus();
+}
+
+// ============================================================ Actions rapides
+async function doHoming() {
+  await apiPost('/api/homing');
+  toast('Homing en cours…');
+}
+
+async function jog(mm) {
+  await apiPost('/api/jog', { mm });
+}
+
+async function jogAbsolute() {
+  const mm = parseFloat(document.getElementById('jogSlider').value);
+  const cur = state.position_mm || 0;
+  await jog(mm - cur);
+}
+
+async function sendPitchBend(val) {
+  document.getElementById('pbVal').textContent = parseFloat(val).toFixed(2);
+  // Approcher par CC pour ne pas bloquer : envoyer note fictive avec pitch bend
+  // Dans notre API, on peut directement modifier la position via un CC virtuel
+  // Pour l'instant on jog proportionnellement
+  // TODO: ajouter /api/pitchbend endpoint
+}
+
+// ============================================================ Piano keyboard
+function buildPiano() {
+  const piano = document.getElementById('piano');
+  piano.innerHTML = '';
+  const blackKeys = new Set([1,3,6,8,10]); // offsets dans octave
+  let pressed = null;
+
+  for (let n = 48; n <= 84; n++) {
+    const isBlack = blackKeys.has(n % 12);
+    const key = document.createElement('div');
+    key.className = 'key ' + (isBlack ? 'black' : 'white');
+    key.title = midiName(n) + ' (' + n + ')';
+    key.dataset.note = n;
+
+    key.addEventListener('pointerdown', async e => {
+      e.preventDefault();
+      if (pressed !== null) {
+        await apiPost('/api/note', { note: pressed, velocity: 0, on: false });
+        document.querySelectorAll('.key').forEach(k => k.classList.remove('active'));
+      }
+      pressed = n;
+      key.classList.add('active');
+      await apiPost('/api/note', { note: n, velocity: 100, on: true });
+    });
+
+    key.addEventListener('pointerup', async () => {
+      if (pressed === n) {
+        await apiPost('/api/note', { note: n, velocity: 0, on: false });
+        key.classList.remove('active');
+        pressed = null;
+      }
+    });
+
+    piano.appendChild(key);
+  }
+}
+buildPiano();
+
+// ============================================================ Calibration
+let calCurrentNote = 84;
+
+function buildCalNotes() {
+  const sel = document.getElementById('calNote');
+  if (sel.options.length > 0) return;
+  for (let n = 84; n >= 48; n--) {
+    const opt = document.createElement('option');
+    opt.value = n;
+    opt.textContent = n + ' — ' + midiName(n);
+    sel.appendChild(opt);
+  }
+  sel.value = calCurrentNote;
+}
+
+function calNoteChanged() {
+  calCurrentNote = parseInt(document.getElementById('calNote').value);
+}
+
+function calPrevNote() {
+  if (calCurrentNote > 48) {
+    calCurrentNote--;
+    document.getElementById('calNote').value = calCurrentNote;
+  }
+}
+
+function calNextNote() {
+  if (calCurrentNote < 84) {
+    calCurrentNote++;
+    document.getElementById('calNote').value = calCurrentNote;
+  }
+}
+
+async function calTestNote() {
+  await apiPost('/api/note', { note: calCurrentNote, velocity: 100, on: true });
+  setTimeout(() => apiPost('/api/note', { note: calCurrentNote, velocity: 0, on: false }), 1000);
+}
+
+async function calSavePoint() {
+  const pos = state.position_mm;
+  if (pos === undefined) { toast('Position inconnue'); return; }
+  const r = await apiPost('/api/lut/point', { note: calCurrentNote, position_mm: pos });
+  if (r.ok) {
+    toast('Position ' + pos.toFixed(1) + 'mm → Note ' + midiName(calCurrentNote) + ' sauvegardée');
+    loadLUT();
+  }
+}
+
+async function loadLUT() {
+  const data = await apiGet('/api/lut');
+  const tbody = document.getElementById('lutBody');
+  tbody.innerHTML = '';
+  let calibrated = 0;
+
+  data.lut.forEach(pt => {
+    const isCalib = pt.position > 0.01;
+    if (isCalib) calibrated++;
+    const tr = document.createElement('tr');
+    tr.className = isCalib ? 'calibrated' : '';
+    tr.innerHTML = `
+      <td>${pt.note}</td>
+      <td>${midiName(pt.note)}</td>
+      <td><input type="number" value="${pt.position.toFixed(2)}" step="0.1"
+           min="0" max="300" data-note="${pt.note}"
+           onchange="updateLUTPoint(${pt.note},this.value)"></td>
+      <td><button class="btn btn-gray btn-sm" onclick="goToLUTPos(${pt.note})">→</button></td>`;
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById('calProgress').textContent =
+    calibrated + '/37 calibrées';
+}
+
+async function updateLUTPoint(note, val) {
+  await apiPost('/api/lut/point', { note: parseInt(note), position_mm: parseFloat(val) });
+  toast('Point LUT mis à jour');
+}
+
+async function goToLUTPos(note) {
+  const row = document.querySelector(`input[data-note="${note}"]`);
+  if (!row) return;
+  const pos = parseFloat(row.value);
+  const cur = state.position_mm || 0;
+  await jog(pos - cur);
+  calCurrentNote = note;
+  document.getElementById('calNote').value = note;
+}
+
+async function resetLUT() {
+  const arr = [];
+  for (let i = 0; i < 37; i++) {
+    arr.push({ note: 48 + i, position: (i / 36) * 300 });
+  }
+  await apiPost('/api/lut', { lut: arr.map(p => ({ note: p.note, position: p.position })) });
+  toast('LUT réinitialisée (linéaire)');
+  loadLUT();
+}
+
+// ============================================================ Config
+async function loadConfig() {
+  const c = await apiGet('/api/config');
+  document.getElementById('cfgSpeed').value     = c.speed_mm_s;
+  document.getElementById('cfgAccel').value     = c.accel_mm_s2;
+  document.getElementById('cfgWait').value      = c.wait_delay_ms;
+  document.getElementById('cfgLegato').value    = c.legato_ms;
+  document.getElementById('cfgPwmFull').value   = c.pwm_full;
+  document.getElementById('cfgPwmHold').value   = c.pwm_hold;
+  document.getElementById('cfgMidiCh').value    = c.midi_channel;
+  document.getElementById('cfgNoteMin').value   = c.note_min;
+  document.getElementById('cfgNoteMax').value   = c.note_max;
+  document.getElementById('cfgUseLUT').checked  = c.use_lut;
+}
+
+async function saveConfig() {
+  const body = {
+    speed_mm_s:    parseFloat(document.getElementById('cfgSpeed').value),
+    accel_mm_s2:   parseFloat(document.getElementById('cfgAccel').value),
+    wait_delay_ms: parseInt(document.getElementById('cfgWait').value),
+    legato_ms:     parseInt(document.getElementById('cfgLegato').value),
+    pwm_full:      parseInt(document.getElementById('cfgPwmFull').value),
+    pwm_hold:      parseInt(document.getElementById('cfgPwmHold').value),
+    midi_channel:  parseInt(document.getElementById('cfgMidiCh').value),
+    note_min:      parseInt(document.getElementById('cfgNoteMin').value),
+    note_max:      parseInt(document.getElementById('cfgNoteMax').value),
+    use_lut:       document.getElementById('cfgUseLUT').checked
+  };
+  const r = await apiPost('/api/config', body);
+  toast(r.ok ? 'Configuration sauvegardée ✓' : 'Erreur sauvegarde');
+}
+
+// ============================================================ WiFi
+async function loadWifiStatus() {
+  const w = await apiGet('/api/wifi');
+  document.getElementById('wifiStatus').innerHTML = `
+    <b>Hotspot (AP)</b><br>
+    SSID : ${w.ap.ssid}<br>
+    IP   : ${w.ap.ip}<br>
+    Clients connectés : ${w.ap.clients}
+    <br><br>
+    <b>Réseau externe (STA)</b><br>
+    ${w.sta.connected
+      ? `Connecté à <b>${w.sta.ssid}</b><br>IP : ${w.sta.ip}`
+      : 'Non connecté'}
+  `;
+}
+
+async function saveWifi() {
+  const ssid = document.getElementById('staSsid').value;
+  const pass = document.getElementById('staPass').value;
+  const r = await apiPost('/api/wifi', { ssid, password: pass });
+  toast(r.ok ? 'Connexion en cours…' : 'Erreur');
+  setTimeout(loadWifiStatus, 5000);
+}
+
+async function forgetWifi() {
+  await apiDelete('/api/wifi');
+  toast('Credentials oubliés');
+  loadWifiStatus();
+}
+</script>
+</body>
+</html>
