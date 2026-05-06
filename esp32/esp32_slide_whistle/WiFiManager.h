@@ -1,0 +1,127 @@
+/*
+ * WiFiManager.h — Gestion WiFi double mode (ESP32)
+ *
+ * Mode AP  (hotspot) : démarré par défaut, SSID "SlideWhistle"
+ * Mode STA (client)  : connexion à un réseau externe si configuré
+ * Les credentials STA sont stockés en NVS via Preferences.
+ *
+ * Bibliothèques : WiFi (incluse ESP32), Preferences (incluse ESP32)
+ */
+
+#ifndef WIFI_MANAGER_H
+#define WIFI_MANAGER_H
+
+#include <WiFi.h>
+#include <Preferences.h>
+#include "settings.h"
+
+class WiFiManager {
+private:
+  Preferences prefs;
+  String staSSID;
+  String staPassword;
+  bool staConnected = false;
+  bool apActive     = false;
+
+public:
+  void begin() {
+    prefs.begin("wifi", false);
+    staSSID     = prefs.getString("ssid",     WIFI_STA_SSID);
+    staPassword = prefs.getString("password", WIFI_STA_PASSWORD);
+    prefs.end();
+
+    WiFi.mode(WIFI_AP_STA);
+
+    // Toujours démarrer l'AP
+    startAP();
+
+    // Tenter connexion STA si credentials disponibles
+    if (staSSID.length() > 0) {
+      connectSTA();
+    }
+  }
+
+  void startAP() {
+    String apPass = String(WIFI_AP_PASSWORD);
+    if (apPass.length() < 8) apPass = "";
+
+    WiFi.softAP(WIFI_AP_SSID, apPass.length() > 0 ? apPass.c_str() : nullptr,
+                WIFI_AP_CHANNEL);
+
+    IPAddress apIP(192, 168, 4, 1);
+    IPAddress subnet(255, 255, 255, 0);
+    WiFi.softAPConfig(apIP, apIP, subnet);
+
+    apActive = true;
+#if DEBUG_MODE
+    Serial.printf("[WiFi] AP démarré — SSID: %s  IP: %s\n",
+                  WIFI_AP_SSID, WiFi.softAPIP().toString().c_str());
+#endif
+  }
+
+  bool connectSTA() {
+    if (staSSID.length() == 0) return false;
+
+#if DEBUG_MODE
+    Serial.printf("[WiFi] Connexion STA à '%s'...\n", staSSID.c_str());
+#endif
+    WiFi.begin(staSSID.c_str(), staPassword.c_str());
+
+    unsigned long t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) {
+      delay(200);
+    }
+
+    staConnected = (WiFi.status() == WL_CONNECTED);
+#if DEBUG_MODE
+    if (staConnected) {
+      Serial.printf("[WiFi] STA connecté — IP: %s\n", WiFi.localIP().toString().c_str());
+    } else {
+      Serial.println(F("[WiFi] STA: échec connexion"));
+    }
+#endif
+    return staConnected;
+  }
+
+  void saveSTACredentials(const String& ssid, const String& password) {
+    staSSID = ssid;
+    staPassword = password;
+    prefs.begin("wifi", false);
+    prefs.putString("ssid",     ssid);
+    prefs.putString("password", password);
+    prefs.end();
+  }
+
+  void clearSTACredentials() {
+    staSSID = "";
+    staPassword = "";
+    prefs.begin("wifi", false);
+    prefs.remove("ssid");
+    prefs.remove("password");
+    prefs.end();
+    WiFi.disconnect();
+    staConnected = false;
+  }
+
+  bool isSTAConnected() { return WiFi.status() == WL_CONNECTED; }
+  bool isAPActive()     { return apActive; }
+
+  String getAPIP()  { return WiFi.softAPIP().toString(); }
+  String getSTAIP() { return WiFi.localIP().toString(); }
+  String getSTASSID() { return staSSID; }
+
+  String getStatusJSON() {
+    bool sta = isSTAConnected();
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "{\"ap\":{\"ssid\":\"%s\",\"ip\":\"%s\",\"clients\":%d},"
+             "\"sta\":{\"connected\":%s,\"ssid\":\"%s\",\"ip\":\"%s\"}}",
+             WIFI_AP_SSID, getAPIP().c_str(), WiFi.softAPgetStationNum(),
+             sta ? "true" : "false",
+             sta ? staSSID.c_str() : "",
+             sta ? getSTAIP().c_str() : "");
+    return String(buf);
+  }
+};
+
+#endif // WIFI_MANAGER_H
