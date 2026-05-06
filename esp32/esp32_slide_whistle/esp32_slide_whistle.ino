@@ -1,27 +1,21 @@
 /*
  * esp32_slide_whistle.ino — MIDI Slide Flute Controller (ESP32)
  *
- * Architecture FreeRTOS :
- *   Core 0 : Web server, WiFi, WebSocket push
- *   Core 1 : MIDI parsing, stepper, air control (temps-réel)
+ * Corrections vs v1 :
+ *   - portMUX_TYPE → SemaphoreHandle_t (mutex FreeRTOS)
+ *     · portENTER_CRITICAL désactivait les interruptions Core 0 (WiFi!)
+ *     · xSemaphoreTake/Give cède le CPU correctement entre tâches
+ *   - Watchdog MIDI : si aucun message pendant WATCHDOG_TIMEOUT_MS, air coupé
+ *   - CC2 / CC11 implémentés → débit air (air.setAirflow)
+ *   - g_testAirRequested : test lancé depuis taskMotion (plus depuis Core 0)
+ *   - stepper.setRuntimeLUT() appelé dans taskMotion après begin()
+ *     (la LUT est chargée par taskWeb, mais le pointeur est valide dès le début)
+ *   - Stack sizes augmentés : 16384 taskMotion, 12288 taskWeb
+ *   - SystemState maintenant défini dans settings.h (partagé avec WebInterface)
  *
- * Sources MIDI supportées (voir settings.h) :
- *   - DIN-5 UART (Serial2 RX GPIO16)
- *   - BLE MIDI
- *   - Interface web (API /api/note)
- *
- * Bibliothèques requises (Arduino Library Manager) :
- *   AccelStepper           → moteur pas à pas
- *   ESP32Servo             → servomoteur
- *   ESPAsyncWebServer      → serveur web async
- *   AsyncTCP               → requis par ESPAsyncWebServer
- *   ArduinoJson            → JSON API
- *   MIDI Library           → MIDI DIN série (FortySevenEffects)
- *   BLE-MIDI               → BLE MIDI (lathoub/Arduino-BLE-MIDI)
- *
- * Upload données web :
- *   Installer "ESP32 LittleFS Data Upload" plugin Arduino IDE ou PlatformIO
- *   Placer index.html dans le dossier data/ du sketch
+ * Bibliothèques requises :
+ *   AccelStepper, ESP32Servo, ESPAsyncWebServer, AsyncTCP,
+ *   ArduinoJson, MIDI Library, BLE-MIDI
  */
 
 #include "settings.h"
@@ -42,71 +36,82 @@ WiFiManager    wifiMgr;
 WebInterface   webIface;
 
 // ============================================================================
-// ÉTAT SYSTÈME
+// ÉTAT PARTAGÉ
 // ============================================================================
 
-enum SystemState { SYS_INIT, SYS_HOMING, SYS_READY, SYS_ERROR };
-volatile SystemState sysState = SYS_INIT;
+volatile SystemState sysState        = SYS_INIT;
+volatile bool g_homingRequested      = false;
+volatile bool g_testAirRequested     = false;
+volatile unsigned long lastMidiActMs = 0;  // watchdog MIDI
 
-// Flag homing demandé depuis l'interface web (WebInterface.h le positionne)
-volatile bool g_homingRequested = false;
-
-// Mutex pour protéger stepper/air partagés entre les deux cores
-portMUX_TYPE motionMux = portMUX_INITIALIZER_UNLOCKED;
+// Mutex FreeRTOS — protège stepper/air contre accès concurrent inter-core.
+// Utilisé dans les callbacks MIDI (Core 1 Serial, Core 0 BLE) et taskMotion.
+SemaphoreHandle_t motionMutex = nullptr;
 
 // ============================================================================
 // CALLBACKS MIDI
+// Appelés depuis Core 1 (MIDI Serial) ou Core 0 (BLE MIDI).
+// Le mutex garantit l'exclusion mutuelle avec taskMotion.
 // ============================================================================
 
 void onMidiNoteOn(byte note, byte velocity) {
   if (sysState != SYS_READY) return;
-  portENTER_CRITICAL(&motionMux);
+  xSemaphoreTake(motionMutex, portMAX_DELAY);
   stepper.moveToMidiNote(note);
   air.startAir(velocity);
-  portEXIT_CRITICAL(&motionMux);
+  xSemaphoreGive(motionMutex);
+  lastMidiActMs = millis();
 }
 
 void onMidiNoteOff(byte note) {
   if (sysState != SYS_READY) return;
-  portENTER_CRITICAL(&motionMux);
+  xSemaphoreTake(motionMutex, portMAX_DELAY);
   air.stopAir();
   stepper.setVibrato(false, 0);
-  portEXIT_CRITICAL(&motionMux);
+  xSemaphoreGive(motionMutex);
+  lastMidiActMs = millis();
 }
 
 void onMidiPitchBend(float semitones) {
   if (sysState != SYS_READY) return;
-  portENTER_CRITICAL(&motionMux);
+  xSemaphoreTake(motionMutex, portMAX_DELAY);
   stepper.setPitchBend(semitones);
-  portEXIT_CRITICAL(&motionMux);
+  xSemaphoreGive(motionMutex);
+  lastMidiActMs = millis();
 }
 
 void onMidiAftertouch(bool active, byte pressure) {
   if (sysState != SYS_READY) return;
-  portENTER_CRITICAL(&motionMux);
+  xSemaphoreTake(motionMutex, portMAX_DELAY);
   stepper.setVibrato(active, pressure);
-  portEXIT_CRITICAL(&motionMux);
+  xSemaphoreGive(motionMutex);
+  lastMidiActMs = millis();
 }
 
+// CC2 (Breath) / CC11 (Expression) → débit air
+// CC1 (Modulation) → vibrato (géré dans MIDIHandler.dispatchCC)
 void onMidiCC(byte cc, byte value) {
   if (sysState != SYS_READY) return;
-  // CC2 / CC11 → débit air (servo direct)
   if (cc == 2 || cc == 11) {
-    portENTER_CRITICAL(&motionMux);
-    // Mapper 0-127 → vitesse servo (contrôle expression)
-    // Pour l'instant : vibrato via CC1 géré dans MIDIHandler
-    portEXIT_CRITICAL(&motionMux);
+    xSemaphoreTake(motionMutex, portMAX_DELAY);
+    air.setAirflow(value);
+    xSemaphoreGive(motionMutex);
+    lastMidiActMs = millis();
   }
 }
 
 // ============================================================================
-// TÂCHE CORE 0 — WEB / WIFI
+// TÂCHE CORE 0 — WEB / WIFI (priorité basse)
 // ============================================================================
 
 void taskWeb(void* param) {
   (void)param;
   wifiMgr.begin();
   webIface.begin(&stepper, &air, &midi, &wifiMgr);
+  // webIface.begin() appelle loadConfigFromNVS() + syncStepperLUT()
+  // → les valeurs de runtimeCfg.lutPositions sont mises à jour ;
+  //   stepper lit à travers le pointeur, donc il utilise la LUT correcte
+  //   dès que taskMotion émerge du homing.
 
   for (;;) {
     webIface.update();
@@ -115,16 +120,20 @@ void taskWeb(void* param) {
 }
 
 // ============================================================================
-// TÂCHE CORE 1 — MIDI + MOTION (temps-réel)
+// TÂCHE CORE 1 — MIDI + MOTION (priorité haute, temps-réel)
 // ============================================================================
 
 void taskMotion(void* param) {
   (void)param;
 
-  // Initialiser les modules temps-réel
   stepper.begin();
   air.begin();
   midi.begin();
+
+  // Pointer vers la LUT runtime (runtimeCfg.lutPositions dans WebInterface.h).
+  // Les valeurs seront mises à jour par taskWeb/webIface.begin() via NVS.
+  // Le pointeur est stable pour toute la durée du programme.
+  stepper.setRuntimeLUT(runtimeCfg.lutPositions, runtimeCfg.useLUT);
 
   midi.setNoteOnCallback(onMidiNoteOn);
   midi.setNoteOffCallback(onMidiNoteOff);
@@ -138,10 +147,11 @@ void taskMotion(void* param) {
 
   // Homing initial
   sysState = SYS_HOMING;
-  bool ok = stepper.performHoming();
+  bool ok  = stepper.performHoming();
 
   if (ok) {
     sysState = SYS_READY;
+    lastMidiActMs = millis();  // init watchdog
 #if DEBUG_MODE
     Serial.println(F("[System] READY — en attente MIDI..."));
 #endif
@@ -151,10 +161,7 @@ void taskMotion(void* param) {
     air.forceClose();
   } else {
     sysState = SYS_ERROR;
-#if DEBUG_MODE
     Serial.println(F("[System] ERREUR homing! Vérifier endstop."));
-#endif
-    // LED clignote indéfiniment en cas d'erreur
     for (;;) {
 #if LED_ENABLED
       digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
@@ -167,24 +174,49 @@ void taskMotion(void* param) {
   digitalWrite(STATUS_LED_PIN, LOW);
 #endif
 
-  // Boucle principale temps-réel
+  // ---- Boucle principale temps-réel ----
   for (;;) {
+
+    // --- 1. Lire MIDI (appelle callbacks si message disponible) ---
     midi.update();
 
-    portENTER_CRITICAL(&motionMux);
+    // --- 2. Mettre à jour motion + air (sous mutex) ---
+    xSemaphoreTake(motionMutex, portMAX_DELAY);
     stepper.update();
     air.update();
-    portEXIT_CRITICAL(&motionMux);
+    xSemaphoreGive(motionMutex);
 
-    // Homing demandé depuis interface web
+    // --- 3. Watchdog MIDI ---
+    if (sysState == SYS_READY
+        && millis() - lastMidiActMs > WATCHDOG_TIMEOUT_MS
+        && air.isSolenoidOpen()) {
+      Serial.println(F("[WDG] Timeout MIDI — air coupé"));
+      xSemaphoreTake(motionMutex, portMAX_DELAY);
+      air.forceClose();
+      stepper.setVibrato(false, 0);
+      xSemaphoreGive(motionMutex);
+      lastMidiActMs = millis();  // évite déclenchements répétés
+    }
+
+    // --- 4. Homing demandé depuis l'interface web ---
     if (g_homingRequested) {
       g_homingRequested = false;
       sysState = SYS_HOMING;
+      xSemaphoreTake(motionMutex, portMAX_DELAY);
       air.forceClose();
-      portENTER_CRITICAL(&motionMux);
+      xSemaphoreGive(motionMutex);
+
       bool rehome = stepper.performHoming();
-      portEXIT_CRITICAL(&motionMux);
-      sysState = rehome ? SYS_READY : SYS_ERROR;
+      sysState    = rehome ? SYS_READY : SYS_ERROR;
+      if (rehome) lastMidiActMs = millis();
+    }
+
+    // --- 5. Test air demandé depuis l'interface web ---
+    if (g_testAirRequested) {
+      g_testAirRequested = false;
+      xSemaphoreTake(motionMutex, portMAX_DELAY);
+      air.runTestFromTask();   // vTaskDelay interne, libère le CPU
+      xSemaphoreGive(motionMutex);
     }
 
 #if DEBUG_MODE
@@ -195,11 +227,10 @@ void taskMotion(void* param) {
                     stepper.getCurrentPositionMM(),
                     air.getStateName(),
                     midi.getLastNote(),
-                    millis() / 1000);
+                    millis() / 1000UL);
     }
 #endif
 
-    // Pas de delay — laisser le scheduler FreeRTOS gérer
     taskYIELD();
   }
 }
@@ -213,7 +244,7 @@ void setup() {
   Serial.begin(SERIAL_BAUD_RATE);
   delay(500);
   Serial.println(F("\n========================================"));
-  Serial.println(F("   ESP32 MIDI Slide Whistle Controller"));
+  Serial.println(F("   ESP32 MIDI Slide Whistle v2"));
   Serial.println(F("========================================"));
 #endif
 
@@ -222,14 +253,17 @@ void setup() {
   digitalWrite(STATUS_LED_PIN, LOW);
 #endif
 
-  // Tâche web sur Core 0 (priorité basse)
-  xTaskCreatePinnedToCore(taskWeb,    "Web",    8192, nullptr, 1, nullptr, 0);
+  // Créer le mutex avant de lancer les tâches
+  motionMutex = xSemaphoreCreateMutex();
+  configASSERT(motionMutex);
 
-  // Tâche motion sur Core 1 (priorité haute)
-  xTaskCreatePinnedToCore(taskMotion, "Motion", 8192, nullptr, 5, nullptr, 1);
+  // Core 0 — web / WiFi  (stack 12 KB, priorité 1)
+  xTaskCreatePinnedToCore(taskWeb,    "Web",    12288, nullptr, 1, nullptr, 0);
+
+  // Core 1 — MIDI + motion (stack 16 KB, priorité 5)
+  xTaskCreatePinnedToCore(taskMotion, "Motion", 16384, nullptr, 5, nullptr, 1);
 }
 
 void loop() {
-  // Tout est dans les tâches FreeRTOS — loop() inutilisé
-  vTaskDelay(portMAX_DELAY);
+  vTaskDelay(portMAX_DELAY);  // tout est dans les tâches FreeRTOS
 }
