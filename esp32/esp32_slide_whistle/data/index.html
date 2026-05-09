@@ -298,6 +298,76 @@
   #connDot.lost     { background: var(--orange); animation: blink 1s infinite; }
   @keyframes blink { 50% { opacity: .3; } }
 
+  /* Splash screen */
+  #splash {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 100000; transition: opacity .4s ease-out;
+  }
+  #splash.hide { opacity: 0; pointer-events: none; }
+  #splash .logo {
+    font-size: 56px; margin-bottom: 18px;
+    animation: bounce 2s ease-in-out infinite;
+  }
+  #splash .title { font-size: 22px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  #splash .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 30px; }
+  #splash .progress {
+    width: 240px; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden;
+  }
+  #splash .progress-bar {
+    height: 100%; background: linear-gradient(90deg, transparent, var(--green), transparent);
+    width: 50%; animation: slide 1.4s ease-in-out infinite;
+  }
+  @keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-8px); }
+  }
+  @keyframes slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(200%); }
+  }
+
+  /* Page transitions (animation au passage actif) */
+  .page.active { animation: fadeInUp .22s ease-out; }
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* LED indicators */
+  .led {
+    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--border); border: 1px solid rgba(0,0,0,.3);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.5);
+    margin-right: 6px; vertical-align: middle;
+    transition: all .15s;
+  }
+  .led.green  { background: radial-gradient(circle at 30% 30%, #5fff8f, #00a060); box-shadow: 0 0 8px rgba(0,208,132,.7); }
+  .led.red    { background: radial-gradient(circle at 30% 30%, #ff8585, #cc1530); box-shadow: 0 0 8px rgba(233,69,96,.7); }
+  .led.yellow { background: radial-gradient(circle at 30% 30%, #ffe585, #cc8800); box-shadow: 0 0 8px rgba(255,170,0,.6); }
+  .led.blue   { background: radial-gradient(circle at 30% 30%, #85b5ff, #1565c0); box-shadow: 0 0 8px rgba(91,155,242,.6); }
+  .led.off    { background: var(--border); box-shadow: inset 0 1px 2px rgba(0,0,0,.5); }
+
+  /* Animated counter — uses CSS counter from JS data attribute */
+  .anim-counter { transition: color .2s; display: inline-block; min-width: 28px; }
+  .anim-counter.flash { color: var(--green); }
+
+  /* Color picker swatch */
+  .color-swatch {
+    display: inline-block; width: 20px; height: 20px; border-radius: 50%;
+    border: 2px solid var(--bg); cursor: pointer;
+    margin-right: 4px; vertical-align: middle;
+    transition: transform .15s;
+  }
+  .color-swatch:hover { transform: scale(1.15); }
+  .color-swatch.selected { box-shadow: 0 0 0 2px var(--text); }
+
+  /* Slide whistle SVG container */
+  .whistle-svg {
+    width: 100%; max-width: 220px; height: 36px; margin: 8px auto;
+    display: block;
+  }
+
   /* MIDI channel counters strip */
   .ch-strip {
     display: grid; grid-template-columns: repeat(16, 1fr);
@@ -402,6 +472,13 @@
 </style>
 </head>
 <body>
+
+<div id="splash">
+  <div class="logo">🎼</div>
+  <div class="title">Slide Whistle Controller</div>
+  <div class="subtitle">v3 · multi-flute · pression</div>
+  <div class="progress"><div class="progress-bar"></div></div>
+</div>
 
 <div id="toasts"></div>
 <div id="loading-overlay"><div class="spinner"></div></div>
@@ -591,6 +668,8 @@
     </h3>
     <label>Nom personnalisé <span class="help" title="Vide = utilise le nom par défaut">?</span></label>
     <input id="cfgCustomName" type="text" maxlength="22" placeholder="laisser vide pour défaut">
+    <label>Couleur (UI uniquement, sauvée dans le navigateur)</label>
+    <div id="cfgColorSwatches"></div>
     <div class="row3">
       <div><label>Canal MIDI <span class="help" title="0=OMNI (tous canaux), 1-16=canal spécifique">?</span></label>
         <input id="cfgChan" type="number" min="0" max="16"></div>
@@ -818,10 +897,132 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
 });
 
 // ============================================================================
-// Color palette per flute (consistent across UI)
+// Splash screen
+// ============================================================================
+function hideSplash() {
+  const s = document.getElementById('splash');
+  if (s) { s.classList.add('hide'); setTimeout(() => s.remove(), 500); }
+}
+
+// ============================================================================
+// Color palette per flute (consistent across UI, override par localStorage)
 // ============================================================================
 const FLUTE_COLORS = ['#00d084','#5b9bf2','#ff7e5f','#c779e8','#ffaa00','#34d4c5','#e91e63','#7bd131'];
-function fluteColor(id) { return FLUTE_COLORS[id % FLUTE_COLORS.length]; }
+function fluteColor(id) {
+  const override = localStorage.getItem(`flute_color_${id}`);
+  return override || FLUTE_COLORS[id % FLUTE_COLORS.length];
+}
+function setFluteColor(id, hex) {
+  if (hex) localStorage.setItem(`flute_color_${id}`, hex);
+  else     localStorage.removeItem(`flute_color_${id}`);
+  render();
+}
+
+// ============================================================================
+// Animated counter — flash quand la valeur change
+// ============================================================================
+function setAnimCounter(el, val) {
+  if (!el) return;
+  const prev = el.textContent;
+  const cur = String(val);
+  if (prev !== cur) {
+    el.textContent = cur;
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 250);
+  }
+}
+
+// ============================================================================
+// Slide-whistle SVG (inline, animée par CSS variable)
+// ============================================================================
+function whistleSvg(color, posPct, playing) {
+  const cx = 22 + posPct * 1.50;     // x position du curseur (22..172)
+  const glow = playing ? 'filter:drop-shadow(0 0 4px ' + color + ')' : '';
+  return `
+    <svg class="whistle-svg" viewBox="0 0 200 36" xmlns="http://www.w3.org/2000/svg" style="${glow}">
+      <!-- corps tube -->
+      <rect x="20" y="14" width="160" height="8" rx="4" fill="var(--border)" stroke="${color}" stroke-width="1"/>
+      <!-- embouchure -->
+      <path d="M2 14 L20 12 L20 24 L2 22 Z" fill="${color}" opacity="0.55"/>
+      <circle cx="6" cy="18" r="2" fill="var(--bg)"/>
+      <!-- piston / curseur (bouge avec posPct) -->
+      <rect x="${cx - 3}" y="10" width="6" height="16" rx="2" fill="${color}"/>
+      <line x1="${cx}" y1="6" x2="${cx}" y2="30" stroke="${color}" stroke-width="0.5" opacity="0.5"/>
+      <!-- pommeau -->
+      <circle cx="180" cy="18" r="4" fill="${color}"/>
+      ${playing ? `
+        <!-- ondes sonores quand actif -->
+        <circle cx="6" cy="18" r="6" fill="none" stroke="${color}" stroke-width="0.5" opacity="0.6">
+          <animate attributeName="r" from="6" to="14" dur="1s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" from="0.6" to="0" dur="1s" repeatCount="indefinite"/>
+        </circle>
+      ` : ''}
+    </svg>`;
+}
+
+// ============================================================================
+// Position oscilloscope par flûte (rolling history)
+// ============================================================================
+const _posHistory = {};   // {fluteId: [{t, pos}, ...]}
+function pushFlutePos(id, pos) {
+  if (!_posHistory[id]) _posHistory[id] = [];
+  _posHistory[id].push({t: Date.now(), pos});
+  if (_posHistory[id].length > 80) _posHistory[id].shift();
+}
+function drawScope(canvas, id, travelMm) {
+  if (!canvas) return;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w === 0) return;
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  const hist = _posHistory[id] || [];
+  if (hist.length < 2) return;
+  // Grille
+  ctx.strokeStyle = 'rgba(128,128,128,.15)'; ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) {
+    const y = (i / 4) * h;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+  // Trace
+  const color = fluteColor(id);
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();
+  hist.forEach((s, i) => {
+    const x = (i / (hist.length - 1)) * w;
+    const y = h - (s.pos / travelMm) * h;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  // Dernier point
+  const last = hist[hist.length - 1];
+  const lx = w, ly = h - (last.pos / travelMm) * h;
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(lx - 2, ly, 2.5, 0, 2*Math.PI); ctx.fill();
+}
+
+// ============================================================================
+// Note heatmap par flûte
+// ============================================================================
+const _noteHits = {};     // {fluteId: {note: count}}
+function bumpNoteHit(id, note) {
+  if (!_noteHits[id]) _noteHits[id] = {};
+  _noteHits[id][note] = (_noteHits[id][note] || 0) + 1;
+}
+function buildHeatmap(id, noteMin, noteMax) {
+  const hits = _noteHits[id] || {};
+  let max = 0;
+  for (let n = noteMin; n <= noteMax; n++) max = Math.max(max, hits[n] || 0);
+  if (max === 0) max = 1;
+  const color = fluteColor(id);
+  let html = '<div style="display:flex;gap:1px;height:14px">';
+  for (let n = noteMin; n <= noteMax; n++) {
+    const c = hits[n] || 0;
+    const opacity = c ? (0.2 + 0.8 * (c / max)) : 0.05;
+    html += `<div style="flex:1;background:${color};opacity:${opacity}" title="${noteName(n)} : ${c}"></div>`;
+  }
+  return html + '</div>';
+}
 
 // ============================================================================
 // Loading overlay
@@ -945,7 +1146,22 @@ function badgeClass(s) {
   return ({READY:'b-ready', HOMING:'b-homing', ERROR:'b-error', INIT:'b-init'})[s] || 'b-init';
 }
 
+// Suivi notes activées (pour heatmap) — déclenché à chaque frame WS
+const _lastNoteState = {};
+function trackNoteEdges() {
+  (state.flutes||[]).forEach(f => {
+    const prev = _lastNoteState[f.id] || {note: 0, active: false};
+    // edge rising
+    if (f.note_active && (!prev.active || prev.note !== f.last_note)) {
+      bumpNoteHit(f.id, f.last_note);
+    }
+    _lastNoteState[f.id] = {note: f.last_note, active: f.note_active};
+    pushFlutePos(f.id, f.position_mm || 0);
+  });
+}
+
 function render() {
+  trackNoteEdges();
   // Header
   const sb = document.getElementById('sysBadge');
   sb.textContent = state.sys_state || 'INIT';
@@ -997,9 +1213,7 @@ function render() {
       <div class="${cls}" style="--flute-color:${fluteColor(f.id)}">
         <h3><span><span class="flute-id">#${f.id}</span> ${f.name}</span>
             <span class="pill">ch${f.midi_channel||'omni'}</span></h3>
-        <div class="slider-track">
-          <div class="slider-pos" style="left: calc(${posPct}% - 3px); background:${fluteColor(f.id)}"></div>
-        </div>
+        ${whistleSvg(fluteColor(f.id), posPct, f.air_open || f.note_active)}
         <div class="slider-label"><span>0</span><span>${f.position_mm?.toFixed?.(1)||'—'} mm</span><span>${travel}</span></div>
         <div class="stat" style="margin-top:6px"><span class="stat-label">Note</span>
           <span class="stat-value">${f.note_active?noteWithFreq(f.last_note):'—'}</span></div>
@@ -1030,14 +1244,20 @@ function render() {
     return `
       <div class="${cls}" style="--flute-color:${fluteColor(f.id)}">
         <h3>
-          <span><span class="flute-id">#${f.id}</span> ${f.name}</span>
-          <span>${f.homed?'<span class="pill ok">homed</span>':'<span class="pill fault">not homed</span>'}</span>
+          <span>
+            <span class="led ${f.homed?'green':'red'}" title="${f.homed?'Homé':'Non homé'}"></span>
+            <span class="flute-id">#${f.id}</span> ${f.name}
+          </span>
+          <span>
+            <span class="led ${f.air_open?'green':'off'}" title="Air ${f.air_open?'ouvert':'fermé'}"></span>
+            <span class="led ${f.muted?'yellow':(f.enabled?'green':'red')}" title="${f.muted?'mute':(f.enabled?'active':'désactivée')}"></span>
+          </span>
         </h3>
-        <div class="slider-track">
-          <div class="slider-pos" style="left: calc(${posPct}% - 3px); background:${fluteColor(f.id)}"></div>
-        </div>
+        ${whistleSvg(fluteColor(f.id), posPct, f.air_open || f.note_active)}
         <div class="slider-label"><span>0 mm</span><span>${f.position_mm?.toFixed?.(1)||'—'} mm</span><span>${travel} mm</span></div>
+        <canvas class="scope-canvas" data-flute-id="${f.id}" data-travel="${travel}" style="width:100%;height:48px;background:var(--bg);border-radius:4px;margin:6px 0"></canvas>
         <div class="vu" title="PWM solénoïde ${f.pwm}/255"><div class="vu-fill" style="width:${pwmPct}%"></div></div>
+        <div style="margin-top:6px"><div class="small">Heatmap notes</div>${buildHeatmap(f.id, f.note_min, f.note_max)}</div>
         <div class="stat" style="margin-top:8px"><span class="stat-label">Plage MIDI</span>
           <span class="stat-value">${noteName(f.note_min)}–${noteName(f.note_max)} (ch ${f.midi_channel||'omni'})</span></div>
         <div class="stat"><span class="stat-label">Note jouée</span>
@@ -1088,6 +1308,18 @@ function render() {
 
   // Selectors
   populateFluteSelectors();
+
+  // Compteurs animés
+  const mc = document.getElementById('dashMidiCount');
+  if (mc) {
+    if (!mc.classList.contains('anim-counter')) mc.classList.add('anim-counter');
+    setAnimCounter(mc, state.midi_count || 0);
+  }
+
+  // Dessin oscilloscopes (sur la page Flûtes)
+  document.querySelectorAll('canvas.scope-canvas').forEach(c => {
+    drawScope(c, +c.dataset.fluteId, +c.dataset.travel);
+  });
 }
 
 function populateFluteSelectors() {
@@ -1278,7 +1510,18 @@ async function loadFluteCfg() {
   syncRangeFromInputs();
   drawVelCurve();
   buildLutBox(c.lut || []);
+  buildColorSwatches(c.id);
   clearCfgDirty();
+}
+
+function buildColorSwatches(id) {
+  const box = document.getElementById('cfgColorSwatches');
+  if (!box) return;
+  const current = fluteColor(id);
+  const palette = [...FLUTE_COLORS, '#7e57c2','#26c6da','#ec407a','#9ccc65','#ff5722'];
+  box.innerHTML = palette.map(c =>
+    `<span class="color-swatch ${c.toLowerCase()===current.toLowerCase()?'selected':''}" style="background:${c}" onclick="setFluteColor(${id},'${c}')"></span>`
+  ).join('') + ` <button class="btn small" onclick="setFluteColor(${id},null)" style="padding:2px 8px;font-size:11px">défaut</button>`;
 }
 
 // ---- Dirty state for config ------------------------------------------------
@@ -1995,7 +2238,12 @@ setupRangeEditor();
 setupDirtyTracking();
 connectWs();
 // premier fetch immédiat
-getJson('/api/status').then(s => { state = s; render(); refreshHealth(); });
+getJson('/api/status').then(s => {
+  state = s; render(); refreshHealth();
+  setTimeout(hideSplash, 400);
+});
+// Hide splash après 3 s max si jamais le fetch traîne
+setTimeout(hideSplash, 3000);
 </script>
 
 </body>
