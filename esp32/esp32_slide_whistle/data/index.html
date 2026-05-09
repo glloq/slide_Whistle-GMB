@@ -179,6 +179,37 @@
   /* Pressure mini-graph (canvas) */
   canvas.spark { display: block; width: 100%; height: 60px; background: var(--bg); border-radius: 4px; }
 
+  /* Toast notifications */
+  #toasts {
+    position: fixed; top: 12px; right: 12px;
+    display: flex; flex-direction: column; gap: 8px;
+    z-index: 9999; pointer-events: none;
+  }
+  .toast {
+    background: var(--card); border: 1px solid var(--border);
+    border-left: 4px solid var(--green);
+    padding: 10px 14px; border-radius: 6px;
+    color: var(--text); font-size: 13px;
+    min-width: 220px; max-width: 360px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4);
+    animation: toastIn .2s ease-out;
+  }
+  .toast.error   { border-left-color: var(--orange); }
+  .toast.warn    { border-left-color: var(--yellow); }
+  .toast.success { border-left-color: var(--green); }
+  @keyframes toastIn {
+    from { transform: translateX(20px); opacity: 0; }
+    to   { transform: translateX(0); opacity: 1; }
+  }
+
+  /* LUT canvas */
+  canvas#lutCanvas {
+    display: block; width: 100%; height: 220px;
+    background: var(--bg); border-radius: 6px;
+    border: 1px solid var(--border);
+    cursor: crosshair;
+  }
+
   /* Mobile */
   @media (max-width: 600px) {
     header h1 { font-size: 15px; }
@@ -194,11 +225,14 @@
 </head>
 <body>
 
+<div id="toasts"></div>
+
 <header>
   <h1>🎼 Slide Whistle Controller</h1>
   <span id="sysBadge" class="badge b-init">INIT</span>
   <span id="fluteCount" class="pill">0 flûtes</span>
   <span id="pressBadge" class="pill" style="display:none">PRESSION</span>
+  <span id="demoBadge" class="pill" style="display:none">▶ démo</span>
   <span style="margin-left:auto" class="small">v3 · multi-flute</span>
 </header>
 
@@ -210,6 +244,7 @@
   <button data-page="midi">MIDI</button>
   <button data-page="config">Réglages</button>
   <button data-page="presets">Presets</button>
+  <button data-page="diag">Diag</button>
   <button data-page="wifi">WiFi</button>
 </nav>
 
@@ -273,6 +308,25 @@
   <div class="card" style="margin-top:12px">
     <h3>Clavier</h3>
     <div id="piano" class="piano"></div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h3>Mélodies de démo
+      <span id="demoState" class="pill">arrêté</span>
+    </h3>
+    <div class="small" style="margin-bottom:8px">
+      Joue une séquence pré-enregistrée à travers tout le pipeline (MIDI log, Orchestra, flûtes).
+      Pratique pour tester le hardware sans clavier MIDI.
+    </div>
+    <label>Mélodie</label>
+    <select id="demoMelodySel"></select>
+    <div style="margin:8px 0">
+      <label><input type="checkbox" id="demoLoop"> Boucler</label>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="demoPlay()">▶ Jouer</button>
+      <button class="btn" onclick="demoStop()">■ Arrêter</button>
+    </div>
   </div>
 </div>
 
@@ -361,7 +415,15 @@
     </div>
 
     <h3 style="margin-top: 16px">Calibration (LUT)</h3>
-    <div id="lutBox"></div>
+    <canvas id="lutCanvas" width="600" height="220"></canvas>
+    <div class="small" style="margin: 4px 0 12px">
+      Vert = LUT calibrée · gris = mapping linéaire de référence. La courbe d'une slide whistle
+      réelle est non-linéaire (1/Longueur ∝ fréquence) donc la LUT doit s'incurver vers le bas.
+    </div>
+    <details>
+      <summary class="small" style="cursor:pointer">Édition par valeur (table complète)</summary>
+      <div id="lutBox" style="margin-top:8px"></div>
+    </details>
   </div>
 </div>
 
@@ -395,6 +457,32 @@
         <div id="presetsList" class="small">Chargement...</div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- DIAG -->
+<!-- ============================================================ -->
+<div id="page-diag" class="page">
+  <div class="card">
+    <h3>Système <button class="btn" onclick="loadDiag()">⟲</button></h3>
+    <div id="diagSys" class="small">Chargement...</div>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn btn-warn" onclick="window.open('/api/backup','_blank')">⬇ Télécharger sauvegarde JSON</button>
+      <button class="btn" onclick="document.getElementById('restoreFile').click()">⬆ Restaurer depuis JSON</button>
+      <input type="file" id="restoreFile" accept="application/json" style="display:none" onchange="restoreFile(event)">
+      <button class="btn btn-danger" onclick="rebootSystem()">⟲ Redémarrer ESP32</button>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h3>Diagnostic flûtes (live)</h3>
+    <div id="diagFlutes" class="small">—</div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h3>Diagnostic pression</h3>
+    <div id="diagPressure" class="small">—</div>
   </div>
 </div>
 
@@ -437,13 +525,28 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   if (b.dataset.page === 'wifi')     loadWifi();
   if (b.dataset.page === 'midi')     loadMidiLog();
   if (b.dataset.page === 'presets')  loadPresets();
+  if (b.dataset.page === 'diag')     loadDiag();
+  if (b.dataset.page === 'play')     loadDemoMelodies();
 });
+
+// ============================================================================
+// Toast notifications
+// ============================================================================
+function toast(msg, type = 'success', timeout = 3000) {
+  const t = document.createElement('div');
+  t.className = 'toast ' + type;
+  t.textContent = msg;
+  document.getElementById('toasts').appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 200); }, timeout);
+}
 
 // ============================================================================
 // HTTP helpers
 // ============================================================================
 async function postNoBody(url) {
-  await fetch(url, {method:'POST'});
+  const r = await fetch(url, {method:'POST'});
+  if (!r.ok) toast(`Erreur ${r.status} sur ${url}`, 'error');
+  return r;
 }
 async function postJson(url, body) {
   const r = await fetch(url, {
@@ -451,10 +554,13 @@ async function postJson(url, body) {
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify(body)
   });
-  return r.json();
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) toast(`Erreur: ${j.error || r.status}`, 'error');
+  return j;
 }
 async function getJson(url) {
   const r = await fetch(url);
+  if (!r.ok) { toast(`GET ${url} → ${r.status}`, 'error'); return null; }
   return r.json();
 }
 
@@ -576,12 +682,17 @@ function render() {
         <div class="btn-row">
           <button class="btn" onclick="toggleEnable(${f.id}, ${!f.enabled})">${f.enabled?'Désactiver':'Activer'}</button>
           <button class="btn" onclick="toggleMute(${f.id}, ${!f.muted})">${f.muted?'Unmute':'Mute'}</button>
+          <button class="btn" onclick="soloFlute(${f.id})">🎯 Solo</button>
           <button class="btn btn-warn" onclick="homeOne(${f.id})">⌂ Homing</button>
           <button class="btn btn-warn" onclick="testAir(${f.id})">Test air</button>
           <button class="btn btn-danger" onclick="panic(${f.id})">Panic</button>
         </div>
       </div>`;
   }).join('') || '<div class="small">Aucune flûte configurée.</div>';
+  // Bouton "Désactiver solo" en bas
+  if ((state.flutes||[]).some(f => f.muted)) {
+    fl.innerHTML += `<div class="card" style="text-align:center"><button class="btn btn-primary" onclick="clearSolo()">Libérer le solo (unmute toutes)</button></div>`;
+  }
 
   // Selectors
   populateFluteSelectors();
@@ -683,7 +794,7 @@ async function saveFluteCfg() {
     muted:        document.getElementById('cfgMuted').checked,
     use_lut:      document.getElementById('cfgUseLut').checked,
   });
-  alert('Configuration sauvegardée.');
+  toast('Configuration sauvegardée');
 }
 
 async function testFluteAir() {
@@ -691,7 +802,15 @@ async function testFluteAir() {
   await postJson('/api/flute/test', {id});
 }
 
+let _currentLut = [];   // [{note, position}, …]
+let _currentTravel = 300;
+
 function buildLutBox(lut) {
+  _currentLut = lut.slice();
+  const sel = document.getElementById('cfgFluteSel');
+  const f = (state.flutes||[]).find(x => x.id == sel.value);
+  _currentTravel = f?.slider_travel_mm || 300;
+  // Table textuelle (collapsée)
   const box = document.getElementById('lutBox');
   box.innerHTML =
     '<div class="lut-grid"><div><b>Note</b></div><div></div><div><b>Position (mm)</b></div><div></div></div>'
@@ -703,7 +822,109 @@ function buildLutBox(lut) {
         <div><button class="btn" onclick="saveLutPoint(${p.note})">💾</button></div>
       </div>
     `).join('');
+  drawLutCanvas();
 }
+
+function drawLutCanvas() {
+  const c = document.getElementById('lutCanvas');
+  if (!c || !_currentLut.length) return;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (w === 0) return;
+  if (c.width !== w) c.width = w;
+  if (c.height !== h) c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  const padL = 32, padR = 8, padT = 12, padB = 22;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const n = _currentLut.length;
+  const noteMin = _currentLut[0].note;
+  const noteMax = _currentLut[n-1].note;
+  const x = i => padL + (i / (n - 1)) * plotW;
+  const yPos = mm => padT + plotH - (mm / _currentTravel) * plotH;
+  // Grid Y (4 lignes)
+  ctx.strokeStyle = '#2a2a4a'; ctx.lineWidth = 1;
+  ctx.fillStyle = '#888'; ctx.font = '10px sans-serif';
+  for (let i = 0; i <= 4; i++) {
+    const v = (i/4) * _currentTravel;
+    const y = yPos(v);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillText(v.toFixed(0), 2, y + 3);
+  }
+  // X axis labels (every 12 semitones = 1 octave)
+  for (let i = 0; i < n; i += 12) {
+    const note = _currentLut[i].note;
+    ctx.fillText(noteName(note), x(i) - 8, h - 6);
+  }
+  // Référence linéaire (gris pointillé)
+  ctx.strokeStyle = '#555'; ctx.setLineDash([3,3]); ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const linMm = (i / (n - 1)) * _currentTravel;
+    const xx = x(i), yy = yPos(linMm);
+    if (i === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // Courbe LUT (vert)
+  ctx.strokeStyle = '#00d084'; ctx.lineWidth = 2; ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const xx = x(i), yy = yPos(_currentLut[i].position);
+    if (i === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+  }
+  ctx.stroke();
+  // Points cliquables
+  ctx.fillStyle = '#00d084';
+  for (let i = 0; i < n; i++) {
+    const xx = x(i), yy = yPos(_currentLut[i].position);
+    ctx.beginPath(); ctx.arc(xx, yy, 3, 0, 2*Math.PI); ctx.fill();
+  }
+}
+
+// Drag sur le canvas pour modifier les points
+(function setupLutDrag() {
+  const c = document.getElementById('lutCanvas');
+  if (!c) return;
+  let dragIdx = -1;
+  c.addEventListener('mousedown', e => {
+    if (!_currentLut.length) return;
+    const rect = c.getBoundingClientRect();
+    const xRel = e.clientX - rect.left;
+    // Trouver le point le plus proche en x
+    const padL = 32, padR = 8;
+    const plotW = c.clientWidth - padL - padR;
+    const n = _currentLut.length;
+    let best = 0, bestD = 1e9;
+    for (let i = 0; i < n; i++) {
+      const xx = padL + (i / (n-1)) * plotW;
+      const d = Math.abs(xx - xRel);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    dragIdx = best;
+  });
+  const move = e => {
+    if (dragIdx < 0) return;
+    const rect = c.getBoundingClientRect();
+    const padT = 12, padB = 22;
+    const plotH = c.clientHeight - padT - padB;
+    const yRel = e.clientY - rect.top - padT;
+    const ratio = Math.max(0, Math.min(1, 1 - yRel / plotH));
+    _currentLut[dragIdx].position = ratio * _currentTravel;
+    drawLutCanvas();
+  };
+  c.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', async () => {
+    if (dragIdx < 0) return;
+    const note = _currentLut[dragIdx].note;
+    const pos  = _currentLut[dragIdx].position;
+    const id = +document.getElementById('cfgFluteSel').value;
+    await postJson('/api/flute/lut_point', {id, note, position_mm: pos});
+    // Mettre à jour le champ texte aussi
+    const inp = document.getElementById('lut_' + note);
+    if (inp) inp.value = pos.toFixed(2);
+    toast(`Note ${noteName(note)} → ${pos.toFixed(1)} mm`);
+    dragIdx = -1;
+  });
+})();
+window.addEventListener('resize', drawLutCanvas);
 
 async function saveLutPoint(note) {
   const id = +document.getElementById('cfgFluteSel').value;
@@ -731,7 +952,7 @@ async function savePressureCfg() {
     safety: +document.getElementById('pCfgSafety').value,
     max_fill_ms: +document.getElementById('pCfgFill').value,
   });
-  alert('Paramètres pression sauvegardés.');
+  toast('Paramètres pression sauvegardés');
 }
 
 // Update pressure stats from WS state
@@ -755,15 +976,18 @@ setInterval(() => {
 // ============================================================================
 async function loadWifi() {
   const w = await getJson('/api/wifi');
+  if (!w) return;
   document.getElementById('wifiStatus').innerHTML = `
     <div class="stat"><span class="stat-label">AP</span><span class="stat-value">${w.ap?.ssid} · ${w.ap?.ip} · ${w.ap?.clients} clients</span></div>
     <div class="stat"><span class="stat-label">STA</span><span class="stat-value ${w.sta?.connected?'':'muted'}">${w.sta?.connected?w.sta.ssid+' · '+w.sta.ip:'non connecté'}</span></div>
+    <div class="stat"><span class="stat-label">mDNS</span><span class="stat-value">http://${w.mdns}</span></div>
+    <div class="small" style="margin-top:6px">Accès navigateur : <code>http://${w.mdns}</code> (depuis n'importe quel appareil sur le même réseau)</div>
   `;
 }
 async function saveWifi() {
   const ssid = document.getElementById('wSsid').value;
   const pass = document.getElementById('wPass').value;
-  if (!ssid) return alert('SSID requis');
+  if (!ssid) { toast('SSID requis', 'warn'); return; }
   await postJson('/api/wifi', {ssid, password: pass});
   setTimeout(loadWifi, 1000);
 }
@@ -881,6 +1105,120 @@ setInterval(() => {
   if (state.pressure?.has_sensor) pushPressure(state.pressure.pressure_kpa);
   drawSpark();
 }, 500);
+
+// ============================================================================
+// Solo / Mute helpers
+// ============================================================================
+async function soloFlute(id)  { await postJson('/api/flute/solo', {id}); toast(`Solo flûte #${id}`); }
+async function clearSolo()    { await postJson('/api/flute/solo', {id:-1}); toast('Solo libéré'); }
+
+// ============================================================================
+// Demo player
+// ============================================================================
+async function loadDemoMelodies() {
+  const d = await getJson('/api/demo');
+  if (!d) return;
+  const sel = document.getElementById('demoMelodySel');
+  if (sel.options.length !== d.melodies.length) {
+    sel.innerHTML = d.melodies.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
+  }
+  document.getElementById('demoState').textContent = d.playing ? `▶ ${d.current}` : 'arrêté';
+  document.getElementById('demoState').className = 'pill ' + (d.playing ? 'ok' : '');
+  const hb = document.getElementById('demoBadge');
+  if (hb) {
+    hb.style.display = d.playing ? 'inline-block' : 'none';
+    hb.className = 'pill ok';
+    hb.textContent = '▶ ' + (d.current || 'demo');
+  }
+}
+async function demoPlay() {
+  const id = +document.getElementById('demoMelodySel').value;
+  const loop = document.getElementById('demoLoop').checked;
+  await postJson('/api/demo/play', {id, loop});
+  toast('Démo lancée');
+  setTimeout(loadDemoMelodies, 200);
+}
+async function demoStop() {
+  await postNoBody('/api/demo/stop');
+  toast('Démo arrêtée');
+  setTimeout(loadDemoMelodies, 200);
+}
+setInterval(() => {
+  if (document.getElementById('page-play')?.classList.contains('active')) loadDemoMelodies();
+}, 1000);
+
+// ============================================================================
+// Diagnostics
+// ============================================================================
+async function loadDiag() {
+  const d = await getJson('/api/system');
+  if (!d) return;
+  // System info
+  document.getElementById('diagSys').innerHTML = `
+    <div class="stat"><span class="stat-label">Chip</span><span class="stat-value">${d.chip_model} rev${d.chip_revision} · ${d.chip_cores}c · ${d.cpu_freq_mhz}MHz</span></div>
+    <div class="stat"><span class="stat-label">SDK</span><span class="stat-value">${d.sdk_version}</span></div>
+    <div class="stat"><span class="stat-label">Heap libre / total</span><span class="stat-value">${(d.heap_free/1024).toFixed(1)} / ${(d.heap_size/1024).toFixed(1)} KB</span></div>
+    <div class="stat"><span class="stat-label">Heap min observé</span><span class="stat-value ${d.heap_min < 20000 ? 'red' : ''}">${(d.heap_min/1024).toFixed(1)} KB</span></div>
+    <div class="stat"><span class="stat-label">Flash</span><span class="stat-value">${(d.flash_size/1048576).toFixed(1)} MB</span></div>
+    <div class="stat"><span class="stat-label">PSRAM libre</span><span class="stat-value">${d.psram_free ? (d.psram_free/1024).toFixed(1)+' KB' : 'absente'}</span></div>
+    <div class="stat"><span class="stat-label">MAC</span><span class="stat-value">${d.mac}</span></div>
+    <div class="stat"><span class="stat-label">Firmware</span><span class="stat-value">${d.fw_version}</span></div>
+  `;
+  // Flutes
+  document.getElementById('diagFlutes').innerHTML = (d.flutes||[]).map(f => `
+    <div class="card flute-card" style="margin-bottom:8px">
+      <div style="font-weight:700; color:var(--green)">#${f.id} ${f.name}</div>
+      <div class="row3">
+        <div>Step: <b>${f.pin_step}</b> · Dir: <b>${f.pin_dir}</b> · En: <b>${f.pin_en}</b></div>
+        <div>Solenoid: <b>${f.pin_solenoid}</b> (LEDC ${f.ledc_solenoid}) · Servo: <b>${f.pin_servo}</b> (T${f.servo_timer})</div>
+        <div>Endstop: <b>${f.pin_endstop}</b> (${f.endstop_active}) ·
+             ${f.endstop_triggered ? '<span class="pill ok">déclenché</span>' : '<span class="pill">libre</span>'}</div>
+      </div>
+      <div class="stat" style="margin-top:6px">
+        <span class="stat-label">Position / Homé ?</span>
+        <span class="stat-value">${f.position_mm?.toFixed?.(1) ?? '—'} mm · ${f.homed ? '✓' : '✗'}</span>
+      </div>
+    </div>
+  `).join('') || '<div>Aucune flûte.</div>';
+  // Pressure
+  if (d.pressure) {
+    const p = d.pressure;
+    document.getElementById('diagPressure').innerHTML = `
+      <div class="stat"><span class="stat-label">État</span><span class="stat-value">${p.state}</span></div>
+      <div class="stat"><span class="stat-label">Pompe</span><span class="stat-value">${p.pump_on ? 'ON' : 'OFF'}</span></div>
+      <div class="stat"><span class="stat-label">Capteur ?</span><span class="stat-value">${p.has_sensor ? 'oui (pin ' + p.adc_pin + ')' : 'non'}</span></div>
+      ${p.has_sensor ? `<div class="stat"><span class="stat-label">Pression / ADC raw</span><span class="stat-value">${p.kpa.toFixed(1)} kPa · ${p.adc_raw} (sur 4095)</span></div>` : ''}
+      <div class="stat"><span class="stat-label">Réservoir</span><span class="stat-value">${p.reservoir_ok ? 'OK' : 'VIDE'}</span></div>
+      <div class="stat"><span class="stat-label">Défaut</span><span class="stat-value ${p.fault!=='none'?'red':''}">${p.fault}</span></div>
+    `;
+  } else {
+    document.getElementById('diagPressure').innerHTML = '<div>Module pression désactivé.</div>';
+  }
+}
+// Auto-refresh diag toutes les 1s si page ouverte
+setInterval(() => {
+  if (document.getElementById('page-diag')?.classList.contains('active')) loadDiag();
+}, 1500);
+
+// ============================================================================
+// Restore / reboot
+// ============================================================================
+async function restoreFile(ev) {
+  const file = ev.target.files[0];
+  if (!file) return;
+  if (!confirm(`Restaurer la configuration depuis "${file.name}" ? Toute la config courante sera écrasée.`)) return;
+  const text = await file.text();
+  let json;
+  try { json = JSON.parse(text); }
+  catch (e) { toast('JSON invalide', 'error'); return; }
+  await postJson('/api/restore', json);
+  toast('Configuration restaurée', 'success');
+}
+async function rebootSystem() {
+  if (!confirm('Redémarrer l\'ESP32 ? Toutes les notes en cours seront coupées.')) return;
+  await postNoBody('/api/system/reboot');
+  toast('Redémarrage en cours...', 'warn', 5000);
+}
 
 // ============================================================================
 // Init

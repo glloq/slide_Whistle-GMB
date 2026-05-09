@@ -187,6 +187,35 @@ POST   /api/presets/load         {name}   — restaure la config
 POST   /api/presets/delete       {name}
 ```
 
+### Sauvegarde / restauration JSON (téléchargement)
+
+```
+GET  /api/backup                  — JSON complet (Content-Disposition: attachment)
+POST /api/restore                 — body = JSON déjà téléchargé, applique tout
+```
+
+### Système / diagnostic
+
+```
+GET  /api/system                  — chip, heap, MAC, état endstop par flûte,
+                                    raw ADC capteur pression, etc.
+POST /api/system/reboot           — redémarrage logiciel
+```
+
+### Démo (mélodies pré-enregistrées)
+
+```
+GET  /api/demo                    — liste des mélodies + état lecteur
+POST /api/demo/play               {id, loop}
+POST /api/demo/stop
+```
+
+### Solo flûte
+
+```
+POST /api/flute/solo              {id}    — mute toutes sauf {id} (id<0 libère)
+```
+
 ### Pression
 
 ```
@@ -272,4 +301,4 @@ Pour rester en single-flûte (équivalent v2) : `DEFAULT_FLUTE_COUNT = 1`.
 3. Téléverser le sketch
 4. Téléverser LittleFS (Outils → ESP32 Sketch Data Upload) avec le dossier `data/`
 5. Se connecter au WiFi `SlideWhistle` (mot de passe `midi1234`)
-6. Ouvrir `http://192.168.4.1` → l'interface web pilote tout
+6. Ouvrir `http://192.168.4.1` ou `http://slidewhistle.local` (mDNS) → l'interface web pilote tout

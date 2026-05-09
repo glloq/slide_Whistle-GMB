@@ -40,6 +40,7 @@
 #include "PressureControl.h"
 #include "MIDIHandler.h"
 #include "WiFiManager.h"
+#include "DemoPlayer.h"
 
 extern volatile SystemState sysState;
 extern volatile bool g_homingRequested;
@@ -48,6 +49,8 @@ extern volatile int  g_testAirFluteId;
 extern volatile bool g_pressureStartRequested;
 extern volatile bool g_pressureStopRequested;
 extern volatile bool g_pressureResetRequested;
+extern volatile int  g_demoMelodyId;      // -1 = stop, sinon index de mélodie à lancer
+extern volatile bool g_demoLoop;
 
 class WebInterface {
 private:
@@ -61,6 +64,7 @@ private:
   PressureControl* _pressure  = nullptr;
   MIDIHandler*     _midi      = nullptr;
   WiFiManager*     _wifi      = nullptr;
+  DemoPlayer*      _demo      = nullptr;
 
   // ---- JSON builders ------------------------------------------------------
 
@@ -640,6 +644,223 @@ private:
         req->send(200, "application/json", "{\"ok\":true}");
       }));
 
+    // ---- SYSTEM / DIAGNOSTIC ---------------------------------------------
+
+    server.on("/api/system", HTTP_GET, [this](AsyncWebServerRequest* req) {
+      DynamicJsonDocument doc(2048);
+      doc["chip_model"]   = ESP.getChipModel();
+      doc["chip_revision"]= ESP.getChipRevision();
+      doc["chip_cores"]   = ESP.getChipCores();
+      doc["sdk_version"]  = ESP.getSdkVersion();
+      doc["cpu_freq_mhz"] = ESP.getCpuFreqMHz();
+      doc["heap_free"]    = ESP.getFreeHeap();
+      doc["heap_min"]     = ESP.getMinFreeHeap();
+      doc["heap_size"]    = ESP.getHeapSize();
+      doc["psram_free"]   = ESP.getFreePsram();
+      doc["flash_size"]   = ESP.getFlashChipSize();
+      doc["uptime_ms"]    = millis();
+      doc["sys_state"]    = (int)sysState;
+      doc["mac"]          = WiFi.macAddress();
+      doc["fw_version"]   = "v3";
+
+      // Diagnostic par flûte : état endstop + pins assignés
+      JsonArray flutes = doc.createNestedArray("flutes");
+      if (_orchestra) {
+        for (uint8_t i = 0; i < _orchestra->count(); ++i) {
+          Flute* f = _orchestra->get(i);
+          if (!f) continue;
+          const auto& c = f->config();
+          JsonObject o = flutes.createNestedObject();
+          o["id"]            = f->id();
+          o["name"]          = f->name();
+          o["pin_step"]      = c.stepperStepPin;
+          o["pin_dir"]       = c.stepperDirPin;
+          o["pin_en"]        = c.stepperEnablePin;
+          o["pin_endstop"]   = c.endstopPin;
+          o["pin_solenoid"]  = c.solenoidPin;
+          o["pin_servo"]     = c.servoPin;
+          o["ledc_solenoid"] = c.solenoidLedcChannel;
+          o["servo_timer"]   = c.servoTimerIndex;
+          o["endstop_active"] = (c.endstopActiveState == LOW) ? "LOW" : "HIGH";
+          o["endstop_state"] = digitalRead(c.endstopPin);
+          o["endstop_triggered"] =
+            (digitalRead(c.endstopPin) == c.endstopActiveState);
+          o["homed"]         = f->stepper().isHomed();
+          o["position_mm"]   = f->stepper().getCurrentPositionMM();
+        }
+      }
+
+      // Diagnostic pression : raw ADC
+      if (_pressure && _pressure->isEnabled()) {
+        JsonObject p = doc.createNestedObject("pressure");
+        p["state"]   = _pressure->getStateName();
+        p["pump_on"] = _pressure->getPumpOn();
+        p["kpa"]     = _pressure->getPressure();
+        p["has_sensor"] = _pressure->hasSensor();
+        if (_pressure->hasSensor()) {
+          // raw ADC du capteur — relire ici
+          int rawAdc = analogRead(DEFAULT_PRESSURE_CONFIG.pressureSensorPin);
+          p["adc_raw"] = rawAdc;
+          p["adc_pin"] = DEFAULT_PRESSURE_CONFIG.pressureSensorPin;
+        }
+        p["reservoir_ok"] = _pressure->getReservoirOk();
+        p["fault"]   = _pressure->getFaultName();
+      }
+
+      String out; serializeJson(doc, out);
+      req->send(200, "application/json", out);
+    });
+
+    // POST /api/system/reboot
+    server.on("/api/system/reboot", HTTP_POST, [](AsyncWebServerRequest* req) {
+      req->send(200, "application/json", "{\"ok\":true,\"message\":\"reboot in 1s\"}");
+      delay(100);
+      // Programmer un reboot dans une tâche dédiée pour laisser la réponse partir
+      xTaskCreate([](void*) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP.restart();
+      }, "reboot", 2048, nullptr, 1, nullptr);
+    });
+
+    // ---- DEMO PLAYER ------------------------------------------------------
+
+    server.on("/api/demo", HTTP_GET, [this](AsyncWebServerRequest* req) {
+      DynamicJsonDocument doc(512);
+      JsonArray arr = doc.createNestedArray("melodies");
+      for (uint8_t i = 0; i < DemoPlayer::melodyCount(); ++i) {
+        JsonObject o = arr.createNestedObject();
+        o["id"]   = i;
+        o["name"] = DemoPlayer::melodyName(i);
+      }
+      doc["playing"] = _demo ? _demo->isPlaying() : false;
+      if (_demo && _demo->isPlaying()) {
+        doc["current"] = _demo->melodyName();
+        doc["channel"] = _demo->channel();
+      }
+      String out; serializeJson(doc, out);
+      req->send(200, "application/json", out);
+    });
+
+    server.addHandler(new AsyncCallbackJsonWebHandler("/api/demo/play",
+      [](AsyncWebServerRequest* req, JsonVariant& json) {
+        int id   = json["id"]   | -1;
+        bool loop = json["loop"] | false;
+        if (id < 0 || id >= DemoPlayer::melodyCount()) {
+          req->send(400, "application/json", "{\"error\":\"melody id\"}"); return;
+        }
+        g_demoMelodyId = id;
+        g_demoLoop     = loop;
+        req->send(200, "application/json", "{\"ok\":true}");
+      }));
+
+    server.on("/api/demo/stop", HTTP_POST, [](AsyncWebServerRequest* req) {
+      g_demoMelodyId = -2;   // -2 = stop signal (différent de -1 = idle)
+      req->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    // ---- SOLO -------------------------------------------------------------
+    // Met en mute toutes les flûtes sauf {id}. Si id < 0, libère le solo.
+
+    server.addHandler(new AsyncCallbackJsonWebHandler("/api/flute/solo",
+      [this](AsyncWebServerRequest* req, JsonVariant& json) {
+        int soloId = json["id"] | -1;
+        for (uint8_t i = 0; i < _orchestra->count(); ++i) {
+          Flute* f = _orchestra->get(i);
+          if (!f) continue;
+          if (soloId < 0)         f->setMuted(false);
+          else                    f->setMuted((int)f->id() != soloId);
+          saveFluteConfigNVS(f);
+        }
+        req->send(200, "application/json", "{\"ok\":true}");
+      }));
+
+    // ---- BACKUP / RESTORE complet ----------------------------------------
+    // GET  /api/backup → JSON snapshot complet (downloadable)
+    // POST /api/restore → applique un snapshot uploadé
+
+    server.on("/api/backup", HTTP_GET, [this](AsyncWebServerRequest* req) {
+      DynamicJsonDocument doc(16384);
+      doc["version"] = "v3";
+      doc["ts_ms"]   = millis();
+      JsonArray flutes = doc.createNestedArray("flutes");
+      for (uint8_t i = 0; i < _orchestra->count(); ++i) {
+        Flute* f = _orchestra->get(i);
+        if (!f) continue;
+        JsonObject o = flutes.createNestedObject();
+        o["id"]            = f->id();
+        o["midi_channel"]  = f->midiChannel();
+        o["note_min"]      = f->noteMin();
+        o["note_max"]      = f->noteMax();
+        o["enabled"]       = f->isEnabled();
+        o["muted"]         = f->isMuted();
+        o["speed"]         = f->stepper().getSpeedMmS();
+        o["accel"]         = f->stepper().getAccelMmS2();
+        o["pwm_full"]      = f->air().getPwmFull();
+        o["pwm_hold"]      = f->air().getPwmHold();
+        o["wait_delay_ms"] = f->air().getWaitDelay();
+        o["legato_ms"]     = f->air().getLegatoMs();
+        o["velocity_curve"] = f->air().getVelocityCurve();
+        o["use_lut"]       = f->stepper().getUseLUT();
+        JsonArray lut = o.createNestedArray("lut");
+        const float* L = f->stepper().getLUT();
+        for (int j = 0; j < MIDI_LUT_SIZE; ++j) lut.add(L[j]);
+      }
+      if (_pressure && _pressure->isEnabled()) {
+        JsonObject p = doc.createNestedObject("pressure");
+        p["target"]      = _pressure->getTarget();
+        p["min"]         = _pressure->getMin();
+        p["max"]         = _pressure->getMax();
+        p["safety"]      = _pressure->getSafety();
+        p["max_fill_ms"] = _pressure->getMaxFillMs();
+      }
+      String out; serializeJson(doc, out);
+      AsyncWebServerResponse* resp = req->beginResponse(200, "application/json", out);
+      resp->addHeader("Content-Disposition", "attachment; filename=\"slidewhistle_backup.json\"");
+      req->send(resp);
+    });
+
+    server.addHandler(new AsyncCallbackJsonWebHandler("/api/restore",
+      [this](AsyncWebServerRequest* req, JsonVariant& json) {
+        // Réutilise la même logique que /api/presets/load (mais sans NVS de preset)
+        for (JsonObject o : json["flutes"].as<JsonArray>()) {
+          int id = o["id"] | -1;
+          Flute* f = _orchestra->get(id);
+          if (!f) continue;
+          if (o.containsKey("midi_channel")) f->setMidiChannel(o["midi_channel"]);
+          if (o.containsKey("note_min") && o.containsKey("note_max")) {
+            f->setNoteRange(o["note_min"], o["note_max"]);
+          }
+          if (o.containsKey("enabled"))  f->setEnabled(o["enabled"]);
+          if (o.containsKey("muted"))    f->setMuted(o["muted"]);
+          if (o.containsKey("speed"))    f->stepper().setSpeed(o["speed"]);
+          if (o.containsKey("accel"))    f->stepper().setAcceleration(o["accel"]);
+          if (o.containsKey("pwm_full")) f->air().setPwmFull(o["pwm_full"]);
+          if (o.containsKey("pwm_hold")) f->air().setPwmHold(o["pwm_hold"]);
+          if (o.containsKey("wait_delay_ms")) f->air().setWaitDelay(o["wait_delay_ms"]);
+          if (o.containsKey("legato_ms"))     f->air().setLegatoMs(o["legato_ms"]);
+          if (o.containsKey("velocity_curve")) f->air().setVelocityCurve(o["velocity_curve"]);
+          if (o.containsKey("use_lut"))       f->stepper().setUseLUT(o["use_lut"]);
+          if (o.containsKey("lut")) {
+            float lut[MIDI_LUT_SIZE]; int j = 0;
+            for (float v : o["lut"].as<JsonArray>()) {
+              if (j < MIDI_LUT_SIZE) lut[j++] = v;
+            }
+            if (j == MIDI_LUT_SIZE) f->stepper().setLUT(lut);
+          }
+          saveFluteConfigNVS(f);
+        }
+        if (json.as<JsonObject>().containsKey("pressure") && _pressure) {
+          JsonObject p = json["pressure"];
+          if (p.containsKey("target"))      _pressure->setTarget(p["target"]);
+          if (p.containsKey("min"))         _pressure->setMin(p["min"]);
+          if (p.containsKey("max"))         _pressure->setMax(p["max"]);
+          if (p.containsKey("safety"))      _pressure->setSafety(p["safety"]);
+          if (p.containsKey("max_fill_ms")) _pressure->setMaxFillMs(p["max_fill_ms"]);
+          savePressureNVS();
+        }
+        req->send(200, "application/json", "{\"ok\":true}");
+      }));
+
     // ---- PRESSION ---------------------------------------------------------
 
     server.on("/api/pressure", HTTP_GET, [this](AsyncWebServerRequest* req) {
@@ -716,11 +937,13 @@ public:
   WebInterface() : server(WEB_SERVER_PORT), ws(WS_PATH) {}
 
   void begin(Orchestra* orchestra, PressureControl* pressure,
-             MIDIHandler* midi, WiFiManager* wifi) {
+             MIDIHandler* midi, WiFiManager* wifi,
+             DemoPlayer* demo = nullptr) {
     _orchestra = orchestra;
     _pressure  = pressure;
     _midi      = midi;
     _wifi      = wifi;
+    _demo      = demo;
 
     if (!LittleFS.begin(true)) {
       Serial.println(F("[Web] LittleFS mount failed — reformatage..."));

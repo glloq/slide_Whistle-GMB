@@ -12,8 +12,13 @@
 #define WIFI_MANAGER_H
 
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <Preferences.h>
 #include "settings.h"
+
+#ifndef MDNS_HOSTNAME
+#define MDNS_HOSTNAME "slidewhistle"
+#endif
 
 class WiFiManager {
 private:
@@ -38,6 +43,18 @@ public:
     // Tenter connexion STA si credentials disponibles
     if (staSSID.length() > 0) {
       connectSTA();
+    }
+
+    // mDNS — http://slidewhistle.local (et variante par hostname personnalisé)
+    if (MDNS.begin(MDNS_HOSTNAME)) {
+      MDNS.addService("http", "tcp", WEB_SERVER_PORT);
+#if DEBUG_MODE
+      Serial.printf("[mDNS] hôte : http://%s.local\n", MDNS_HOSTNAME);
+#endif
+    } else {
+#if DEBUG_MODE
+      Serial.println(F("[mDNS] échec initialisation"));
+#endif
     }
   }
 
@@ -112,14 +129,16 @@ public:
 
   String getStatusJSON() {
     bool sta = isSTAConnected();
-    char buf[256];
+    char buf[320];
     snprintf(buf, sizeof(buf),
              "{\"ap\":{\"ssid\":\"%s\",\"ip\":\"%s\",\"clients\":%d},"
-             "\"sta\":{\"connected\":%s,\"ssid\":\"%s\",\"ip\":\"%s\"}}",
+             "\"sta\":{\"connected\":%s,\"ssid\":\"%s\",\"ip\":\"%s\"},"
+             "\"mdns\":\"%s.local\"}",
              WIFI_AP_SSID, getAPIP().c_str(), WiFi.softAPgetStationNum(),
              sta ? "true" : "false",
              sta ? staSSID.c_str() : "",
-             sta ? getSTAIP().c_str() : "");
+             sta ? getSTAIP().c_str() : "",
+             MDNS_HOSTNAME);
     return String(buf);
   }
 };

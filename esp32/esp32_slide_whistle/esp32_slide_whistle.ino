@@ -19,6 +19,7 @@
 #include "PressureControl.h"
 #include "MIDIHandler.h"
 #include "WiFiManager.h"
+#include "DemoPlayer.h"
 #include "WebInterface.h"
 
 // ============================================================================
@@ -29,6 +30,7 @@ Orchestra        orchestra;
 PressureControl  pressure;
 MIDIHandler      midi;
 WiFiManager      wifiMgr;
+DemoPlayer       demoPlayer;
 WebInterface     webIface;
 
 // ============================================================================
@@ -42,6 +44,8 @@ volatile int  g_testAirFluteId       = -1;
 volatile bool g_pressureStartRequested = false;
 volatile bool g_pressureStopRequested  = false;
 volatile bool g_pressureResetRequested = false;
+volatile int  g_demoMelodyId           = -1;   // -2=stop signal, -1=idle, >=0=play
+volatile bool g_demoLoop               = false;
 
 // Mutex FreeRTOS — protège orchestre/pression contre accès concurrent inter-core.
 SemaphoreHandle_t motionMutex = nullptr;
@@ -92,7 +96,7 @@ void onMidiCC(uint8_t ch, uint8_t cc, uint8_t value) {
 void taskWeb(void* param) {
   (void)param;
   wifiMgr.begin();
-  webIface.begin(&orchestra, &pressure, &midi, &wifiMgr);
+  webIface.begin(&orchestra, &pressure, &midi, &wifiMgr, &demoPlayer);
 
   for (;;) {
     webIface.update();
@@ -120,6 +124,13 @@ void taskMotion(void* param) {
   midi.setPitchBendCallback(onMidiPitchBend);
   midi.setAftertouchCallback(onMidiAftertouch);
   midi.setCCCallback(onMidiCC);
+
+  // DemoPlayer : ses callbacks passent par MIDIHandler::triggerNoteOn/Off
+  // → ils transitent par toute la chaîne (log MIDI + dispatch Orchestra)
+  demoPlayer.setCallbacks(
+    [](uint8_t ch, uint8_t note, uint8_t vel) { midi.triggerNoteOn(ch, note, vel); },
+    [](uint8_t ch, uint8_t note)              { midi.triggerNoteOff(ch, note); }
+  );
 
 #if LED_ENABLED
   digitalWrite(STATUS_LED_PIN, HIGH);
@@ -227,6 +238,17 @@ void taskMotion(void* param) {
     if (g_pressureStopRequested)  { g_pressureStopRequested  = false; pressure.stop();  }
     if (g_pressureResetRequested) { g_pressureResetRequested = false; pressure.reset(); }
 #endif
+
+    // 7. DemoPlayer
+    if (g_demoMelodyId == -2) {
+      g_demoMelodyId = -1;
+      demoPlayer.stop();
+    } else if (g_demoMelodyId >= 0) {
+      int id = g_demoMelodyId;
+      g_demoMelodyId = -1;
+      demoPlayer.play((uint8_t)id, 0, g_demoLoop);
+    }
+    demoPlayer.update();
 
 #if DEBUG_MODE
     static unsigned long lastDebug = 0;
