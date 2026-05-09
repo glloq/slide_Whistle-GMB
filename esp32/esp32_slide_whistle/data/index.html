@@ -457,6 +457,80 @@
   }
   .docs th { background: var(--bg); color: var(--muted); font-weight: 600; }
 
+  /* Onboarding tour */
+  #tourRoot {
+    position: fixed; inset: 0; pointer-events: none;
+    z-index: 10002; display: none;
+  }
+  #tourRoot.show { display: block; }
+  #tourMask {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,.6); pointer-events: auto;
+    transition: clip-path .25s;
+  }
+  .tour-popover {
+    position: absolute; max-width: 320px;
+    background: var(--card); border: 1px solid var(--green);
+    border-radius: 10px; padding: 14px 16px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    pointer-events: auto;
+  }
+  .tour-popover h4 { margin-bottom: 8px; color: var(--green); font-size: 14px; }
+  .tour-popover p  { color: var(--text); font-size: 13px; line-height: 1.4; margin-bottom: 12px; }
+  .tour-actions { display: flex; justify-content: space-between; align-items: center; }
+  .tour-step { font-size: 11px; color: var(--muted); }
+
+  /* Nav badges */
+  nav button { position: relative; }
+  nav button .nav-badge {
+    position: absolute; top: 2px; right: 4px;
+    background: var(--orange); color: #fff;
+    border-radius: 8px; padding: 1px 5px;
+    font-size: 9px; font-weight: 700;
+    line-height: 1;
+  }
+  nav button .nav-badge.warn  { background: var(--yellow); color: #000; }
+  nav button .nav-badge.info  { background: var(--green);  color: #000; }
+
+  /* MIDI Learn mode */
+  input.learning {
+    border-color: var(--orange) !important;
+    animation: learnPulse 1s infinite;
+  }
+  @keyframes learnPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(233,69,96,.5); }
+    50%      { box-shadow: 0 0 0 4px rgba(233,69,96,0); }
+  }
+
+  /* Inline validation */
+  input.invalid, select.invalid {
+    border-color: var(--orange) !important;
+    background: rgba(233,69,96,.07);
+  }
+  .field-hint { font-size: 11px; color: var(--orange); margin: 2px 0 4px; }
+  .field-hint.ok { color: var(--green); }
+
+  /* Activity feed */
+  .activity-feed { max-height: 220px; overflow-y: auto; }
+  .activity-row {
+    display: flex; gap: 10px; padding: 6px 0;
+    border-bottom: 1px solid var(--border); font-size: 12px;
+  }
+  .activity-row:last-child { border-bottom: none; }
+  .activity-time { color: var(--muted); min-width: 56px; font-family: ui-monospace, monospace; }
+  .activity-icon { width: 18px; text-align: center; }
+
+  /* Print stylesheet */
+  @media print {
+    nav, header, #toasts, #loading-overlay, #cmdRoot, #modalRoot,
+    #bulkModal, #tourRoot, .theme-btn, .btn-row, .sticky-save { display: none !important; }
+    body { background: #fff; color: #000; }
+    .page { display: block !important; }
+    .card { background: #fff; border: 1px solid #888; box-shadow: none; page-break-inside: avoid; }
+    .docs th, .docs td { border-color: #888; }
+    .docs code, .docs kbd { border-color: #888; background: #f4f4f4; }
+  }
+
   /* Slider position visualization */
   .slider-track {
     position: relative;
@@ -603,6 +677,22 @@
   </div>
 </div>
 
+<!-- Onboarding tour -->
+<div id="tourRoot">
+  <div id="tourMask"></div>
+  <div id="tourPopover" class="tour-popover">
+    <h4 id="tourTitle"></h4>
+    <p id="tourMsg"></p>
+    <div class="tour-actions">
+      <span class="tour-step" id="tourStepLabel"></span>
+      <span>
+        <button class="btn" onclick="endTour()">Passer</button>
+        <button class="btn btn-primary" id="tourNext" onclick="tourNext()">Suivant</button>
+      </span>
+    </div>
+  </div>
+</div>
+
 <header>
   <h1>🎼 Slide Whistle Controller</h1>
   <span title="Connexion WebSocket"><span id="connDot"></span><span id="connLabel" class="small">déconnecté</span></span>
@@ -658,6 +748,13 @@
     <div class="card">
       <h3>Santé</h3>
       <div id="dashHealth" class="small">Évaluation...</div>
+    </div>
+
+    <div class="card">
+      <h3>Activité récente <span class="small" style="margin-left:auto">temps-réel</span></h3>
+      <div id="activityFeed" class="activity-feed small">
+        <div class="empty-state" style="padding:14px"><div class="ico">📋</div><div class="msg">Aucune activité encore.</div></div>
+      </div>
     </div>
     <div class="card">
       <h3>Pression</h3>
@@ -788,6 +885,9 @@
   <div class="card">
     <h3>Flûte
       <select id="cfgFluteSel" style="width: auto" onchange="loadFluteCfg()"></select>
+      <span class="small" style="margin-left:auto">
+        <label><input type="checkbox" id="cfgAutoSave"> auto-save</label>
+      </span>
     </h3>
     <label>Nom personnalisé <span class="help" title="Vide = utilise le nom par défaut">?</span></label>
     <input id="cfgCustomName" type="text" maxlength="22" placeholder="laisser vide pour défaut">
@@ -832,17 +932,19 @@
       </div>
     </div>
 
-    <h3 style="margin-top: 16px">Mapping CC <span class="small" style="margin-left:auto">0 = désactivé</span></h3>
+    <h3 style="margin-top: 16px">Mapping CC
+      <span class="small" style="margin-left:auto">0 = désactivé · 🎯 MIDI Learn : cliquez puis envoyez un CC</span>
+    </h3>
     <div class="row3">
-      <div><label>CC Breath <span class="help" title="Contrôle le débit d'air (servo). Standard : 2.">?</span></label>
+      <div><label>CC Breath <span class="help" title="Contrôle le débit d'air (servo). Standard : 2.">?</span> <button class="btn" style="padding:1px 6px;font-size:11px" onclick="midiLearn('cfgCcBreath')">🎯</button></label>
         <input id="cfgCcBreath" type="number" min="0" max="127"></div>
-      <div><label>CC Expression <span class="help" title="Standard : 11. Aussi mappé sur le débit air.">?</span></label>
+      <div><label>CC Expression <span class="help" title="Standard : 11. Aussi mappé sur le débit air.">?</span> <button class="btn" style="padding:1px 6px;font-size:11px" onclick="midiLearn('cfgCcExpr')">🎯</button></label>
         <input id="cfgCcExpr" type="number" min="0" max="127"></div>
-      <div><label>CC Volume <span class="help" title="Standard : 7. Mappé sur débit air.">?</span></label>
+      <div><label>CC Volume <span class="help" title="Standard : 7. Mappé sur débit air.">?</span> <button class="btn" style="padding:1px 6px;font-size:11px" onclick="midiLearn('cfgCcVolume')">🎯</button></label>
         <input id="cfgCcVolume" type="number" min="0" max="127"></div>
-      <div><label>CC Vibrato <span class="help" title="Mod wheel = 1. Déclenche vibrato sur le slide.">?</span></label>
+      <div><label>CC Vibrato <span class="help" title="Mod wheel = 1. Déclenche vibrato sur le slide.">?</span> <button class="btn" style="padding:1px 6px;font-size:11px" onclick="midiLearn('cfgCcVibrato')">🎯</button></label>
         <input id="cfgCcVibrato" type="number" min="0" max="127"></div>
-      <div><label>CC Sustain <span class="help" title="Pédale = 64. Réservé pour future implémentation.">?</span></label>
+      <div><label>CC Sustain <span class="help" title="Pédale = 64. Réservé pour future implémentation.">?</span> <button class="btn" style="padding:1px 6px;font-size:11px" onclick="midiLearn('cfgCcSustain')">🎯</button></label>
         <input id="cfgCcSustain" type="number" min="0" max="127"></div>
     </div>
 
@@ -981,7 +1083,12 @@
 <!-- ============================================================ -->
 <div id="page-help" class="page">
   <div class="card docs">
-    <h3>Guide rapide</h3>
+    <h3>Guide rapide
+      <span style="margin-left:auto; display:flex; gap:6px">
+        <button class="btn btn-primary" onclick="startTour()">🎓 Démarrer la visite guidée</button>
+        <button class="btn" onclick="window.print()">🖨 Imprimer</button>
+      </span>
+    </h3>
 
     <h2>🚀 Premier démarrage</h2>
     <ul>
@@ -1107,6 +1214,248 @@ window.addEventListener('load', () => {
   const p = location.hash.replace(/^#/, '');
   if (p && document.getElementById('page-' + p)) navigateTo(p);
 });
+
+// ============================================================================
+// Onboarding tour (first-run, désactivable)
+// ============================================================================
+const TOUR_STEPS = [
+  {target: 'header h1', title: '🎼 Bienvenue', msg: 'Cette interface pilote ton (ou tes) slide whistle MIDI. Cliquons ensemble sur les fonctions clés.'},
+  {target: '#sysBadge', title: 'État système', msg: 'Ce badge indique INIT / HOMING / READY / ERROR. Doit afficher READY pour jouer.'},
+  {target: 'nav button[data-page="flutes"]', title: 'Page Flûtes', msg: 'Liste tes flûtes : status, mute, solo, sweep mécanique, panic.'},
+  {target: 'nav button[data-page="play"]', title: 'Jouer', msg: 'Piano cliquable + clavier ordi (sur cette page) + démos pré-enregistrées.'},
+  {target: 'nav button[data-page="config"]', title: 'Réglages', msg: 'Calibrer la LUT, mapper les CC, modifier nom/transpose/vélocité par flûte.'},
+  {target: '.theme-btn', title: 'Outils header', msg: '🔍 recherche · 🌓 thème · 🔊 preview audio · ⌨ raccourcis · 📋 vue compacte. Tout est rapidement accessible.'},
+  {target: '#dashHealth', title: 'Santé', msg: 'Toute anomalie (homing, défauts pression, heap faible) apparaît ici en temps réel.'},
+];
+let _tourStep = 0;
+function startTour() {
+  _tourStep = 0;
+  document.getElementById('tourRoot').classList.add('show');
+  showTourStep();
+}
+function endTour() {
+  document.getElementById('tourRoot').classList.remove('show');
+  localStorage.setItem('tour_done', '1');
+}
+function showTourStep() {
+  const step = TOUR_STEPS[_tourStep];
+  if (!step) { endTour(); return; }
+  const target = document.querySelector(step.target);
+  if (!target) { tourNext(); return; }
+
+  document.getElementById('tourTitle').textContent = step.title;
+  document.getElementById('tourMsg').textContent   = step.msg;
+  document.getElementById('tourStepLabel').textContent = `${_tourStep + 1}/${TOUR_STEPS.length}`;
+  const btn = document.getElementById('tourNext');
+  btn.textContent = _tourStep === TOUR_STEPS.length - 1 ? 'Terminer' : 'Suivant →';
+
+  // Position popover près de la cible
+  const r = target.getBoundingClientRect();
+  const pop = document.getElementById('tourPopover');
+  const top = Math.min(window.innerHeight - 200, r.bottom + 8);
+  const left = Math.min(window.innerWidth - 340, Math.max(8, r.left));
+  pop.style.top  = top + 'px';
+  pop.style.left = left + 'px';
+
+  // Découpe le mask pour révéler la cible
+  const mask = document.getElementById('tourMask');
+  const pad = 6;
+  const x = r.left - pad, y = r.top - pad, w = r.width + 2*pad, h = r.height + 2*pad;
+  mask.style.clipPath =
+    `polygon(0 0, 0 100%, ${x}px 100%, ${x}px ${y}px, ${x+w}px ${y}px, ${x+w}px ${y+h}px, ${x}px ${y+h}px, ${x}px 100%, 100% 100%, 100% 0)`;
+}
+function tourNext() {
+  _tourStep++;
+  if (_tourStep >= TOUR_STEPS.length) { endTour(); toast('Bon voyage ! 🎵'); return; }
+  showTourStep();
+}
+window.addEventListener('resize', () => {
+  if (document.getElementById('tourRoot').classList.contains('show')) showTourStep();
+});
+
+// ============================================================================
+// MIDI Learn — clique un champ CC, joue un CC sur ton contrôleur, le numéro
+// est rempli automatiquement
+// ============================================================================
+let _learnTarget = null;
+function midiLearn(inputId) {
+  const inp = document.getElementById(inputId);
+  if (!inp) return;
+  if (_learnTarget) _learnTarget.classList.remove('learning');
+  _learnTarget = inp;
+  inp.classList.add('learning');
+  toast('🎯 Envoie un CC sur ton contrôleur (Esc pour annuler)', 'warn', 8000);
+}
+// Pris en compte dans onWsMessage : si _learnTarget actif et message CC reçu,
+// on remplit le champ. On utilise l'event log MIDI.
+let _lastSeenLogIndex = 0;
+async function pollForLearn() {
+  if (!_learnTarget) return;
+  const log = await getJson('/api/midi/log');
+  if (!log || !log.length) return;
+  // Cherche un CC plus récent que _lastSeenLogIndex (en pratique : t_rel_ms le plus petit > 0 = le plus récent)
+  const recent = log.filter(e => e.type === 'CC').sort((a, b) => a.t_rel_ms - b.t_rel_ms);
+  if (recent.length && recent[0].t_rel_ms < 4000) {
+    const cc = recent[0].data1;
+    _learnTarget.value = cc;
+    _learnTarget.classList.remove('learning');
+    _learnTarget.dispatchEvent(new Event('input', {bubbles:true}));
+    toast(`CC${cc} appris pour ${_learnTarget.id.replace('cfgCc','')}`, 'success');
+    _learnTarget = null;
+  }
+}
+setInterval(pollForLearn, 600);
+
+// Échap = annuler le learn
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && _learnTarget) {
+    _learnTarget.classList.remove('learning');
+    _learnTarget = null;
+    toast('MIDI Learn annulé');
+  }
+});
+
+// ============================================================================
+// Activity feed (timeline sur dashboard)
+// ============================================================================
+const _activityRing = [];
+function pushActivity(icon, text, level='') {
+  _activityRing.unshift({t: Date.now(), icon, text, level});
+  if (_activityRing.length > 30) _activityRing.pop();
+}
+function renderActivity() {
+  const box = document.getElementById('activityFeed');
+  if (!box) return;
+  if (!_activityRing.length) return;
+  const fmt = ts => {
+    const d = (Date.now() - ts);
+    if (d < 1000) return 'à l\'instant';
+    if (d < 60000) return Math.floor(d/1000) + 's';
+    if (d < 3600000) return Math.floor(d/60000) + 'm';
+    return Math.floor(d/3600000) + 'h';
+  };
+  box.innerHTML = _activityRing.map(a =>
+    `<div class="activity-row">
+       <span class="activity-time">${fmt(a.t)}</span>
+       <span class="activity-icon">${a.icon}</span>
+       <span class="${a.level==='error'?'health-error':a.level==='warn'?'health-warn':''}">${a.text}</span>
+     </div>`
+  ).join('');
+}
+setInterval(renderActivity, 1000);
+
+// Détection events depuis state diff (note edges, sys state changes, fault transitions)
+let _prevSysState = null;
+let _prevFault    = null;
+function detectActivity() {
+  if (state.sys_state !== _prevSysState && _prevSysState !== null) {
+    pushActivity('⚙', `État système : ${state.sys_state}`,
+                 state.sys_state === 'ERROR' ? 'error' : '');
+  }
+  _prevSysState = state.sys_state;
+  if (state.pressure?.fault !== _prevFault && _prevFault !== null) {
+    if (state.pressure.fault !== 'none') {
+      pushActivity('⚠', `Défaut pression : ${state.pressure.fault}`, 'error');
+    } else {
+      pushActivity('✓', 'Défaut pression résolu', '');
+    }
+  }
+  if (state.pressure) _prevFault = state.pressure.fault;
+}
+
+// Hook : appelé dans render() → trackNoteEdges() suit déjà les note ON
+const _origTrackNoteEdges = trackNoteEdges;
+trackNoteEdges = function() {
+  (state.flutes||[]).forEach(f => {
+    const prev = _lastNoteState[f.id] || {note: 0, active: false};
+    if (f.note_active && (!prev.active || prev.note !== f.last_note)) {
+      pushActivity('♪', `${f.name} → ${noteName(f.last_note)} (${noteFreq(f.last_note).toFixed(0)}Hz)`);
+    }
+  });
+  _origTrackNoteEdges();
+  detectActivity();
+};
+
+// ============================================================================
+// Nav badges
+// ============================================================================
+function updateNavBadges() {
+  // Compte les flûtes en fault (non homé tout en étant enabled)
+  const faultCount = (state.flutes||[]).filter(f => f.enabled && !f.homed).length;
+  setBadge('flutes', faultCount, faultCount ? 'warn' : '');
+  // Pression en SAFETY → badge sur Pression
+  const pErr = state.pressure && state.pressure.fault && state.pressure.fault !== 'none';
+  setBadge('pressure', pErr ? '!' : '', pErr ? '' : '');
+  // Sys ERROR
+  setBadge('diag', state.sys_state === 'ERROR' ? '!' : '', '');
+}
+function setBadge(page, text, type='') {
+  const btn = document.querySelector(`nav button[data-page="${page}"]`);
+  if (!btn) return;
+  let b = btn.querySelector('.nav-badge');
+  if (!text) { if (b) b.remove(); return; }
+  if (!b) { b = document.createElement('span'); b.className = 'nav-badge'; btn.appendChild(b); }
+  b.textContent = text;
+  b.className = 'nav-badge ' + (type || 'info');
+}
+setInterval(updateNavBadges, 1000);
+
+// ============================================================================
+// Inline form validation (limites client-side avant POST)
+// ============================================================================
+const VALIDATION_RULES = {
+  cfgChan:     {min:0,  max:16,  msg:'Canal MIDI 0-16'},
+  cfgNmin:     {min:0,  max:127, msg:'Note 0-127'},
+  cfgNmax:     {min:0,  max:127, msg:'Note 0-127'},
+  cfgSpeed:    {min:5,  max:500, msg:'Vitesse 5-500 mm/s'},
+  cfgAccel:    {min:50, max:5000,msg:'Accel 50-5000 mm/s²'},
+  cfgPwmFull:  {min:0,  max:255, msg:'PWM 0-255'},
+  cfgPwmHold:  {min:0,  max:255, msg:'PWM 0-255'},
+  cfgWait:     {min:0,  max:2000,msg:'Wait 0-2000 ms'},
+  cfgLegato:   {min:0,  max:2000,msg:'Legato 0-2000 ms'},
+  cfgCcBreath: {min:0,  max:127, msg:'CC 0-127'},
+  cfgCcExpr:   {min:0,  max:127, msg:'CC 0-127'},
+  cfgCcVolume: {min:0,  max:127, msg:'CC 0-127'},
+  cfgCcVibrato:{min:0,  max:127, msg:'CC 0-127'},
+  cfgCcSustain:{min:0,  max:127, msg:'CC 0-127'},
+  cfgTranspose:{min:-36,max:36,  msg:'Transpose ±36'},
+};
+function validateField(id) {
+  const inp = document.getElementById(id);
+  const rule = VALIDATION_RULES[id];
+  if (!inp || !rule) return true;
+  const v = +inp.value;
+  const ok = !isNaN(v) && v >= rule.min && v <= rule.max;
+  inp.classList.toggle('invalid', !ok);
+  // Hint inline
+  let hint = inp.parentNode.querySelector('.field-hint');
+  if (!ok) {
+    if (!hint) {
+      hint = document.createElement('div'); hint.className = 'field-hint';
+      inp.parentNode.insertBefore(hint, inp.nextSibling);
+    }
+    hint.textContent = '⚠ ' + rule.msg;
+  } else if (hint) hint.remove();
+  return ok;
+}
+function validateAllConfigFields() {
+  let allOk = true;
+  Object.keys(VALIDATION_RULES).forEach(id => { if (!validateField(id)) allOk = false; });
+  return allOk;
+}
+
+// ============================================================================
+// Auto-save (debounced) — toggle avec checkbox
+// ============================================================================
+let _autoSaveTimer = null;
+function maybeAutoSave() {
+  const cb = document.getElementById('cfgAutoSave');
+  if (!cb || !cb.checked) return;
+  clearTimeout(_autoSaveTimer);
+  _autoSaveTimer = setTimeout(() => {
+    if (validateAllConfigFields()) saveFluteCfg();
+  }, 800);
+}
 
 // ============================================================================
 // Compact mode
@@ -1946,11 +2295,22 @@ function setupDirtyTracking() {
     'cfgPwmFull','cfgPwmHold','cfgWait','cfgLegato','cfgVelCurve',
     'cfgCcBreath','cfgCcExpr','cfgCcVolume','cfgCcVibrato','cfgCcSustain',
     'cfgTranspose','cfgEnabled','cfgMuted','cfgUseLut'];
+  const onChange = (id) => {
+    markCfgDirty();
+    validateField(id);
+    maybeAutoSave();
+  };
   ids.forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.addEventListener('input', markCfgDirty);
-    if (el) el.addEventListener('change', markCfgDirty);
+    if (el) el.addEventListener('input',  () => onChange(id));
+    if (el) el.addEventListener('change', () => onChange(id));
   });
+  // Persistance auto-save toggle
+  const cb = document.getElementById('cfgAutoSave');
+  if (cb) {
+    cb.checked = localStorage.getItem('autosave') === '1';
+    cb.addEventListener('change', () => localStorage.setItem('autosave', cb.checked ? '1' : '0'));
+  }
 }
 
 async function saveFluteCfg() {
@@ -2645,6 +3005,10 @@ connectWs();
 getJson('/api/status').then(s => {
   state = s; render(); refreshHealth();
   setTimeout(hideSplash, 400);
+  // Première visite ? Lancer le tour après le splash
+  if (!localStorage.getItem('tour_done')) {
+    setTimeout(startTour, 900);
+  }
 });
 // Hide splash après 3 s max si jamais le fetch traîne
 setTimeout(hideSplash, 3000);
