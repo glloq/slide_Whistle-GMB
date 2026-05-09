@@ -384,6 +384,79 @@
   .ch-num { font-weight: 700; font-size: 10px; }
   .ch-cnt { font-size: 8px; }
 
+  /* Filter chips */
+  .chips { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .chip {
+    padding: 4px 12px; border-radius: 14px;
+    background: var(--bg); border: 1px solid var(--border);
+    color: var(--muted); cursor: pointer; font-size: 12px;
+    transition: all .15s;
+  }
+  .chip:hover { color: var(--text); }
+  .chip.active { background: var(--accent); color: var(--text); border-color: var(--green); }
+
+  /* Compact mode */
+  body.compact .flute-card .whistle-svg,
+  body.compact .flute-card .vu,
+  body.compact .flute-card .mini-piano,
+  body.compact .flute-card .scope-canvas,
+  body.compact .flute-card .heatmap { display: none; }
+  body.compact .card { padding: 10px 12px; }
+  body.compact .stat { margin-bottom: 4px; }
+  body.compact .stat-value { font-size: 14px; }
+
+  /* Empty state */
+  .empty-state {
+    text-align: center; padding: 30px 20px; color: var(--muted);
+  }
+  .empty-state .ico { font-size: 36px; margin-bottom: 8px; opacity: .6; }
+  .empty-state .msg { font-size: 14px; margin-bottom: 14px; }
+
+  /* Command palette (Ctrl+K) */
+  #cmdRoot {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    display: none; align-items: flex-start; justify-content: center;
+    padding-top: 80px; z-index: 10001; backdrop-filter: blur(2px);
+  }
+  #cmdRoot.show { display: flex; }
+  .cmd-box {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; width: 100%; max-width: 520px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.5);
+    overflow: hidden; animation: modalIn .15s ease-out;
+  }
+  .cmd-box input {
+    width: 100%; padding: 14px 16px; font-size: 16px;
+    background: transparent; border: none; color: var(--text);
+    border-bottom: 1px solid var(--border); outline: none;
+  }
+  .cmd-results { max-height: 360px; overflow-y: auto; }
+  .cmd-item {
+    padding: 9px 16px; cursor: pointer; font-size: 13px;
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--border);
+  }
+  .cmd-item:hover, .cmd-item.sel { background: var(--accent); }
+  .cmd-item .desc { color: var(--muted); font-size: 11px; }
+  .cmd-item .ctx  { color: var(--green); font-size: 10px; padding: 2px 8px;
+    border: 1px solid var(--border); border-radius: 10px; }
+
+  /* Help/docs page */
+  .docs h2 { font-size: 16px; margin: 16px 0 8px; color: var(--text); }
+  .docs h3 { color: var(--muted); margin-top: 12px; }
+  .docs p, .docs li { font-size: 13px; line-height: 1.5; color: var(--text); }
+  .docs ul { padding-left: 22px; margin: 6px 0; }
+  .docs code, .docs kbd {
+    background: var(--bg); padding: 1px 6px; border-radius: 3px;
+    font-family: ui-monospace, monospace; font-size: 12px;
+    border: 1px solid var(--border);
+  }
+  .docs table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+  .docs th, .docs td {
+    padding: 6px 10px; border: 1px solid var(--border); text-align: left;
+  }
+  .docs th { background: var(--bg); color: var(--muted); font-weight: 600; }
+
   /* Slider position visualization */
   .slider-track {
     position: relative;
@@ -493,6 +566,43 @@
   </div>
 </div>
 
+<!-- Command palette (Ctrl+K) -->
+<div id="cmdRoot">
+  <div class="cmd-box">
+    <input id="cmdInput" type="text" placeholder="Rechercher un réglage, une page, une action..." autocomplete="off">
+    <div id="cmdResults" class="cmd-results"></div>
+  </div>
+</div>
+
+<!-- Bulk edit modal -->
+<div id="bulkModal" class="modal-backdrop">
+  <div class="modal" style="min-width: 360px">
+    <h4>Édition groupée</h4>
+    <p>Applique le même réglage à toutes les flûtes activées.</p>
+    <label>Réglage</label>
+    <select id="bulkField">
+      <option value="speed_mm_s">Vitesse (mm/s)</option>
+      <option value="accel_mm_s2">Accélération (mm/s²)</option>
+      <option value="pwm_full">PWM full</option>
+      <option value="pwm_hold">PWM hold</option>
+      <option value="wait_delay_ms">Wait delay (ms)</option>
+      <option value="legato_ms">Legato (ms)</option>
+      <option value="velocity_curve">Courbe vélocité (0/1/2)</option>
+      <option value="cc_breath">CC Breath</option>
+      <option value="cc_expression">CC Expression</option>
+      <option value="cc_volume">CC Volume</option>
+      <option value="cc_vibrato">CC Vibrato</option>
+      <option value="transpose">Transpose (demi-tons)</option>
+    </select>
+    <label>Valeur</label>
+    <input id="bulkValue" type="number">
+    <div class="modal-actions" style="margin-top:12px">
+      <button class="btn" onclick="document.getElementById('bulkModal').classList.remove('show')">Annuler</button>
+      <button class="btn btn-primary" onclick="applyBulk()">Appliquer</button>
+    </div>
+  </div>
+</div>
+
 <header>
   <h1>🎼 Slide Whistle Controller</h1>
   <span title="Connexion WebSocket"><span id="connDot"></span><span id="connLabel" class="small">déconnecté</span></span>
@@ -501,8 +611,10 @@
   <span id="pressBadge" class="pill" style="display:none">PRESSION</span>
   <span id="demoBadge" class="pill" style="display:none">▶ démo</span>
   <span style="margin-left:auto" class="small">v3 · multi-flute</span>
+  <button class="theme-btn" id="compactToggle" onclick="toggleCompact()" title="Vue compacte">📋</button>
   <button class="theme-btn" id="synthToggleBtn" onclick="toggleSynth()" title="Active/désactive la preview audio dans le navigateur (S)">🔊</button>
   <button class="theme-btn" onclick="toggleTheme()" title="Basculer thème (T)">🌓</button>
+  <button class="theme-btn" onclick="openCmdPalette()" title="Recherche (Ctrl+K)">🔍</button>
   <button class="theme-btn" onclick="showShortcuts()" title="Raccourcis clavier (?)">⌨</button>
 </header>
 
@@ -516,6 +628,7 @@
   <button data-page="presets">Presets</button>
   <button data-page="diag">Diag</button>
   <button data-page="wifi">WiFi</button>
+  <button data-page="help">Aide</button>
 </nav>
 
 <!-- ============================================================ -->
@@ -566,6 +679,16 @@
 <!-- FLÛTES (gestion détaillée par instrument) -->
 <!-- ============================================================ -->
 <div id="page-flutes" class="page">
+  <div class="chips" id="fluteFilters">
+    <button class="chip active" data-filter="all">Toutes</button>
+    <button class="chip" data-filter="active">Actives</button>
+    <button class="chip" data-filter="muted">Mute</button>
+    <button class="chip" data-filter="disabled">Désactivées</button>
+    <button class="chip" data-filter="not_homed">Non homées</button>
+    <button class="chip" data-filter="playing">En jeu</button>
+    <span style="flex:1"></span>
+    <button class="chip" onclick="document.getElementById('bulkModal').classList.add('show')" style="background:var(--accent)">⚙ Édition groupée</button>
+  </div>
   <div id="flutesList" class="grid"></div>
 </div>
 
@@ -854,6 +977,86 @@
 </div>
 
 <!-- ============================================================ -->
+<!-- HELP / DOCS -->
+<!-- ============================================================ -->
+<div id="page-help" class="page">
+  <div class="card docs">
+    <h3>Guide rapide</h3>
+
+    <h2>🚀 Premier démarrage</h2>
+    <ul>
+      <li>Connectez-vous au réseau WiFi <code>SlideWhistle</code> (mdp <code>midi1234</code>) ou via <code>http://slidewhistle.local</code> si STA configuré.</li>
+      <li>Sur le <strong>Dashboard</strong>, vérifiez que toutes les flûtes affichent l'état <span class="led green"></span> homed.</li>
+      <li>Sur <strong>Jouer</strong>, activez 🔊 (preview audio) puis cliquez sur le piano pour tester.</li>
+      <li>Si pas de matériel branché, lancez une <strong>Démo</strong> depuis la page Jouer.</li>
+    </ul>
+
+    <h2>🎛 Mapping CC standard</h2>
+    <p>Chaque flûte route les Control Changes selon ses propres mappings (modifiables dans Réglages) :</p>
+    <table>
+      <tr><th>CC #</th><th>Nom standard</th><th>Effet par défaut</th></tr>
+      <tr><td>1</td><td>Modulation Wheel</td><td>Vibrato (intensité ∝ valeur)</td></tr>
+      <tr><td>2</td><td>Breath</td><td>Débit air (servo)</td></tr>
+      <tr><td>7</td><td>Volume</td><td>Débit air</td></tr>
+      <tr><td>11</td><td>Expression</td><td>Débit air</td></tr>
+      <tr><td>64</td><td>Sustain Pedal</td><td>Réservé (futur maintien)</td></tr>
+      <tr><td>120</td><td>All Sound Off</td><td>Coupure d'urgence (panic)</td></tr>
+      <tr><td>123</td><td>All Notes Off</td><td>Coupure d'urgence (panic)</td></tr>
+    </table>
+
+    <h2>⌨ Raccourcis clavier</h2>
+    <table>
+      <tr><th>Touche</th><th>Action</th></tr>
+      <tr><td><kbd>H</kbd></td><td>Homing global</td></tr>
+      <tr><td><kbd>P</kbd></td><td>Panic (coupure air toutes flûtes)</td></tr>
+      <tr><td><kbd>M</kbd> / <kbd>U</kbd></td><td>Mute / Unmute toutes</td></tr>
+      <tr><td><kbd>T</kbd></td><td>Bascule thème clair/sombre</td></tr>
+      <tr><td><kbd>S</kbd></td><td>Bascule preview audio (synth)</td></tr>
+      <tr><td><kbd>Ctrl+K</kbd></td><td>Palette de recherche</td></tr>
+      <tr><td><kbd>Ctrl+S</kbd></td><td>Sauvegarder la config (page Réglages)</td></tr>
+      <tr><td><kbd>?</kbd></td><td>Affiche les raccourcis</td></tr>
+      <tr><td colspan="2"><em>Page Jouer :</em> A,W,S,E,D,F,T,G,Y,H,U,J,K,O,L,P → C4..C5 chromatique</td></tr>
+    </table>
+
+    <h2>🔧 Modules adaptatifs</h2>
+    <p>Les options visibles dépendent de la configuration matérielle compilée (<code>settings.h</code>) :</p>
+    <ul>
+      <li><strong>Multi-flûtes</strong> : activer N flûtes via <code>DEFAULT_FLUTE_COUNT</code> (1 à 4 par défaut). Chaque flûte a ses pins, son canal MIDI et sa plage propres.</li>
+      <li><strong>Module pression</strong> : <code>ENABLE_PRESSURE_CONTROL</code>. Si désactivé, la page Pression est masquée.</li>
+      <li><strong>Sources MIDI</strong> : <code>MIDI_SOURCE_SERIAL</code> (DIN-5/UART2) et/ou <code>MIDI_SOURCE_BLE</code> (BLE MIDI).</li>
+    </ul>
+
+    <h2>🔍 Dépannage</h2>
+    <ul>
+      <li><strong>Homing échoue</strong> : vérifiez que l'endstop est bien câblé avec pull-up externe (GPIO34-39 = input only). Voir <strong>Diag → Diagnostic flûtes</strong>.</li>
+      <li><strong>Pas de son</strong> : vérifier dans Diag → Pression que la pompe et le réservoir sont OK. Le module pression doit être en état <code>MAINTAIN</code>.</li>
+      <li><strong>Notes décalées</strong> : activer <em>Utiliser la LUT</em> dans Réglages et calibrer chaque note via l'éditeur graphique (drag des points).</li>
+      <li><strong>WS déconnecte</strong> : trop de clients connectés, ou alimentation faible. Surveiller <code>heap_min</code> dans Diag.</li>
+      <li><strong>Plusieurs flûtes silencieuses</strong> : vérifier que leurs canaux MIDI ne se chevauchent pas (sauf si voulu = unisson).</li>
+    </ul>
+
+    <h2>💾 Persistance</h2>
+    <ul>
+      <li>Toute config flûte sauvée dans NVS (namespaces <code>flute0</code>, <code>flute1</code>...).</li>
+      <li>Config pression : namespace <code>pressure</code>.</li>
+      <li><strong>Presets nommés</strong> : namespace <code>presets</code>.</li>
+      <li>Pour <strong>backup hors ESP32</strong> : Diag → Télécharger sauvegarde JSON.</li>
+    </ul>
+
+    <h2>📡 API REST principale</h2>
+    <p>Tous les endpoints retournent JSON. Voir <code>esp32/README.md</code> pour la liste complète.</p>
+    <ul>
+      <li><code>GET /api/status</code> — état global temps-réel</li>
+      <li><code>POST /api/flute</code> — config + plage + CC mapping</li>
+      <li><code>POST /api/flute/note</code> — déclenche une note</li>
+      <li><code>POST /api/homing</code>, <code>/api/panic</code> — contrôles globaux</li>
+      <li><code>GET /api/system</code> — diagnostic complet</li>
+      <li><code>GET /api/midi/log[.csv]</code> — historique MIDI</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ -->
 <!-- WIFI -->
 <!-- ============================================================ -->
 <div id="page-wifi" class="page">
@@ -887,6 +1090,10 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   document.getElementById('page-' + b.dataset.page).classList.add('active');
+  // Sync URL hash (sans déclencher hashchange en boucle)
+  if (location.hash !== '#' + b.dataset.page) {
+    history.replaceState(null, '', '#' + b.dataset.page);
+  }
   if (b.dataset.page === 'config')   loadFluteCfg();
   if (b.dataset.page === 'pressure') loadPressureCfg();
   if (b.dataset.page === 'wifi')     loadWifi();
@@ -894,6 +1101,181 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   if (b.dataset.page === 'presets')  loadPresets();
   if (b.dataset.page === 'diag')     loadDiag();
   if (b.dataset.page === 'play')     loadDemoMelodies();
+});
+// Au chargement, restaurer la page depuis le hash
+window.addEventListener('load', () => {
+  const p = location.hash.replace(/^#/, '');
+  if (p && document.getElementById('page-' + p)) navigateTo(p);
+});
+
+// ============================================================================
+// Compact mode
+// ============================================================================
+function toggleCompact() {
+  document.body.classList.toggle('compact');
+  const on = document.body.classList.contains('compact');
+  localStorage.setItem('compact', on ? '1' : '0');
+  toast(on ? 'Vue compacte' : 'Vue détaillée');
+}
+if (localStorage.getItem('compact') === '1') document.body.classList.add('compact');
+
+// ============================================================================
+// URL hash routing
+// ============================================================================
+function navigateTo(page) {
+  const btn = document.querySelector(`nav button[data-page="${page}"]`);
+  if (btn) btn.click();
+}
+window.addEventListener('hashchange', () => {
+  const p = location.hash.replace(/^#/, '');
+  if (p && document.getElementById('page-' + p)) navigateTo(p);
+});
+
+// ============================================================================
+// Filter chips (Flutes page)
+// ============================================================================
+let _fluteFilter = 'all';
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('#fluteFilters .chip[data-filter]').forEach(c => {
+    c.addEventListener('click', () => {
+      document.querySelectorAll('#fluteFilters .chip[data-filter]').forEach(x => x.classList.remove('active'));
+      c.classList.add('active');
+      _fluteFilter = c.dataset.filter;
+      render();
+    });
+  });
+});
+function fluteMatchesFilter(f) {
+  switch (_fluteFilter) {
+    case 'active':    return f.enabled && !f.muted;
+    case 'muted':     return f.muted;
+    case 'disabled':  return !f.enabled;
+    case 'not_homed': return f.enabled && !f.homed;
+    case 'playing':   return f.note_active || f.air_open;
+    default:          return true;
+  }
+}
+
+// ============================================================================
+// Bulk edit
+// ============================================================================
+async function applyBulk() {
+  const field = document.getElementById('bulkField').value;
+  const value = +document.getElementById('bulkValue').value;
+  if (!await confirmDialog(`Appliquer ${field}=${value} à toutes les flûtes activées ?`,
+                            'Édition groupée', 'Appliquer')) return;
+  showLoading();
+  try {
+    for (const f of (state.flutes || [])) {
+      if (!f.enabled) continue;
+      const body = {id: f.id};
+      body[field] = value;
+      await postJson('/api/flute', body);
+    }
+    toast(`${field} mis à ${value} pour toutes les flûtes`, 'success');
+    document.getElementById('bulkModal').classList.remove('show');
+  } finally { hideLoading(); }
+}
+
+// ============================================================================
+// Notes per flute (localStorage)
+// ============================================================================
+function getFluteNote(id) { return localStorage.getItem(`flute_notes_${id}`) || ''; }
+function setFluteNote(id, text) {
+  if (text) localStorage.setItem(`flute_notes_${id}`, text);
+  else      localStorage.removeItem(`flute_notes_${id}`);
+}
+
+// ============================================================================
+// Command palette (Ctrl+K)
+// ============================================================================
+const CMD_ITEMS = [
+  // Navigation
+  {label: 'Aller au Dashboard',     desc: 'Vue d\'ensemble',                      ctx: 'page',   action: () => navigateTo('dashboard')},
+  {label: 'Aller aux Flûtes',       desc: 'Gestion par instrument',               ctx: 'page',   action: () => navigateTo('flutes')},
+  {label: 'Aller à Jouer',          desc: 'Piano + démo',                         ctx: 'page',   action: () => navigateTo('play')},
+  {label: 'Aller à Pression',       desc: 'Pompe / réservoir',                    ctx: 'page',   action: () => navigateTo('pressure')},
+  {label: 'Aller à MIDI log',       desc: 'Activité MIDI temps-réel',             ctx: 'page',   action: () => navigateTo('midi')},
+  {label: 'Aller aux Réglages',     desc: 'Config détaillée par flûte',           ctx: 'page',   action: () => navigateTo('config')},
+  {label: 'Aller aux Presets',      desc: 'Snapshots de config',                  ctx: 'page',   action: () => navigateTo('presets')},
+  {label: 'Aller à Diag',           desc: 'Système, OTA, backup',                 ctx: 'page',   action: () => navigateTo('diag')},
+  {label: 'Aller à WiFi',           desc: 'Réseaux',                              ctx: 'page',   action: () => navigateTo('wifi')},
+  {label: 'Aller à Aide',           desc: 'Documentation',                        ctx: 'page',   action: () => navigateTo('help')},
+  // Actions globales
+  {label: 'Homing global',          desc: 'Re-calibre toutes les flûtes',         ctx: 'action', action: () => { postNoBody('/api/homing'); toast('Homing'); }},
+  {label: 'Panic',                  desc: 'Coupure d\'urgence',                   ctx: 'action', action: () => { postNoBody('/api/panic');  toast('Panic !', 'warn'); }},
+  {label: 'Mute toutes',            desc: 'Silence sur toutes les flûtes',        ctx: 'action', action: () => { postJson('/api/flutes/all', {action:'muteAll'}); }},
+  {label: 'Unmute toutes',          desc: '',                                     ctx: 'action', action: () => { postJson('/api/flutes/all', {action:'unmuteAll'}); }},
+  {label: 'Activer toutes',         desc: '',                                     ctx: 'action', action: () => { postJson('/api/flutes/all', {action:'enableAll'}); }},
+  {label: 'Démarrer pompe',         desc: 'Démarre la régulation pression',       ctx: 'action', action: () => { postNoBody('/api/pressure/start'); }},
+  {label: 'Arrêter pompe',          desc: '',                                     ctx: 'action', action: () => { postNoBody('/api/pressure/stop');  }},
+  {label: 'Reset défaut pression',  desc: 'Sortir de SAFETY',                     ctx: 'action', action: () => { postNoBody('/api/pressure/reset'); }},
+  {label: 'Bascule preview audio',  desc: 'Synth navigateur',                     ctx: 'action', action: () => toggleSynth()},
+  {label: 'Bascule thème',          desc: 'Clair/sombre',                         ctx: 'action', action: () => toggleTheme()},
+  {label: 'Vue compacte/détaillée', desc: 'Réduit la taille des cartes',          ctx: 'action', action: () => toggleCompact()},
+  {label: 'Édition groupée',        desc: 'Applique un réglage à toutes',         ctx: 'action', action: () => document.getElementById('bulkModal').classList.add('show')},
+  {label: 'Télécharger backup JSON',desc: 'Export complet',                       ctx: 'action', action: () => window.open('/api/backup', '_blank')},
+  {label: 'Redémarrer ESP32',       desc: 'Reboot logiciel',                      ctx: 'action', action: () => rebootSystem()},
+];
+let _cmdSel = 0;
+function openCmdPalette() {
+  const root = document.getElementById('cmdRoot');
+  root.classList.add('show');
+  const inp = document.getElementById('cmdInput');
+  inp.value = '';
+  renderCmdResults('');
+  setTimeout(() => inp.focus(), 30);
+}
+function closeCmdPalette() {
+  document.getElementById('cmdRoot').classList.remove('show');
+}
+function renderCmdResults(q) {
+  q = q.toLowerCase().trim();
+  // Fuzzy : tous les chars de q dans label ou desc dans l'ordre
+  const items = CMD_ITEMS.filter(it => {
+    if (!q) return true;
+    const txt = (it.label + ' ' + it.desc).toLowerCase();
+    let i = 0;
+    for (const ch of q) { i = txt.indexOf(ch, i); if (i < 0) return false; i++; }
+    return true;
+  });
+  _cmdSel = 0;
+  const box = document.getElementById('cmdResults');
+  if (!items.length) { box.innerHTML = '<div class="cmd-item"><span class="desc">Aucun résultat</span></div>'; return; }
+  box.innerHTML = items.map((it, i) => `
+    <div class="cmd-item ${i===0?'sel':''}" data-idx="${i}">
+      <span><strong>${it.label}</strong> <span class="desc">${it.desc}</span></span>
+      <span class="ctx">${it.ctx}</span>
+    </div>
+  `).join('');
+  box._items = items;
+  box.querySelectorAll('.cmd-item').forEach(el => {
+    el.addEventListener('click', () => { items[+el.dataset.idx].action(); closeCmdPalette(); });
+  });
+}
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault(); openCmdPalette();
+    return;
+  }
+  if (document.getElementById('cmdRoot').classList.contains('show')) {
+    const box = document.getElementById('cmdResults');
+    const items = box._items || [];
+    if (e.key === 'Escape') { closeCmdPalette(); return; }
+    if (e.key === 'ArrowDown') { _cmdSel = Math.min(items.length - 1, _cmdSel + 1); }
+    else if (e.key === 'ArrowUp') { _cmdSel = Math.max(0, _cmdSel - 1); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (items[_cmdSel]) { items[_cmdSel].action(); closeCmdPalette(); }
+      return;
+    } else return;
+    box.querySelectorAll('.cmd-item').forEach((el, i) => el.classList.toggle('sel', i === _cmdSel));
+    e.preventDefault();
+  }
+});
+document.getElementById('cmdInput')?.addEventListener('input', e => renderCmdResults(e.target.value));
+document.getElementById('cmdRoot')?.addEventListener('click', e => {
+  if (e.target.id === 'cmdRoot') closeCmdPalette();
 });
 
 // ============================================================================
@@ -1162,6 +1544,10 @@ function trackNoteEdges() {
 
 function render() {
   trackNoteEdges();
+  // Adaptive : masque la navigation Pression si module non activé
+  const pressureNav = document.querySelector('nav button[data-page="pressure"]');
+  if (pressureNav) pressureNav.style.display = state.pressure ? '' : 'none';
+
   // Header
   const sb = document.getElementById('sysBadge');
   sb.textContent = state.sys_state || 'INIT';
@@ -1230,9 +1616,20 @@ function render() {
       </div>`;
   }).join('') || '<div class="small">Aucune flûte configurée.</div>';
 
-  // Page Flûtes (gestion)
+  // Page Flûtes (gestion) — applique le filtre actif
   const fl = document.getElementById('flutesList');
-  fl.innerHTML = (state.flutes||[]).map(f => {
+  const filtered = (state.flutes||[]).filter(fluteMatchesFilter);
+  if (!filtered.length) {
+    fl.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
+      <div class="ico">🎺</div>
+      <div class="msg">Aucune flûte ne correspond au filtre "${_fluteFilter}".</div>
+      <button class="btn" onclick="document.querySelector('#fluteFilters .chip[data-filter=&quot;all&quot;]').click()">Voir toutes</button>
+    </div>`;
+    populateFluteSelectors();
+    setAnimCounter(document.getElementById('dashMidiCount'), state.midi_count || 0);
+    return;
+  }
+  fl.innerHTML = filtered.map(f => {
     let cls = 'card flute-card';
     if (!f.enabled) cls += ' disabled';
     else if (f.muted) cls += ' muted';
@@ -1273,6 +1670,13 @@ function render() {
           <button class="btn btn-warn" onclick="sweepOne(${f.id})" title="Test mécanique : 0 → fond → 0">⇄ Sweep</button>
           <button class="btn btn-danger" onclick="panic(${f.id})">Panic</button>
         </div>
+        <details style="margin-top:8px">
+          <summary class="small" style="cursor:pointer">📝 Notes</summary>
+          <textarea oninput="setFluteNote(${f.id}, this.value)" rows="2"
+                    placeholder="Notes locales (sauvées dans le navigateur)"
+                    style="width:100%;margin-top:4px;padding:6px;background:var(--bg);
+                    border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px">${getFluteNote(f.id)}</textarea>
+        </details>
       </div>`;
   }).join('') || '<div class="small">Aucune flûte configurée.</div>';
   // Bouton "Désactiver solo" en bas
