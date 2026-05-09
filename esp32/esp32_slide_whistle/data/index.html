@@ -199,6 +199,89 @@
   .theme-btn { background: transparent; border: 1px solid var(--border);
     color: var(--text); padding: 4px 8px; border-radius: 4px; cursor: pointer; }
 
+  /* Pulse animation when note active */
+  @keyframes pulseGlow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,208,132,.0); }
+    50%      { box-shadow: 0 0 0 8px rgba(0,208,132,.18); }
+  }
+  .flute-card.active { animation: pulseGlow 1s ease-in-out infinite; }
+  .flute-card.active .slider-pos {
+    box-shadow: 0 0 6px var(--green);
+  }
+
+  /* PWM mini VU bar */
+  .vu {
+    height: 4px; background: var(--border); border-radius: 2px;
+    margin-top: 6px; overflow: hidden;
+  }
+  .vu-fill {
+    height: 100%; background: linear-gradient(90deg, var(--green), var(--yellow));
+    border-radius: 2px; transition: width .1s linear;
+  }
+
+  /* Loading overlay */
+  #loading-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.5);
+    display: none; align-items: center; justify-content: center;
+    z-index: 10000; backdrop-filter: blur(2px);
+  }
+  #loading-overlay.show { display: flex; }
+  .spinner {
+    width: 48px; height: 48px;
+    border: 4px solid var(--border); border-top-color: var(--green);
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Modal */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    display: none; align-items: center; justify-content: center;
+    z-index: 10000; backdrop-filter: blur(2px);
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px; min-width: 280px;
+    max-width: 480px; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    animation: modalIn .15s ease-out;
+  }
+  @keyframes modalIn {
+    from { transform: scale(.95); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+  }
+  .modal h4 { font-size: 15px; margin-bottom: 12px; color: var(--text); }
+  .modal p  { font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+  /* Per-flute color accents (CSS vars set in JS) */
+  .flute-card .flute-id { color: var(--flute-color, var(--green)); }
+  .flute-card { border-left-color: var(--flute-color, var(--green)); }
+
+  /* Note badge on piano keys */
+  .key { position: relative; }
+  .key .label {
+    position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+    font-size: 8px; color: #666; pointer-events: none; user-select: none;
+  }
+  .key.black .label { color: #aaa; bottom: 2px; font-size: 7px; }
+
+  /* MIDI channel counters strip */
+  .ch-strip {
+    display: grid; grid-template-columns: repeat(16, 1fr);
+    gap: 2px; margin-top: 8px;
+  }
+  .ch-cell {
+    height: 28px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 3px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; font-size: 9px;
+    color: var(--muted); position: relative; overflow: hidden;
+  }
+  .ch-cell.active { border-color: var(--green); }
+  .ch-cell.active .ch-num { color: var(--green); }
+  .ch-num { font-weight: 700; font-size: 10px; }
+  .ch-cnt { font-size: 8px; }
+
   /* Slider position visualization */
   .slider-track {
     position: relative;
@@ -289,6 +372,17 @@
 <body>
 
 <div id="toasts"></div>
+<div id="loading-overlay"><div class="spinner"></div></div>
+<div id="modalRoot" class="modal-backdrop">
+  <div class="modal">
+    <h4 id="modalTitle">Confirmer</h4>
+    <p id="modalMsg"></p>
+    <div class="modal-actions">
+      <button class="btn" id="modalCancel">Annuler</button>
+      <button class="btn btn-primary" id="modalOk">OK</button>
+    </div>
+  </div>
+</div>
 
 <header>
   <h1>🎼 Slide Whistle Controller</h1>
@@ -297,6 +391,7 @@
   <span id="pressBadge" class="pill" style="display:none">PRESSION</span>
   <span id="demoBadge" class="pill" style="display:none">▶ démo</span>
   <span style="margin-left:auto" class="small">v3 · multi-flute</span>
+  <button class="theme-btn" id="synthToggleBtn" onclick="toggleSynth()" title="Active/désactive la preview audio dans le navigateur (S)">🔊</button>
   <button class="theme-btn" onclick="toggleTheme()" title="Basculer thème (T)">🌓</button>
   <button class="theme-btn" onclick="showShortcuts()" title="Raccourcis clavier (?)">⌨</button>
 </header>
@@ -349,6 +444,9 @@
       <canvas id="pressSpark" class="spark" width="300" height="60" style="margin-top:8px"></canvas>
     </div>
   </div>
+
+  <h3 style="margin: 18px 0 8px; color: var(--muted); font-size: 12px; text-transform: uppercase;">Activité MIDI par canal</h3>
+  <div id="midiChStrip" class="ch-strip"></div>
 
   <h3 style="margin: 18px 0 8px; color: var(--muted); font-size: 12px; text-transform: uppercase;">Flûtes</h3>
   <div id="dashFlutes" class="grid"></div>
@@ -633,6 +731,51 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
 });
 
 // ============================================================================
+// Color palette per flute (consistent across UI)
+// ============================================================================
+const FLUTE_COLORS = ['#00d084','#5b9bf2','#ff7e5f','#c779e8','#ffaa00','#34d4c5','#e91e63','#7bd131'];
+function fluteColor(id) { return FLUTE_COLORS[id % FLUTE_COLORS.length]; }
+
+// ============================================================================
+// Loading overlay
+// ============================================================================
+let _loadingDepth = 0;
+function showLoading() {
+  _loadingDepth++;
+  document.getElementById('loading-overlay').classList.add('show');
+}
+function hideLoading() {
+  _loadingDepth = Math.max(0, _loadingDepth - 1);
+  if (_loadingDepth === 0) document.getElementById('loading-overlay').classList.remove('show');
+}
+
+// ============================================================================
+// Modal confirm dialog (replaces native confirm)
+// ============================================================================
+function confirmDialog(message, title = 'Confirmer', okLabel = 'OK') {
+  return new Promise(resolve => {
+    const root  = document.getElementById('modalRoot');
+    const tEl   = document.getElementById('modalTitle');
+    const mEl   = document.getElementById('modalMsg');
+    const okBtn = document.getElementById('modalOk');
+    const caBtn = document.getElementById('modalCancel');
+    tEl.textContent = title;
+    mEl.textContent = message;
+    okBtn.textContent = okLabel;
+    root.classList.add('show');
+    const close = (val) => {
+      root.classList.remove('show');
+      okBtn.onclick = caBtn.onclick = root.onclick = null;
+      resolve(val);
+    };
+    okBtn.onclick = () => close(true);
+    caBtn.onclick = () => close(false);
+    // Cliquer en dehors = annuler
+    root.onclick = e => { if (e.target === root) close(false); };
+  });
+}
+
+// ============================================================================
 // Toast notifications
 // ============================================================================
 function toast(msg, type = 'success', timeout = 3000) {
@@ -739,20 +882,23 @@ function render() {
     let cls = 'card flute-card';
     if (!f.enabled) cls += ' disabled';
     else if (f.muted) cls += ' muted';
+    if (f.air_open || f.note_active) cls += ' active';
     const travel = f.slider_travel_mm || 300;
     const posPct = Math.max(0, Math.min(100, ((f.position_mm||0)/travel)*100));
+    const pwmPct = Math.max(0, Math.min(100, ((f.pwm||0)/255)*100));
     return `
-      <div class="${cls}">
+      <div class="${cls}" style="--flute-color:${fluteColor(f.id)}">
         <h3><span><span class="flute-id">#${f.id}</span> ${f.name}</span>
             <span class="pill">ch${f.midi_channel||'omni'}</span></h3>
         <div class="slider-track">
-          <div class="slider-pos" style="left: calc(${posPct}% - 3px)"></div>
+          <div class="slider-pos" style="left: calc(${posPct}% - 3px); background:${fluteColor(f.id)}"></div>
         </div>
         <div class="slider-label"><span>0</span><span>${f.position_mm?.toFixed?.(1)||'—'} mm</span><span>${travel}</span></div>
         <div class="stat" style="margin-top:6px"><span class="stat-label">Note</span>
           <span class="stat-value">${f.note_active?noteName(f.last_note):'—'}</span></div>
         <div class="stat"><span class="stat-label">Air</span>
           <span class="stat-value ${f.air_open?'':'muted'}">${f.air_state}</span></div>
+        <div class="vu" title="PWM solénoïde ${f.pwm}/255"><div class="vu-fill" style="width:${pwmPct}%"></div></div>
       </div>`;
   }).join('') || '<div class="small">Aucune flûte configurée.</div>';
 
@@ -762,20 +908,22 @@ function render() {
     let cls = 'card flute-card';
     if (!f.enabled) cls += ' disabled';
     else if (f.muted) cls += ' muted';
-    // Slider position visualization (0..slider_travel)
+    if (f.air_open || f.note_active) cls += ' active';
     const travel = f.slider_travel_mm || 300;
     const posPct = Math.max(0, Math.min(100, ((f.position_mm||0)/travel)*100));
+    const pwmPct = Math.max(0, Math.min(100, ((f.pwm||0)/255)*100));
     const span = (f.note_max - f.note_min) || 1;
     return `
-      <div class="${cls}">
+      <div class="${cls}" style="--flute-color:${fluteColor(f.id)}">
         <h3>
           <span><span class="flute-id">#${f.id}</span> ${f.name}</span>
           <span>${f.homed?'<span class="pill ok">homed</span>':'<span class="pill fault">not homed</span>'}</span>
         </h3>
         <div class="slider-track">
-          <div class="slider-pos" style="left: calc(${posPct}% - 3px)"></div>
+          <div class="slider-pos" style="left: calc(${posPct}% - 3px); background:${fluteColor(f.id)}"></div>
         </div>
         <div class="slider-label"><span>0 mm</span><span>${f.position_mm?.toFixed?.(1)||'—'} mm</span><span>${travel} mm</span></div>
+        <div class="vu" title="PWM solénoïde ${f.pwm}/255"><div class="vu-fill" style="width:${pwmPct}%"></div></div>
         <div class="stat" style="margin-top:8px"><span class="stat-label">Plage MIDI</span>
           <span class="stat-value">${noteName(f.note_min)}–${noteName(f.note_max)} (ch ${f.midi_channel||'omni'})</span></div>
         <div class="stat"><span class="stat-label">Note jouée</span>
@@ -796,6 +944,32 @@ function render() {
   // Bouton "Désactiver solo" en bas
   if ((state.flutes||[]).some(f => f.muted)) {
     fl.innerHTML += `<div class="card" style="text-align:center"><button class="btn btn-primary" onclick="clearSolo()">Libérer le solo (unmute toutes)</button></div>`;
+  }
+
+  // MIDI channels strip
+  const strip = document.getElementById('midiChStrip');
+  if (strip) {
+    const counts = state.midi_count_by_channel || [];
+    const last = state.midi_last_channel;
+    const usedChannels = new Set();
+    (state.flutes||[]).forEach(f => { if (f.midi_channel) usedChannels.add(f.midi_channel); });
+    let html = '';
+    for (let ch = 1; ch <= 16; ch++) {
+      const cnt = counts[ch-1] || 0;
+      const isLast = ch === last;
+      const isUsed = usedChannels.has(ch);
+      let style = '';
+      if (isUsed) {
+        // Trouver couleur de la flûte attribuée à ce canal (la première trouvée)
+        const f = (state.flutes||[]).find(x => x.midi_channel === ch);
+        if (f) style = `border-color:${fluteColor(f.id)}`;
+      }
+      html += `<div class="ch-cell ${isLast?'active':''}" style="${style}" title="${cnt} messages">
+        <span class="ch-num">${ch}</span>
+        <span class="ch-cnt">${cnt > 999 ? Math.round(cnt/100)/10+'k' : cnt}</span>
+      </div>`;
+    }
+    strip.innerHTML = html;
   }
 
   // Selectors
@@ -827,24 +1001,125 @@ async function playStop() {
   await postJson('/api/flute/note', {id, note:+playNote.value, on:false});
 }
 
-// Piano
+// Piano (multi-touch + souris + labels)
 function buildPiano() {
   const piano = document.getElementById('piano');
+  piano.innerHTML = '';
   for (let n = 48; n <= 84; n++) {
     const isBlack = [1,3,6,8,10].includes(n%12);
     const k = document.createElement('div');
     k.className = 'key ' + (isBlack ? 'black' : 'white');
     k.dataset.note = n;
     k.title = noteName(n) + ' / ' + n;
-    k.onmousedown = () => keyPress(n, true);
+    // Label sur les Do uniquement (ou toutes les notes blanches si on veut)
+    if ((n % 12) === 0 || (n % 12) === 7) {
+      const lbl = document.createElement('span');
+      lbl.className = 'label';
+      lbl.textContent = noteName(n);
+      k.appendChild(lbl);
+    }
+    // Souris
+    k.onmousedown = e => { e.preventDefault(); keyPress(n, true); };
     k.onmouseup   = () => keyPress(n, false);
     k.onmouseleave= () => keyPress(n, false);
+    // Touch (multi-touch)
+    k.ontouchstart = e => { e.preventDefault(); keyPress(n, true); };
+    k.ontouchend   = e => { e.preventDefault(); keyPress(n, false); };
+    k.ontouchcancel = () => keyPress(n, false);
     piano.appendChild(k);
   }
 }
+const _activeKeys = new Set();
 async function keyPress(note, on) {
+  // Visuel local immédiat
+  const k = document.querySelector(`#piano .key[data-note="${note}"]`);
+  if (k) k.classList.toggle('active', on);
+  // Eviter de spam si pas de changement
+  if (on && _activeKeys.has(note)) return;
+  if (!on && !_activeKeys.has(note)) return;
+  if (on) _activeKeys.add(note); else _activeKeys.delete(note);
+  // Audio preview
+  if (on) synthNoteOn(note); else synthNoteOff(note);
+  // API
   const id = +(document.getElementById('playFluteSel').value || 0);
   await postJson('/api/flute/note', {id, note, velocity:100, on});
+}
+
+// Mapping clavier ordinateur → notes (rangée du clavier QWERTY/AZERTY)
+// Z S X D C V G B H N J M , L . ; / → C4 .. E5 (chromatique)
+const KEYBOARD_MAP = {
+  'a':60,'w':61,'s':62,'e':63,'d':64,'f':65,'t':66,'g':67,'y':68,'h':69,'u':70,'j':71,
+  'k':72,'o':73,'l':74,'p':75,';':76,
+  // AZERTY fallback
+  'q':60,'z':61,'w':62
+};
+function isPlayPageActive() {
+  return document.getElementById('page-play')?.classList.contains('active');
+}
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  if (e.repeat) return;
+  if (!isPlayPageActive()) return;            // notes seulement sur la page Jouer
+  const n = KEYBOARD_MAP[e.key.toLowerCase()];
+  if (n != null) { e.preventDefault(); keyPress(n, true); }
+});
+document.addEventListener('keyup', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  if (!isPlayPageActive()) return;
+  const n = KEYBOARD_MAP[e.key.toLowerCase()];
+  if (n != null) { e.preventDefault(); keyPress(n, false); }
+});
+
+// ============================================================================
+// Web Audio synth preview (pour tester sans matériel)
+// ============================================================================
+let _audioCtx = null, _synthEnabled = false;
+const _activeOsc = {};
+
+function ensureCtx() {
+  if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (_audioCtx.state === 'suspended') _audioCtx.resume();
+}
+function midiToFreq(n) { return 440 * Math.pow(2, (n - 69) / 12); }
+function synthNoteOn(note) {
+  if (!_synthEnabled) return;
+  ensureCtx();
+  if (_activeOsc[note]) return;
+  // Mini synthé : sinus + filtre passe-bas + enveloppe AD
+  const osc = _audioCtx.createOscillator();
+  const gain = _audioCtx.createGain();
+  const filter = _audioCtx.createBiquadFilter();
+  osc.type = 'triangle';
+  osc.frequency.value = midiToFreq(note);
+  filter.type = 'lowpass';
+  filter.frequency.value = 2000;
+  filter.Q.value = 1.5;
+  gain.gain.setValueAtTime(0, _audioCtx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.18, _audioCtx.currentTime + 0.02);
+  osc.connect(filter); filter.connect(gain); gain.connect(_audioCtx.destination);
+  osc.start();
+  _activeOsc[note] = {osc, gain};
+}
+function synthNoteOff(note) {
+  const o = _activeOsc[note];
+  if (!o) return;
+  const t = _audioCtx.currentTime;
+  o.gain.gain.cancelScheduledValues(t);
+  o.gain.gain.setValueAtTime(o.gain.gain.value, t);
+  o.gain.gain.linearRampToValueAtTime(0, t + 0.08);
+  o.osc.stop(t + 0.1);
+  delete _activeOsc[note];
+}
+function toggleSynth() {
+  _synthEnabled = !_synthEnabled;
+  if (_synthEnabled) ensureCtx();
+  else {
+    Object.keys(_activeOsc).forEach(n => synthNoteOff(+n));
+  }
+  const btn = document.getElementById('synthToggleBtn');
+  btn.style.background = _synthEnabled ? 'var(--green)' : 'transparent';
+  btn.style.color = _synthEnabled ? '#000' : 'var(--text)';
+  toast(_synthEnabled ? 'Preview audio activée' : 'Preview audio désactivée');
 }
 
 // ============================================================================
@@ -1160,12 +1435,14 @@ async function savePreset() {
   loadPresets();
 }
 async function loadPreset(name) {
-  if (!confirm(`Charger le preset "${name}" ? La config courante sera écrasée.`)) return;
-  await postJson('/api/presets/load', {name});
-  alert('Preset chargé.');
+  if (!await confirmDialog(`Charger le preset "${name}" ? La config courante sera écrasée.`,
+                            'Charger un preset', 'Charger')) return;
+  showLoading();
+  try { await postJson('/api/presets/load', {name}); toast('Preset chargé', 'success'); }
+  finally { hideLoading(); }
 }
 async function deletePreset(name) {
-  if (!confirm(`Supprimer "${name}" ?`)) return;
+  if (!await confirmDialog(`Supprimer le preset "${name}" ?`, 'Supprimer', 'Supprimer')) return;
   await postJson('/api/presets/delete', {name});
   loadPresets();
 }
@@ -1326,16 +1603,20 @@ setInterval(() => {
 async function restoreFile(ev) {
   const file = ev.target.files[0];
   if (!file) return;
-  if (!confirm(`Restaurer la configuration depuis "${file.name}" ? Toute la config courante sera écrasée.`)) return;
-  const text = await file.text();
-  let json;
-  try { json = JSON.parse(text); }
-  catch (e) { toast('JSON invalide', 'error'); return; }
-  await postJson('/api/restore', json);
-  toast('Configuration restaurée', 'success');
+  if (!await confirmDialog(`Restaurer la configuration depuis "${file.name}" ? Toute la config courante sera écrasée.`,
+                            'Restaurer', 'Restaurer')) return;
+  showLoading();
+  try {
+    const text = await file.text();
+    const json = JSON.parse(text);
+    await postJson('/api/restore', json);
+    toast('Configuration restaurée', 'success');
+  } catch (e) { toast('JSON invalide ou erreur réseau', 'error'); }
+  finally { hideLoading(); }
 }
 async function rebootSystem() {
-  if (!confirm('Redémarrer l\'ESP32 ? Toutes les notes en cours seront coupées.')) return;
+  if (!await confirmDialog('Redémarrer l\'ESP32 ? Toutes les notes en cours seront coupées.',
+                            'Redémarrer', 'Redémarrer')) return;
   await postNoBody('/api/system/reboot');
   toast('Redémarrage en cours...', 'warn', 5000);
 }
@@ -1478,16 +1759,19 @@ setInterval(refreshHealth, 1500);
 // Keyboard shortcuts
 // ============================================================================
 function showShortcuts() {
-  toast('Raccourcis : H=homing, P=panic, M=mute all, U=unmute all, T=thème, ?=aide', 'success', 6000);
+  toast('Raccourcis (hors page Jouer) : H=homing, P=panic, M=mute all, T=thème, S=synth, ?=aide. Sur Jouer : A,W,S,E,D,F,T,G,Y,H,U,J,K… = notes (C4→)', 'success', 8000);
 }
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  if (e.repeat) return;
+  if (isPlayPageActive() && KEYBOARD_MAP[e.key.toLowerCase()] != null) return;  // page Jouer = piano
   switch (e.key.toLowerCase()) {
     case 'h': postNoBody('/api/homing'); toast('Homing global'); break;
     case 'p': postNoBody('/api/panic');  toast('Panic !', 'warn'); break;
     case 'm': postJson('/api/flutes/all', {action:'muteAll'}); toast('Toutes mutées', 'warn'); break;
     case 'u': postJson('/api/flutes/all', {action:'unmuteAll'}); toast('Toutes démutées'); break;
     case 't': toggleTheme(); break;
+    case 's': toggleSynth(); break;
     case '?': showShortcuts(); break;
   }
 });

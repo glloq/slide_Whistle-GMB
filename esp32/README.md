@@ -255,6 +255,24 @@ DELETE /api/wifi                 — oublier credentials
 `ws://<ip>/ws` diffuse l'état complet (toutes flûtes + pression) toutes les
 200 ms, et envoie un push immédiat à la connexion.
 
+### Statistiques MIDI
+
+Le JSON `/api/status` inclut `midi_count_by_channel` : compteurs par canal
+1-16 pour visualiser quel canal reçoit du trafic (utile pour le debug et
+le routage multi-flûte).
+
+### UX navigateur
+
+- **Preview audio** (Web Audio synth) — bouton 🔊 dans l'en-tête : permet
+  de jouer dans le navigateur ce qui est commandé, pour tester sans matériel.
+- **Piano multi-touch** + **clavier ordinateur** (sur la page Jouer) :
+  A,W,S,E,D,F,T,G,Y,H,U,J,K... → C4-C5 chromatique
+- **Couleur par flûte** appliquée aux bordures, slider et badge canal
+- **Animation pulse** quand une flûte est active
+- **VU bar PWM** sur chaque carte flûte
+- **Modal confirm** + **overlay loading** pour les opérations longues
+- **Bandeau MIDI 16 canaux** sur le dashboard avec compteurs live
+
 ---
 
 ## 🧰 Pins par défaut

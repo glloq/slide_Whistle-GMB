@@ -48,6 +48,7 @@ private:
   uint8_t  _lastNote    = 0;
   int      _lastBend    = 0;
   uint32_t _msgCount    = 0;
+  uint32_t _msgCountByChannel[17] = {0};   // index 0..16 (1..16 = canaux MIDI, 0 inutilisé)
 
   // Ring buffer d'activité MIDI (pour affichage UI)
   static constexpr uint8_t LOG_SIZE = 32;
@@ -118,6 +119,7 @@ private:
     _lastChannel = channel;
     _lastNote    = note;
     _msgCount++;
+    if (channel >= 1 && channel <= 16) _msgCountByChannel[channel]++;
     pushLog(0, channel, note, velocity);
 #if DEBUG_MODE
     Serial.printf("[MIDI] ch%u NoteOn %u vel=%u\n", channel, note, velocity);
@@ -128,6 +130,7 @@ private:
   void dispatchNoteOff(uint8_t channel, uint8_t note) {
     _lastChannel = channel;
     _msgCount++;
+    if (channel >= 1 && channel <= 16) _msgCountByChannel[channel]++;
     pushLog(1, channel, note, 0);
 #if DEBUG_MODE
     Serial.printf("[MIDI] ch%u NoteOff %u\n", channel, note);
@@ -139,6 +142,7 @@ private:
     _lastChannel = channel;
     _lastBend    = raw;
     _msgCount++;
+    if (channel >= 1 && channel <= 16) _msgCountByChannel[channel]++;
     pushLog(3, channel, 0, 0, (int16_t)raw);
     float semitones = (raw / 8192.0f) * PITCHBEND_RANGE_SEMITONES;
     if (_onPitchBend) _onPitchBend(channel, semitones);
@@ -147,6 +151,7 @@ private:
   void dispatchAftertouch(uint8_t channel, uint8_t pressure) {
     _lastChannel = channel;
     _msgCount++;
+    if (channel >= 1 && channel <= 16) _msgCountByChannel[channel]++;
     pushLog(4, channel, pressure, 0);
     bool active = pressure > 10;
     if (_onAftertouch) _onAftertouch(channel, active, pressure);
@@ -155,6 +160,7 @@ private:
   void dispatchCC(uint8_t channel, uint8_t number, uint8_t value) {
     _lastChannel = channel;
     _msgCount++;
+    if (channel >= 1 && channel <= 16) _msgCountByChannel[channel]++;
     pushLog(2, channel, number, value);
 #if DEBUG_MODE
     Serial.printf("[MIDI] ch%u CC%u=%u\n", channel, number, value);
@@ -230,6 +236,9 @@ public:
   uint8_t  getLastNote()    const { return _lastNote; }
   int      getPitchBendValue() const { return _lastBend; }
   uint32_t getMessageCount() const { return _msgCount; }
+  uint32_t getMessageCountForChannel(uint8_t ch) const {
+    return (ch >= 1 && ch <= 16) ? _msgCountByChannel[ch] : 0;
+  }
 
   // ---- Activity log -------------------------------------------------------
   // Itère du plus ancien au plus récent, appelle cb(entry) pour chaque

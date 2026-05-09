@@ -97,6 +97,10 @@ private:
     doc["uptime_ms"]         = millis();
     doc["midi_count"]        = _midi ? _midi->getMessageCount() : 0;
     doc["midi_last_channel"] = _midi ? _midi->getLastChannel() : 0;
+    if (_midi) {
+      JsonArray ch = doc.createNestedArray("midi_count_by_channel");
+      for (int i = 1; i <= 16; ++i) ch.add(_midi->getMessageCountForChannel(i));
+    }
 
     JsonArray flutes = doc.createNestedArray("flutes");
     if (_orchestra) {
