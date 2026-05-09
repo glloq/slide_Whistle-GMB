@@ -46,6 +46,7 @@ volatile bool g_pressureStopRequested  = false;
 volatile bool g_pressureResetRequested = false;
 volatile int  g_demoMelodyId           = -1;   // -2=stop signal, -1=idle, >=0=play
 volatile bool g_demoLoop               = false;
+volatile int  g_sweepFluteId           = -1;   // -1 = aucun, sinon id flûte à sweep
 
 // Mutex FreeRTOS — protège orchestre/pression contre accès concurrent inter-core.
 SemaphoreHandle_t motionMutex = nullptr;
@@ -249,6 +250,36 @@ void taskMotion(void* param) {
       demoPlayer.play((uint8_t)id, 0, g_demoLoop);
     }
     demoPlayer.update();
+
+    // 8. Sweep test sur une flûte (visualisation du déplacement complet)
+    if (g_sweepFluteId >= 0) {
+      int id = g_sweepFluteId;
+      g_sweepFluteId = -1;
+      Flute* f = orchestra.get(id);
+      if (f && f->stepper().isHomed()) {
+        xSemaphoreTake(motionMutex, portMAX_DELAY);
+        const float travel = f->config().sliderTravelMM;
+        f->stepper().moveToMM(travel);
+        xSemaphoreGive(motionMutex);
+        // Attendre l'arrivée
+        while (f->stepper().isMoving()) {
+          xSemaphoreTake(motionMutex, portMAX_DELAY);
+          f->stepper().update();
+          xSemaphoreGive(motionMutex);
+          vTaskDelay(pdMS_TO_TICKS(2));
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+        xSemaphoreTake(motionMutex, portMAX_DELAY);
+        f->stepper().moveToMM(0);
+        xSemaphoreGive(motionMutex);
+        while (f->stepper().isMoving()) {
+          xSemaphoreTake(motionMutex, portMAX_DELAY);
+          f->stepper().update();
+          xSemaphoreGive(motionMutex);
+          vTaskDelay(pdMS_TO_TICKS(2));
+        }
+      }
+    }
 
 #if DEBUG_MODE
     static unsigned long lastDebug = 0;

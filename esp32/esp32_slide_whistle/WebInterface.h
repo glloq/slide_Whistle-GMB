@@ -51,6 +51,7 @@ extern volatile bool g_pressureStopRequested;
 extern volatile bool g_pressureResetRequested;
 extern volatile int  g_demoMelodyId;      // -1 = stop, sinon index de mélodie à lancer
 extern volatile bool g_demoLoop;
+extern volatile int  g_sweepFluteId;
 
 class WebInterface {
 private:
@@ -72,6 +73,7 @@ private:
     if (!f) return;
     obj["id"]           = f->id();
     obj["name"]         = f->name();
+    obj["custom_name"]  = f->customName();
     obj["enabled"]      = f->isEnabled();
     obj["muted"]        = f->isMuted();
     obj["midi_channel"] = f->midiChannel();
@@ -124,6 +126,8 @@ private:
     DynamicJsonDocument doc(1536);
     doc["id"]            = f->id();
     doc["name"]          = f->name();
+    doc["custom_name"]   = f->customName();
+    doc["default_name"]  = f->config().name;
     doc["midi_channel"]  = f->midiChannel();
     doc["note_min"]      = f->noteMin();
     doc["note_max"]      = f->noteMax();
@@ -136,6 +140,11 @@ private:
     doc["wait_delay_ms"]  = f->air().getWaitDelay();
     doc["legato_ms"]      = f->air().getLegatoMs();
     doc["velocity_curve"] = f->air().getVelocityCurve();
+    doc["cc_breath"]      = f->getCcBreath();
+    doc["cc_expression"]  = f->getCcExpr();
+    doc["cc_volume"]      = f->getCcVolume();
+    doc["cc_vibrato"]     = f->getCcVibrato();
+    doc["cc_sustain"]     = f->getCcSustain();
     doc["use_lut"]        = f->stepper().getUseLUT();
     doc["slider_travel_mm"] = f->config().sliderTravelMM;
     JsonArray lut = doc.createNestedArray("lut");
@@ -195,6 +204,12 @@ private:
     prefs.putUShort("wait",    f->air().getWaitDelay());
     prefs.putUShort("legato",  f->air().getLegatoMs());
     prefs.putUChar("velCurve", f->air().getVelocityCurve());
+    prefs.putString("cName",   f->customName());
+    prefs.putUChar("ccBreath",  f->getCcBreath());
+    prefs.putUChar("ccExpr",    f->getCcExpr());
+    prefs.putUChar("ccVolume",  f->getCcVolume());
+    prefs.putUChar("ccVibrato", f->getCcVibrato());
+    prefs.putUChar("ccSustain", f->getCcSustain());
     prefs.putBool("useLUT",    f->stepper().getUseLUT());
     prefs.putBytes("lut",      f->stepper().getLUT(),
                    sizeof(float) * MIDI_LUT_SIZE);
@@ -217,6 +232,13 @@ private:
     f->air().setWaitDelay(prefs.getUShort("wait", DEFAULT_POSITION_WAIT));
     f->air().setLegatoMs(prefs.getUShort("legato", DEFAULT_LEGATO_THRESHOLD));
     f->air().setVelocityCurve(prefs.getUChar("velCurve", f->air().getVelocityCurve()));
+    String cn = prefs.getString("cName", "");
+    f->setCustomName(cn.c_str());
+    f->setCcBreath (prefs.getUChar("ccBreath",  2));
+    f->setCcExpr   (prefs.getUChar("ccExpr",   11));
+    f->setCcVolume (prefs.getUChar("ccVolume",  7));
+    f->setCcVibrato(prefs.getUChar("ccVibrato", 1));
+    f->setCcSustain(prefs.getUChar("ccSustain",64));
     f->stepper().setUseLUT(prefs.getBool("useLUT", false));
     if (prefs.getBytesLength("lut") == sizeof(float) * MIDI_LUT_SIZE) {
       float buf[MIDI_LUT_SIZE];
@@ -348,6 +370,23 @@ private:
           if (v < 0 || v > 2) { req->send(400, "application/json", "{\"error\":\"velocity_curve\"}"); return; }
           f->air().setVelocityCurve((uint8_t)v);
         }
+        if (o.containsKey("custom_name")) {
+          f->setCustomName((const char*)o["custom_name"]);
+        }
+        // CC mapping (0 = désactivé)
+        auto ccCheck = [&](const char* key, void(Flute::*setter)(uint8_t))->bool {
+          if (!o.containsKey(key)) return true;
+          int v = o[key];
+          if (v < 0 || v > 127) {
+            req->send(400, "application/json", "{\"error\":\"cc out of range\"}"); return false;
+          }
+          (f->*setter)((uint8_t)v); return true;
+        };
+        if (!ccCheck("cc_breath",     &Flute::setCcBreath))  return;
+        if (!ccCheck("cc_expression", &Flute::setCcExpr))    return;
+        if (!ccCheck("cc_volume",     &Flute::setCcVolume))  return;
+        if (!ccCheck("cc_vibrato",    &Flute::setCcVibrato)) return;
+        if (!ccCheck("cc_sustain",    &Flute::setCcSustain)) return;
         if (o.containsKey("use_lut")) f->stepper().setUseLUT(o["use_lut"].as<bool>());
 
         saveFluteConfigNVS(f);
@@ -445,6 +484,41 @@ private:
         Flute* f = fluteFromJson(json, req);
         if (!f) return;
         f->panic();
+        req->send(200, "application/json", "{\"ok\":true}");
+      }));
+
+    // ---- POST /api/flute/sweep -------------------------------------------
+    // Déplace le slide de 0 → travelMM → 0 (visualisation/test mécanique)
+
+    server.addHandler(new AsyncCallbackJsonWebHandler("/api/flute/sweep",
+      [this](AsyncWebServerRequest* req, JsonVariant& json) {
+        Flute* f = fluteFromJson(json, req);
+        if (!f) return;
+        if (!f->stepper().isHomed()) {
+          req->send(409, "application/json", "{\"error\":\"flute not homed\"}"); return;
+        }
+        g_sweepFluteId = (int)f->id();
+        req->send(200, "application/json", "{\"ok\":true,\"message\":\"sweep scheduled\"}");
+      }));
+
+    // ---- POST /api/flutes/all --------------------------------------------
+    // Commandes globales : {action: "muteAll"|"unmuteAll"|"enableAll"|"disableAll"|"panic"}
+
+    server.addHandler(new AsyncCallbackJsonWebHandler("/api/flutes/all",
+      [this](AsyncWebServerRequest* req, JsonVariant& json) {
+        String action = json["action"] | "";
+        if (!_orchestra) { req->send(503, "application/json", "{}"); return; }
+        for (uint8_t i = 0; i < _orchestra->count(); ++i) {
+          Flute* f = _orchestra->get(i);
+          if (!f) continue;
+          if      (action == "muteAll")    f->setMuted(true);
+          else if (action == "unmuteAll")  f->setMuted(false);
+          else if (action == "enableAll")  f->setEnabled(true);
+          else if (action == "disableAll") f->setEnabled(false);
+          else if (action == "panic")      f->panic();
+          else                             { req->send(400, "application/json", "{\"error\":\"unknown action\"}"); return; }
+          if (action != "panic") saveFluteConfigNVS(f);
+        }
         req->send(200, "application/json", "{\"ok\":true}");
       }));
 

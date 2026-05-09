@@ -216,6 +216,22 @@ POST /api/demo/stop
 POST /api/flute/solo              {id}    — mute toutes sauf {id} (id<0 libère)
 ```
 
+### Sweep mécanique + commandes globales
+
+```
+POST /api/flute/sweep             {id}    — déplace 0 → fond → 0 (test mécanique)
+POST /api/flutes/all              {action} — muteAll | unmuteAll | enableAll
+                                            | disableAll | panic
+```
+
+### Personnalisation par flûte
+
+Le POST `/api/flute` accepte aussi :
+
+- `custom_name` (string, vide = nom par défaut)
+- `cc_breath`, `cc_expression`, `cc_volume`, `cc_vibrato`, `cc_sustain`
+  — numéros CC (0 = désactivé) routés vers les fonctions correspondantes
+
 ### Pression
 
 ```

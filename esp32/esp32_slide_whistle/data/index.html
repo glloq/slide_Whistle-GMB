@@ -16,6 +16,17 @@
     --muted: #888;
     --border: #2a2a4a;
   }
+  :root[data-theme="light"] {
+    --bg: #f5f5f7;
+    --card: #ffffff;
+    --accent: #0066cc;
+    --green: #00a060;
+    --orange: #d63347;
+    --yellow: #cc8800;
+    --text: #1a1a2e;
+    --muted: #666;
+    --border: #d0d0d8;
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; }
 
@@ -136,6 +147,58 @@
 
   .small { font-size: 11px; color: var(--muted); }
 
+  /* Help / tooltips */
+  .help { display: inline-block; margin-left: 4px; cursor: help; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 50%; width: 14px; height: 14px;
+    text-align: center; font-size: 10px; line-height: 12px; }
+  .help:hover { color: var(--green); border-color: var(--green); }
+
+  /* Range editor : double slider */
+  .range-editor { position: relative; height: 28px; margin: 8px 0 14px; }
+  .range-editor .track {
+    position: absolute; left: 0; right: 0; top: 12px; height: 4px;
+    background: var(--border); border-radius: 2px;
+  }
+  .range-editor .selected {
+    position: absolute; top: 12px; height: 4px; background: var(--green);
+    border-radius: 2px;
+  }
+  .range-editor input[type=range] {
+    position: absolute; left: 0; right: 0; top: 0;
+    width: 100%; height: 28px; background: transparent;
+    pointer-events: none; -webkit-appearance: none; appearance: none;
+  }
+  .range-editor input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    pointer-events: auto;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--green); border: 2px solid var(--bg); cursor: grab;
+  }
+  .range-editor input[type=range]::-moz-range-thumb {
+    pointer-events: auto;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--green); border: 2px solid var(--bg); cursor: grab;
+  }
+  .range-editor input[type=range]::-webkit-slider-runnable-track { background: transparent; }
+  .range-editor input[type=range]::-moz-range-track { background: transparent; }
+  .range-editor .range-labels {
+    position: absolute; left: 0; right: 0; top: 22px;
+    display: flex; justify-content: space-between; pointer-events: none;
+    font-size: 11px; color: var(--green); font-weight: 600;
+  }
+
+  canvas#velCurveCanvas { display:block; width:100%; height:100px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px; }
+
+  /* Health check */
+  .health-ok    { color: var(--green); }
+  .health-warn  { color: var(--yellow); }
+  .health-error { color: var(--orange); }
+
+  /* Theme button */
+  .theme-btn { background: transparent; border: 1px solid var(--border);
+    color: var(--text); padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+
   /* Slider position visualization */
   .slider-track {
     position: relative;
@@ -234,6 +297,8 @@
   <span id="pressBadge" class="pill" style="display:none">PRESSION</span>
   <span id="demoBadge" class="pill" style="display:none">▶ démo</span>
   <span style="margin-left:auto" class="small">v3 · multi-flute</span>
+  <button class="theme-btn" onclick="toggleTheme()" title="Basculer thème (T)">🌓</button>
+  <button class="theme-btn" onclick="showShortcuts()" title="Raccourcis clavier (?)">⌨</button>
 </header>
 
 <nav>
@@ -254,7 +319,7 @@
 <div id="page-dashboard" class="page active">
   <div class="grid">
     <div class="card">
-      <h3>Système</h3>
+      <h3>Système <span class="small" style="margin-left:auto">(H = homing, P = panic)</span></h3>
       <div class="stat"><span class="stat-label">État</span>
         <span id="dashState" class="stat-value">—</span></div>
       <div class="stat"><span class="stat-label">Uptime</span>
@@ -262,9 +327,19 @@
       <div class="stat"><span class="stat-label">Messages MIDI</span>
         <span id="dashMidiCount" class="stat-value">0</span></div>
       <div class="btn-row">
-        <button class="btn btn-warn" onclick="postNoBody('/api/homing')">⌂ Homing global</button>
-        <button class="btn btn-danger" onclick="postNoBody('/api/panic')">⏹ Panic</button>
+        <button class="btn btn-warn" onclick="postNoBody('/api/homing')" title="Re-calibrer toutes les flûtes (H)">⌂ Homing global</button>
+        <button class="btn btn-danger" onclick="postNoBody('/api/panic')" title="Couper l'air immédiatement (P)">⏹ Panic</button>
       </div>
+      <div class="btn-row" style="margin-top:6px">
+        <button class="btn" onclick="postJson('/api/flutes/all',{action:'muteAll'})" title="Mute toutes les flûtes (M)">Mute all</button>
+        <button class="btn" onclick="postJson('/api/flutes/all',{action:'unmuteAll'})" title="Unmute toutes (U)">Unmute all</button>
+        <button class="btn" onclick="postJson('/api/flutes/all',{action:'enableAll'})">Activer toutes</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Santé</h3>
+      <div id="dashHealth" class="small">Évaluation...</div>
     </div>
     <div class="card">
       <h3>Pression</h3>
@@ -383,10 +458,21 @@
     <h3>Flûte
       <select id="cfgFluteSel" style="width: auto" onchange="loadFluteCfg()"></select>
     </h3>
+    <label>Nom personnalisé <span class="help" title="Vide = utilise le nom par défaut">?</span></label>
+    <input id="cfgCustomName" type="text" maxlength="22" placeholder="laisser vide pour défaut">
     <div class="row3">
-      <div><label>Canal MIDI (0=omni)</label><input id="cfgChan" type="number" min="0" max="16"></div>
+      <div><label>Canal MIDI <span class="help" title="0=OMNI (tous canaux), 1-16=canal spécifique">?</span></label>
+        <input id="cfgChan" type="number" min="0" max="16"></div>
       <div><label>Note min</label><input id="cfgNmin" type="number" min="0" max="127"></div>
       <div><label>Note max</label><input id="cfgNmax" type="number" min="0" max="127"></div>
+    </div>
+    <label>Plage MIDI (drag) <span id="rangeLabel" class="small"></span></label>
+    <div class="range-editor">
+      <div class="track"></div>
+      <div id="rangeSel" class="selected"></div>
+      <input id="rangeMin" type="range" min="0" max="127" step="1">
+      <input id="rangeMax" type="range" min="0" max="127" step="1">
+      <div class="range-labels"><span id="rngLblMin"></span><span id="rngLblMax"></span></div>
     </div>
     <div class="row2">
       <div><label>Vitesse (mm/s)</label><input id="cfgSpeed" type="number" step="1"></div>
@@ -398,16 +484,33 @@
     </div>
     <div class="row2">
       <div>
-        <label>Courbe de vélocité</label>
-        <select id="cfgVelCurve">
+        <label>Courbe de vélocité <span class="help" title="Mapping vélocité MIDI (0-127) vers angle servo. Quadratique = plus naturel pour une flûte.">?</span></label>
+        <select id="cfgVelCurve" onchange="drawVelCurve()">
           <option value="0">0 — Linéaire</option>
           <option value="1">1 — Quadratique (musical)</option>
           <option value="2">2 — Cubique (très expressive)</option>
         </select>
+        <canvas id="velCurveCanvas" width="200" height="100" style="margin-top:6px"></canvas>
       </div>
-      <div><label><input id="cfgEnabled" type="checkbox"> Activée</label></div>
-      <div><label><input id="cfgMuted" type="checkbox"> Mute (ignore notes)</label></div>
-      <div><label><input id="cfgUseLut" type="checkbox"> Utiliser la LUT</label></div>
+      <div>
+        <label><input id="cfgEnabled" type="checkbox"> Activée <span class="help" title="Désactivée : toutes les notes/CC sont ignorés">?</span></label>
+        <label style="margin-top:6px"><input id="cfgMuted" type="checkbox"> Mute <span class="help" title="Reçoit les events mais n'ouvre pas l'air. Utile pour solo flute.">?</span></label>
+        <label style="margin-top:6px"><input id="cfgUseLut" type="checkbox"> Utiliser la LUT <span class="help" title="LUT = table de calibration note→position. Sinon mapping linéaire (approximatif).">?</span></label>
+      </div>
+    </div>
+
+    <h3 style="margin-top: 16px">Mapping CC <span class="small" style="margin-left:auto">0 = désactivé</span></h3>
+    <div class="row3">
+      <div><label>CC Breath <span class="help" title="Contrôle le débit d'air (servo). Standard : 2.">?</span></label>
+        <input id="cfgCcBreath" type="number" min="0" max="127"></div>
+      <div><label>CC Expression <span class="help" title="Standard : 11. Aussi mappé sur le débit air.">?</span></label>
+        <input id="cfgCcExpr" type="number" min="0" max="127"></div>
+      <div><label>CC Volume <span class="help" title="Standard : 7. Mappé sur débit air.">?</span></label>
+        <input id="cfgCcVolume" type="number" min="0" max="127"></div>
+      <div><label>CC Vibrato <span class="help" title="Mod wheel = 1. Déclenche vibrato sur le slide.">?</span></label>
+        <input id="cfgCcVibrato" type="number" min="0" max="127"></div>
+      <div><label>CC Sustain <span class="help" title="Pédale = 64. Réservé pour future implémentation.">?</span></label>
+        <input id="cfgCcSustain" type="number" min="0" max="127"></div>
     </div>
     <div class="btn-row">
       <button class="btn btn-primary" onclick="saveFluteCfg()">💾 Sauvegarder</button>
@@ -683,8 +786,9 @@ function render() {
           <button class="btn" onclick="toggleEnable(${f.id}, ${!f.enabled})">${f.enabled?'Désactiver':'Activer'}</button>
           <button class="btn" onclick="toggleMute(${f.id}, ${!f.muted})">${f.muted?'Unmute':'Mute'}</button>
           <button class="btn" onclick="soloFlute(${f.id})">🎯 Solo</button>
-          <button class="btn btn-warn" onclick="homeOne(${f.id})">⌂ Homing</button>
-          <button class="btn btn-warn" onclick="testAir(${f.id})">Test air</button>
+          <button class="btn btn-warn" onclick="homeOne(${f.id})" title="Homing">⌂ Homing</button>
+          <button class="btn btn-warn" onclick="testAir(${f.id})" title="Test ouverture solénoïde + balayage servo">Test air</button>
+          <button class="btn btn-warn" onclick="sweepOne(${f.id})" title="Test mécanique : 0 → fond → 0">⇄ Sweep</button>
           <button class="btn btn-danger" onclick="panic(${f.id})">Panic</button>
         </div>
       </div>`;
@@ -770,9 +874,19 @@ async function loadFluteCfg() {
   document.getElementById('cfgWait').value     = c.wait_delay_ms;
   document.getElementById('cfgLegato').value   = c.legato_ms;
   document.getElementById('cfgVelCurve').value  = c.velocity_curve ?? 1;
+  document.getElementById('cfgCustomName').value = c.custom_name || '';
+  document.getElementById('cfgCustomName').placeholder = c.default_name || '';
+  document.getElementById('cfgCcBreath').value   = c.cc_breath ?? 2;
+  document.getElementById('cfgCcExpr').value     = c.cc_expression ?? 11;
+  document.getElementById('cfgCcVolume').value   = c.cc_volume ?? 7;
+  document.getElementById('cfgCcVibrato').value  = c.cc_vibrato ?? 1;
+  document.getElementById('cfgCcSustain').value  = c.cc_sustain ?? 64;
   document.getElementById('cfgEnabled').checked = c.enabled;
   document.getElementById('cfgMuted').checked   = c.muted;
   document.getElementById('cfgUseLut').checked  = c.use_lut;
+  // Range editor sync
+  syncRangeFromInputs();
+  drawVelCurve();
   buildLutBox(c.lut || []);
 }
 
@@ -780,6 +894,7 @@ async function saveFluteCfg() {
   const id = +document.getElementById('cfgFluteSel').value;
   await postJson('/api/flute', {
     id,
+    custom_name:  document.getElementById('cfgCustomName').value,
     midi_channel: +document.getElementById('cfgChan').value,
     note_min:     +document.getElementById('cfgNmin').value,
     note_max:     +document.getElementById('cfgNmax').value,
@@ -790,6 +905,11 @@ async function saveFluteCfg() {
     wait_delay_ms:+document.getElementById('cfgWait').value,
     legato_ms:    +document.getElementById('cfgLegato').value,
     velocity_curve: +document.getElementById('cfgVelCurve').value,
+    cc_breath:     +document.getElementById('cfgCcBreath').value,
+    cc_expression: +document.getElementById('cfgCcExpr').value,
+    cc_volume:     +document.getElementById('cfgCcVolume').value,
+    cc_vibrato:    +document.getElementById('cfgCcVibrato').value,
+    cc_sustain:    +document.getElementById('cfgCcSustain').value,
     enabled:      document.getElementById('cfgEnabled').checked,
     muted:        document.getElementById('cfgMuted').checked,
     use_lut:      document.getElementById('cfgUseLut').checked,
@@ -1220,13 +1340,166 @@ async function rebootSystem() {
   toast('Redémarrage en cours...', 'warn', 5000);
 }
 
+async function sweepOne(id) { await postJson('/api/flute/sweep', {id}); toast('Sweep en cours'); }
+
+// ============================================================================
+// Theme
+// ============================================================================
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  localStorage.setItem('theme', t);
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+  applyTheme(cur === 'dark' ? 'light' : 'dark');
+}
+applyTheme(localStorage.getItem('theme') || 'dark');
+
+// ============================================================================
+// Range editor (note range double slider)
+// ============================================================================
+function setupRangeEditor() {
+  const a = document.getElementById('rangeMin');
+  const b = document.getElementById('rangeMax');
+  const sync = () => {
+    let lo = +a.value, hi = +b.value;
+    if (lo >= hi) { if (a === document.activeElement) lo = hi - 1; else hi = lo + 1; }
+    a.value = lo; b.value = hi;
+    document.getElementById('cfgNmin').value = lo;
+    document.getElementById('cfgNmax').value = hi;
+    document.getElementById('rngLblMin').textContent = noteName(lo);
+    document.getElementById('rngLblMax').textContent = noteName(hi);
+    document.getElementById('rangeLabel').textContent = `${noteName(lo)} – ${noteName(hi)} (${hi-lo+1} notes)`;
+    const left  = (lo / 127) * 100;
+    const right = ((127 - hi) / 127) * 100;
+    document.getElementById('rangeSel').style.left  = left + '%';
+    document.getElementById('rangeSel').style.right = right + '%';
+  };
+  a.addEventListener('input', sync);
+  b.addEventListener('input', sync);
+  // Aussi quand l'utilisateur édite les inputs numériques
+  document.getElementById('cfgNmin').addEventListener('input', () => { a.value = document.getElementById('cfgNmin').value; sync(); });
+  document.getElementById('cfgNmax').addEventListener('input', () => { b.value = document.getElementById('cfgNmax').value; sync(); });
+}
+function syncRangeFromInputs() {
+  document.getElementById('rangeMin').value = document.getElementById('cfgNmin').value;
+  document.getElementById('rangeMax').value = document.getElementById('cfgNmax').value;
+  // déclencher sync
+  document.getElementById('rangeMin').dispatchEvent(new Event('input'));
+}
+
+// ============================================================================
+// Velocity curve preview
+// ============================================================================
+function drawVelCurve() {
+  const c = document.getElementById('velCurveCanvas');
+  if (!c) return;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (w === 0) return;
+  if (c.width !== w) c.width = w;
+  if (c.height !== h) c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  const curve = +document.getElementById('cfgVelCurve').value;
+  // Grille
+  ctx.strokeStyle = 'rgba(128,128,128,.2)';
+  for (let i = 1; i < 4; i++) {
+    const y = (i / 4) * h;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+  // Linéaire de référence
+  ctx.strokeStyle = 'rgba(128,128,128,.4)'; ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(0, h); ctx.lineTo(w, 0); ctx.stroke(); ctx.setLineDash([]);
+  // Courbe
+  ctx.strokeStyle = '#00d084'; ctx.lineWidth = 2; ctx.beginPath();
+  for (let i = 0; i <= 127; i++) {
+    let v = i / 127;
+    if (curve === 1) v = v*v;
+    else if (curve === 2) v = v*v*v;
+    const x = (i / 127) * w;
+    const y = h - v * h;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  // Légende
+  ctx.fillStyle = '#00d084'; ctx.font = '10px ui-monospace';
+  const labels = ['linéaire', 'quadratique', 'cubique'];
+  ctx.fillText(labels[curve], 4, 12);
+}
+window.addEventListener('resize', drawVelCurve);
+
+// ============================================================================
+// Health check (dashboard)
+// ============================================================================
+async function refreshHealth() {
+  const box = document.getElementById('dashHealth');
+  if (!box) return;
+  const issues = [];
+  // sys_state
+  if (state.sys_state === 'ERROR')   issues.push({lvl:'error', msg:'Système en ERREUR — vérifier endstops'});
+  if (state.sys_state === 'HOMING')  issues.push({lvl:'warn',  msg:'Homing en cours...'});
+  // flutes
+  (state.flutes||[]).forEach(f => {
+    if (f.enabled && !f.homed) issues.push({lvl:'warn', msg:`Flûte #${f.id} ${f.name} : non homée`});
+    if (f.muted)               issues.push({lvl:'warn', msg:`Flûte #${f.id} ${f.name} : mutée`});
+  });
+  // pressure
+  if (state.pressure?.fault && state.pressure.fault !== 'none') {
+    issues.push({lvl:'error', msg:`Pression : défaut ${state.pressure.fault}`});
+  }
+  if (state.pressure && !state.pressure.reservoir_ok) {
+    issues.push({lvl:'error', msg:'Réservoir vide'});
+  }
+  // heap (via /api/system, fetch occasionnel)
+  if (refreshHealth._lastSysFetch == null || Date.now() - refreshHealth._lastSysFetch > 5000) {
+    refreshHealth._lastSysFetch = Date.now();
+    try {
+      const sys = await getJson('/api/system');
+      if (sys) {
+        refreshHealth._heapMin = sys.heap_min;
+        refreshHealth._heapFree = sys.heap_free;
+      }
+    } catch(_) {}
+  }
+  if (refreshHealth._heapFree && refreshHealth._heapFree < 30000) {
+    issues.push({lvl:'warn', msg:`Heap libre faible : ${(refreshHealth._heapFree/1024).toFixed(1)} KB`});
+  }
+  if (!issues.length) {
+    box.innerHTML = '<div class="health-ok" style="font-size:14px">✓ Tout fonctionne normalement</div>';
+  } else {
+    box.innerHTML = issues.map(i =>
+      `<div class="health-${i.lvl}" style="margin:3px 0">${i.lvl==='error'?'⚠':'•'} ${i.msg}</div>`
+    ).join('');
+  }
+}
+setInterval(refreshHealth, 1500);
+
+// ============================================================================
+// Keyboard shortcuts
+// ============================================================================
+function showShortcuts() {
+  toast('Raccourcis : H=homing, P=panic, M=mute all, U=unmute all, T=thème, ?=aide', 'success', 6000);
+}
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  switch (e.key.toLowerCase()) {
+    case 'h': postNoBody('/api/homing'); toast('Homing global'); break;
+    case 'p': postNoBody('/api/panic');  toast('Panic !', 'warn'); break;
+    case 'm': postJson('/api/flutes/all', {action:'muteAll'}); toast('Toutes mutées', 'warn'); break;
+    case 'u': postJson('/api/flutes/all', {action:'unmuteAll'}); toast('Toutes démutées'); break;
+    case 't': toggleTheme(); break;
+    case '?': showShortcuts(); break;
+  }
+});
+
 // ============================================================================
 // Init
 // ============================================================================
 buildPiano();
+setupRangeEditor();
 connectWs();
 // premier fetch immédiat
-getJson('/api/status').then(s => { state = s; render(); });
+getJson('/api/status').then(s => { state = s; render(); refreshHealth(); });
 </script>
 
 </body>
