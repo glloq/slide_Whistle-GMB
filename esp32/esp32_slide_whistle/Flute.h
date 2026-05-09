@@ -51,6 +51,11 @@ private:
   uint8_t  _ccVibrato = 1;     // mod wheel
   uint8_t  _ccSustain = 64;    // pédale sustain (placeholder)
 
+  // Transpose : ajouté à chaque note entrante. Borne automatiquement à
+  // [_noteMin, _noteMax]. Permet par exemple de jouer ch1 en C major mais
+  // que la flûte sonne une octave plus haut.
+  int8_t   _transpose = 0;     // demi-tons (-24 à +24 typiquement)
+
 public:
   Flute(uint8_t id, const FluteHwConfig& cfg)
     : _id(id), _cfg(cfg),
@@ -83,18 +88,29 @@ public:
     return note >= _noteMin && note <= _noteMax;
   }
 
+  // Applique transpose puis clamp à la plage. Renvoie 0xFF si hors plage
+  // (et donc la note doit être ignorée).
+  uint8_t applyTranspose(uint8_t note) const {
+    int t = (int)note + (int)_transpose;
+    if (t < _noteMin || t > _noteMax) return 0xFF;
+    return (uint8_t)t;
+  }
+
   void handleNoteOn(uint8_t note, uint8_t velocity) {
     if (!_enabled || _muted) return;
-    if (!acceptsNote(note)) return;
-    _lastNote      = note;
+    uint8_t effective = applyTranspose(note);
+    if (effective == 0xFF) return;             // hors plage après transpose
+    _lastNote      = effective;
     _noteActive    = true;
     _lastMidiActMs = millis();
-    _stepper.moveToMidiNote(note);
+    _stepper.moveToMidiNote(effective);
     _air.startAir(velocity);
   }
 
   void handleNoteOff(uint8_t note) {
-    if (note != _lastNote || !_noteActive) return;
+    uint8_t effective = applyTranspose(note);
+    if (effective == 0xFF) return;
+    if (effective != _lastNote || !_noteActive) return;
     _noteActive    = false;
     _lastMidiActMs = millis();
     _air.stopAir();
@@ -172,6 +188,11 @@ public:
   void    setCcVolume(uint8_t c)  { _ccVolume  = c; }
   void    setCcVibrato(uint8_t c) { _ccVibrato = c; }
   void    setCcSustain(uint8_t c) { _ccSustain = c; }
+  int8_t  getTranspose() const { return _transpose; }
+  void    setTranspose(int8_t t) {
+    _transpose = constrain((int)t, -36, 36);
+    if (_noteActive) panic();              // évite des notes coincées
+  }
 
   StepperControl& stepper() { return _stepper; }
   AirControl&     air()     { return _air; }

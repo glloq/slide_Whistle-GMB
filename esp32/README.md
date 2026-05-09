@@ -194,12 +194,15 @@ GET  /api/backup                  — JSON complet (Content-Disposition: attachm
 POST /api/restore                 — body = JSON déjà téléchargé, applique tout
 ```
 
-### Système / diagnostic
+### Système / diagnostic / OTA
 
 ```
 GET  /api/system                  — chip, heap, MAC, état endstop par flûte,
                                     raw ADC capteur pression, etc.
 POST /api/system/reboot           — redémarrage logiciel
+POST /api/system/update           — multipart/form-data avec un .bin :
+                                    flashe la partition OTA inactive et reboot
+GET  /api/midi/log.csv            — export CSV téléchargeable du ring buffer
 ```
 
 ### Démo (mélodies pré-enregistrées)
@@ -231,6 +234,8 @@ Le POST `/api/flute` accepte aussi :
 - `custom_name` (string, vide = nom par défaut)
 - `cc_breath`, `cc_expression`, `cc_volume`, `cc_vibrato`, `cc_sustain`
   — numéros CC (0 = désactivé) routés vers les fonctions correspondantes
+- `transpose` (int -36..+36) — décale les notes entrantes de N demi-tons,
+  notes hors plage [note_min, note_max] sont ignorées
 
 ### Pression
 

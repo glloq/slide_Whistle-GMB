@@ -266,6 +266,38 @@
   }
   .key.black .label { color: #aaa; bottom: 2px; font-size: 7px; }
 
+  /* Sticky save bar (config dirty) */
+  .sticky-save {
+    position: sticky; bottom: 0; left: 0; right: 0;
+    background: var(--card); border-top: 2px solid var(--green);
+    padding: 10px 16px; margin: 16px -16px -16px -16px;
+    display: none; align-items: center; justify-content: space-between;
+    box-shadow: 0 -4px 12px rgba(0,0,0,.3); z-index: 50;
+  }
+  .sticky-save.show { display: flex; }
+  .sticky-save .label { color: var(--yellow); font-weight: 600; font-size: 13px; }
+
+  /* Mini-piano range indicator on flute card */
+  .mini-piano {
+    display: flex; height: 14px; gap: 1px; margin: 4px 0;
+    background: var(--bg); border-radius: 3px; padding: 1px;
+    overflow: hidden;
+  }
+  .mini-piano-key {
+    flex: 1; background: var(--border); border-radius: 1px;
+  }
+  .mini-piano-key.in-range { background: var(--flute-color, var(--green)); opacity: .55; }
+  .mini-piano-key.playing  { background: var(--flute-color, var(--green)); opacity: 1; }
+
+  /* Connection indicator */
+  #connDot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted); margin-right: 4px; transition: background .3s;
+  }
+  #connDot.ok       { background: var(--green); box-shadow: 0 0 4px var(--green); }
+  #connDot.lost     { background: var(--orange); animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .3; } }
+
   /* MIDI channel counters strip */
   .ch-strip {
     display: grid; grid-template-columns: repeat(16, 1fr);
@@ -386,6 +418,7 @@
 
 <header>
   <h1>🎼 Slide Whistle Controller</h1>
+  <span title="Connexion WebSocket"><span id="connDot"></span><span id="connLabel" class="small">déconnecté</span></span>
   <span id="sysBadge" class="badge b-init">INIT</span>
   <span id="fluteCount" class="pill">0 flûtes</span>
   <span id="pressBadge" class="pill" style="display:none">PRESSION</span>
@@ -610,6 +643,16 @@
       <div><label>CC Sustain <span class="help" title="Pédale = 64. Réservé pour future implémentation.">?</span></label>
         <input id="cfgCcSustain" type="number" min="0" max="127"></div>
     </div>
+
+    <div class="row2" style="margin-top:8px">
+      <div>
+        <label>Transpose (demi-tons) <span class="help" title="Décale les notes entrantes de N demi-tons (ex: +12 = octave plus haute). Notes hors plage sont ignorées.">?</span></label>
+        <input id="cfgTranspose" type="number" min="-36" max="36" value="0">
+      </div>
+      <div class="small" style="align-self:end; padding-bottom:4px">
+        Ex : ch1 reçoit C4, transpose +12 → flûte joue C5
+      </div>
+    </div>
     <div class="btn-row">
       <button class="btn btn-primary" onclick="saveFluteCfg()">💾 Sauvegarder</button>
       <button class="btn btn-warn" onclick="testFluteAir()">🌬 Test air</button>
@@ -625,6 +668,14 @@
       <summary class="small" style="cursor:pointer">Édition par valeur (table complète)</summary>
       <div id="lutBox" style="margin-top:8px"></div>
     </details>
+
+    <div id="cfgDirtyBar" class="sticky-save">
+      <span class="label">⚠ Modifications non sauvegardées</span>
+      <span>
+        <button class="btn" onclick="loadFluteCfg()">Annuler</button>
+        <button class="btn btn-primary" onclick="saveFluteCfg()">💾 Sauvegarder (Ctrl+S)</button>
+      </span>
+    </div>
   </div>
 </div>
 
@@ -633,8 +684,31 @@
 <!-- ============================================================ -->
 <div id="page-midi" class="page">
   <div class="card">
-    <h3>Activité MIDI <button class="btn" style="margin-left:auto" onclick="loadMidiLog()">⟲ Rafraîchir</button></h3>
-    <div class="small" style="margin-bottom:8px">Dernières 32 messages reçus (ring buffer ESP32). Les messages plus anciens sont écrasés.</div>
+    <h3>Activité MIDI
+      <span style="margin-left:auto; display:flex; gap:6px">
+        <button class="btn" onclick="loadMidiLog()">⟲ Rafraîchir</button>
+        <button class="btn" onclick="window.open('/api/midi/log.csv','_blank')">⬇ CSV</button>
+      </span>
+    </h3>
+    <div class="small" style="margin-bottom:8px">
+      Dernières 32 messages reçus (ring buffer ESP32). Les messages plus anciens sont écrasés.
+      <label style="margin-left:12px"><input type="checkbox" id="midiAutoRefresh" checked> auto-refresh</label>
+    </div>
+    <div class="row3" style="margin-bottom:8px">
+      <div><label>Filtre type</label>
+        <select id="midiFilterType">
+          <option value="">tous</option>
+          <option value="NoteOn">NoteOn</option>
+          <option value="NoteOff">NoteOff</option>
+          <option value="CC">CC</option>
+          <option value="PitchBend">PitchBend</option>
+          <option value="Aftertouch">Aftertouch</option>
+        </select></div>
+      <div><label>Filtre canal (1-16, 0=tous)</label>
+        <input type="number" id="midiFilterCh" min="0" max="16" value="0"></div>
+      <div><label>&nbsp;</label>
+        <button class="btn" onclick="loadMidiLog()" style="width:100%">Appliquer</button></div>
+    </div>
     <div id="midiLog" class="log-box">Chargement...</div>
   </div>
 </div>
@@ -684,6 +758,19 @@
   <div class="card" style="margin-top:12px">
     <h3>Diagnostic pression</h3>
     <div id="diagPressure" class="small">—</div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h3>Mise à jour OTA <span class="small">⚠ téléverser un .bin compilé du même sketch</span></h3>
+    <div class="small" style="margin-bottom:8px">
+      Sélectionnez le fichier <code>.bin</code> compilé (Sketch → Exporter binaire compilé).
+      Le système flashe la partition OTA inactive puis redémarre automatiquement.
+    </div>
+    <input type="file" id="otaFile" accept=".bin" style="margin-bottom:8px">
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="otaUpload()" id="otaBtn">⬆ Lancer la mise à jour</button>
+    </div>
+    <div id="otaProgress" class="small" style="margin-top:8px"></div>
   </div>
 </div>
 
@@ -813,13 +900,31 @@ async function getJson(url) {
 // ============================================================================
 // WebSocket
 // ============================================================================
+let _wsConnected = false;
+let _wsReconnectCount = 0;
+function setConnState(ok) {
+  const dot = document.getElementById('connDot');
+  const lbl = document.getElementById('connLabel');
+  if (dot) dot.className = ok ? 'ok' : 'lost';
+  if (lbl) lbl.textContent = ok ? 'connecté' : 'reconnexion...';
+  // Toast on reconnect (skip first connect)
+  if (ok && !_wsConnected && _wsReconnectCount > 0) toast('Reconnecté au serveur', 'success');
+  if (!ok && _wsConnected) toast('Connexion WebSocket perdue', 'warn');
+  _wsConnected = ok;
+}
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { setConnState(true); };
   ws.onmessage = e => {
     try { state = JSON.parse(e.data); render(); } catch(_) {}
   };
-  ws.onclose = () => setTimeout(connectWs, 2000);
+  ws.onclose = () => {
+    setConnState(false);
+    _wsReconnectCount++;
+    setTimeout(connectWs, 2000);
+  };
+  ws.onerror = () => setConnState(false);
 }
 
 // ============================================================================
@@ -827,6 +932,8 @@ function connectWs() {
 // ============================================================================
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const noteName = n => `${NOTE_NAMES[n%12]}${Math.floor(n/12)-1}`;
+const noteFreq = n => 440 * Math.pow(2, (n - 69) / 12);
+const noteWithFreq = n => `${noteName(n)} (${noteFreq(n).toFixed(1)}Hz)`;
 
 function fmtUptime(ms) {
   const s = Math.floor(ms/1000);
@@ -895,7 +1002,14 @@ function render() {
         </div>
         <div class="slider-label"><span>0</span><span>${f.position_mm?.toFixed?.(1)||'—'} mm</span><span>${travel}</span></div>
         <div class="stat" style="margin-top:6px"><span class="stat-label">Note</span>
-          <span class="stat-value">${f.note_active?noteName(f.last_note):'—'}</span></div>
+          <span class="stat-value">${f.note_active?noteWithFreq(f.last_note):'—'}</span></div>
+        <div class="mini-piano">
+          ${Array.from({length: f.note_max - f.note_min + 1}, (_, i) => {
+            const n = f.note_min + i;
+            const cls = (f.note_active && n === f.last_note) ? 'playing' : 'in-range';
+            return `<div class="mini-piano-key ${cls}" title="${noteName(n)}"></div>`;
+          }).join('')}
+        </div>
         <div class="stat"><span class="stat-label">Air</span>
           <span class="stat-value ${f.air_open?'':'muted'}">${f.air_state}</span></div>
         <div class="vu" title="PWM solénoïde ${f.pwm}/255"><div class="vu-fill" style="width:${pwmPct}%"></div></div>
@@ -1156,6 +1270,7 @@ async function loadFluteCfg() {
   document.getElementById('cfgCcVolume').value   = c.cc_volume ?? 7;
   document.getElementById('cfgCcVibrato').value  = c.cc_vibrato ?? 1;
   document.getElementById('cfgCcSustain').value  = c.cc_sustain ?? 64;
+  document.getElementById('cfgTranspose').value  = c.transpose ?? 0;
   document.getElementById('cfgEnabled').checked = c.enabled;
   document.getElementById('cfgMuted').checked   = c.muted;
   document.getElementById('cfgUseLut').checked  = c.use_lut;
@@ -1163,6 +1278,32 @@ async function loadFluteCfg() {
   syncRangeFromInputs();
   drawVelCurve();
   buildLutBox(c.lut || []);
+  clearCfgDirty();
+}
+
+// ---- Dirty state for config ------------------------------------------------
+let _cfgDirty = false;
+function markCfgDirty() {
+  _cfgDirty = true;
+  const bar = document.getElementById('cfgDirtyBar');
+  if (bar) bar.classList.add('show');
+}
+function clearCfgDirty() {
+  _cfgDirty = false;
+  const bar = document.getElementById('cfgDirtyBar');
+  if (bar) bar.classList.remove('show');
+}
+// Attacher des écouteurs aux champs de config (une fois le DOM chargé)
+function setupDirtyTracking() {
+  const ids = ['cfgCustomName','cfgChan','cfgNmin','cfgNmax','cfgSpeed','cfgAccel',
+    'cfgPwmFull','cfgPwmHold','cfgWait','cfgLegato','cfgVelCurve',
+    'cfgCcBreath','cfgCcExpr','cfgCcVolume','cfgCcVibrato','cfgCcSustain',
+    'cfgTranspose','cfgEnabled','cfgMuted','cfgUseLut'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', markCfgDirty);
+    if (el) el.addEventListener('change', markCfgDirty);
+  });
 }
 
 async function saveFluteCfg() {
@@ -1185,11 +1326,13 @@ async function saveFluteCfg() {
     cc_volume:     +document.getElementById('cfgCcVolume').value,
     cc_vibrato:    +document.getElementById('cfgCcVibrato').value,
     cc_sustain:    +document.getElementById('cfgCcSustain').value,
+    transpose:    +document.getElementById('cfgTranspose').value,
     enabled:      document.getElementById('cfgEnabled').checked,
     muted:        document.getElementById('cfgMuted').checked,
     use_lut:      document.getElementById('cfgUseLut').checked,
   });
   toast('Configuration sauvegardée');
+  clearCfgDirty();
 }
 
 async function testFluteAir() {
@@ -1397,17 +1540,78 @@ async function clearWifi() {
 async function loadMidiLog() {
   const log = await getJson('/api/midi/log');
   const box = document.getElementById('midiLog');
-  if (!log.length) { box.innerHTML = '<div class="small">Aucune activité MIDI récente.</div>'; return; }
-  box.innerHTML = log.slice().reverse().map(e => {
+  if (!log) return;
+  const filterType = document.getElementById('midiFilterType')?.value || '';
+  const filterCh   = +document.getElementById('midiFilterCh')?.value || 0;
+  const filtered = log.filter(e =>
+    (!filterType || e.type === filterType) &&
+    (!filterCh   || e.channel === filterCh)
+  );
+  if (!filtered.length) { box.innerHTML = '<div class="small">Aucune activité correspondant aux filtres.</div>'; return; }
+  box.innerHTML = filtered.slice().reverse().map(e => {
     const age = e.t_rel_ms < 1000 ? `${e.t_rel_ms}ms` : `${(e.t_rel_ms/1000).toFixed(1)}s`;
     let body = '';
-    if (e.type === 'NoteOn')        body = `note ${e.data1} (${noteName(e.data1)}) vel=${e.data2}`;
-    else if (e.type === 'NoteOff')  body = `note ${e.data1} (${noteName(e.data1)})`;
+    if (e.type === 'NoteOn')        body = `${noteName(e.data1)} (${e.data1}) vel=${e.data2}`;
+    else if (e.type === 'NoteOff')  body = `${noteName(e.data1)} (${e.data1})`;
     else if (e.type === 'CC')       body = `CC${e.data1}=${e.data2}`;
     else if (e.type === 'PitchBend')body = `bend=${e.bend}`;
     else if (e.type === 'Aftertouch')body= `pressure=${e.data1}`;
-    return `<div class="log-line log-${e.type}">-${age.padStart(6)} ch${e.channel} ${e.type.padEnd(10)} ${body}</div>`;
+    return `<div class="log-line log-${e.type}">-${age.padStart(6)} ch${String(e.channel).padStart(2)} ${e.type.padEnd(10)} ${body}</div>`;
   }).join('');
+}
+// Auto-refresh MIDI log toutes 1.5s si page ouverte ET checkbox cochée
+setInterval(() => {
+  if (document.getElementById('page-midi')?.classList.contains('active') &&
+      document.getElementById('midiAutoRefresh')?.checked) loadMidiLog();
+}, 1500);
+
+// ============================================================================
+// OTA upload
+// ============================================================================
+async function otaUpload() {
+  const f = document.getElementById('otaFile').files[0];
+  if (!f) { toast('Sélectionnez un fichier .bin', 'warn'); return; }
+  if (!await confirmDialog(
+        `Flasher "${f.name}" (${(f.size/1024).toFixed(1)} KB) ?\nLe système redémarrera automatiquement.`,
+        'Mise à jour OTA', 'Flasher')) return;
+  const btn = document.getElementById('otaBtn');
+  const prog = document.getElementById('otaProgress');
+  btn.disabled = true;
+  prog.textContent = 'Upload en cours...';
+  showLoading();
+  try {
+    const fd = new FormData();
+    fd.append('firmware', f, f.name);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/system/update');
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) {
+        const pct = (e.loaded / e.total) * 100;
+        prog.textContent = `Upload ${pct.toFixed(0)}% (${(e.loaded/1024).toFixed(1)}/${(e.total/1024).toFixed(1)} KB)`;
+      }
+    };
+    xhr.onload = () => {
+      hideLoading();
+      btn.disabled = false;
+      if (xhr.status === 200) {
+        prog.innerHTML = '<span style="color:var(--green)">✓ Mise à jour OK — redémarrage en cours...</span>';
+        toast('Firmware flashé, reboot...', 'success', 8000);
+      } else {
+        prog.innerHTML = '<span style="color:var(--orange)">✗ Échec : ' + xhr.responseText + '</span>';
+        toast('Échec OTA', 'error', 6000);
+      }
+    };
+    xhr.onerror = () => {
+      hideLoading();
+      btn.disabled = false;
+      prog.innerHTML = '<span style="color:var(--orange)">✗ Erreur réseau</span>';
+    };
+    xhr.send(fd);
+  } catch(e) {
+    hideLoading();
+    btn.disabled = false;
+    prog.textContent = 'Erreur : ' + e.message;
+  }
 }
 
 // ============================================================================
@@ -1762,6 +1966,13 @@ function showShortcuts() {
   toast('Raccourcis (hors page Jouer) : H=homing, P=panic, M=mute all, T=thème, S=synth, ?=aide. Sur Jouer : A,W,S,E,D,F,T,G,Y,H,U,J,K… = notes (C4→)', 'success', 8000);
 }
 document.addEventListener('keydown', e => {
+  // Ctrl+S = sauvegarder la config si page Réglages ouverte et dirty
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    if (document.getElementById('page-config')?.classList.contains('active') && _cfgDirty) {
+      e.preventDefault(); saveFluteCfg();
+    }
+    return;
+  }
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
   if (e.repeat) return;
   if (isPlayPageActive() && KEYBOARD_MAP[e.key.toLowerCase()] != null) return;  // page Jouer = piano
@@ -1781,6 +1992,7 @@ document.addEventListener('keydown', e => {
 // ============================================================================
 buildPiano();
 setupRangeEditor();
+setupDirtyTracking();
 connectWs();
 // premier fetch immédiat
 getJson('/api/status').then(s => { state = s; render(); refreshHealth(); });

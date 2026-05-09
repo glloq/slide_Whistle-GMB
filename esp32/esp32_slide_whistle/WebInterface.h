@@ -35,6 +35,7 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <Preferences.h>
+#include <Update.h>
 #include "settings.h"
 #include "Orchestra.h"
 #include "PressureControl.h"
@@ -149,6 +150,7 @@ private:
     doc["cc_volume"]      = f->getCcVolume();
     doc["cc_vibrato"]     = f->getCcVibrato();
     doc["cc_sustain"]     = f->getCcSustain();
+    doc["transpose"]      = f->getTranspose();
     doc["use_lut"]        = f->stepper().getUseLUT();
     doc["slider_travel_mm"] = f->config().sliderTravelMM;
     JsonArray lut = doc.createNestedArray("lut");
@@ -214,6 +216,7 @@ private:
     prefs.putUChar("ccVolume",  f->getCcVolume());
     prefs.putUChar("ccVibrato", f->getCcVibrato());
     prefs.putUChar("ccSustain", f->getCcSustain());
+    prefs.putChar("trans",      f->getTranspose());
     prefs.putBool("useLUT",    f->stepper().getUseLUT());
     prefs.putBytes("lut",      f->stepper().getLUT(),
                    sizeof(float) * MIDI_LUT_SIZE);
@@ -243,6 +246,7 @@ private:
     f->setCcVolume (prefs.getUChar("ccVolume",  7));
     f->setCcVibrato(prefs.getUChar("ccVibrato", 1));
     f->setCcSustain(prefs.getUChar("ccSustain",64));
+    f->setTranspose(prefs.getChar("trans", 0));
     f->stepper().setUseLUT(prefs.getBool("useLUT", false));
     if (prefs.getBytesLength("lut") == sizeof(float) * MIDI_LUT_SIZE) {
       float buf[MIDI_LUT_SIZE];
@@ -391,6 +395,11 @@ private:
         if (!ccCheck("cc_volume",     &Flute::setCcVolume))  return;
         if (!ccCheck("cc_vibrato",    &Flute::setCcVibrato)) return;
         if (!ccCheck("cc_sustain",    &Flute::setCcSustain)) return;
+        if (o.containsKey("transpose")) {
+          int v = o["transpose"];
+          if (v < -36 || v > 36) { req->send(400, "application/json", "{\"error\":\"transpose\"}"); return; }
+          f->setTranspose((int8_t)v);
+        }
         if (o.containsKey("use_lut")) f->stepper().setUseLUT(o["use_lut"].as<bool>());
 
         saveFluteConfigNVS(f);
@@ -546,6 +555,26 @@ private:
         g_homingFluteId = (int)f->id();
         req->send(200, "application/json", "{\"ok\":true,\"message\":\"homing scheduled\"}");
       }));
+
+    // GET /api/midi/log.csv — export CSV téléchargeable
+    server.on("/api/midi/log.csv", HTTP_GET, [this](AsyncWebServerRequest* req) {
+      String csv = "t_rel_ms,type,channel,data1,data2,bend\n";
+      if (_midi) {
+        const char* types[] = {"NoteOn","NoteOff","CC","PitchBend","Aftertouch"};
+        unsigned long now = millis();
+        _midi->forEachLog([&](const auto& e) {
+          csv += String((uint32_t)(now - e.ts)) + ",";
+          csv += String(types[e.type < 5 ? e.type : 0]) + ",";
+          csv += String(e.channel) + ",";
+          csv += String(e.data1) + ",";
+          csv += String(e.data2) + ",";
+          csv += String(e.bend) + "\n";
+        });
+      }
+      AsyncWebServerResponse* r = req->beginResponse(200, "text/csv", csv);
+      r->addHeader("Content-Disposition", "attachment; filename=\"midi_log.csv\"");
+      req->send(r);
+    });
 
     // GET /api/midi/log — dernières activités MIDI (ring buffer)
     server.on("/api/midi/log", HTTP_GET, [this](AsyncWebServerRequest* req) {
@@ -799,6 +828,51 @@ private:
         ESP.restart();
       }, "reboot", 2048, nullptr, 1, nullptr);
     });
+
+    // ---- OTA firmware update --------------------------------------------
+    // POST /api/system/update — multipart/form-data avec un fichier .bin
+    // (compilé avec le même schéma de partition).
+    // Le sketch flashe le binaire dans la partition OTA inactive puis reboot.
+
+    server.on("/api/system/update", HTTP_POST,
+      // Réponse finale après le upload
+      [](AsyncWebServerRequest* req) {
+        bool ok = !Update.hasError();
+        AsyncWebServerResponse* r = req->beginResponse(
+          ok ? 200 : 500,
+          "application/json",
+          ok ? "{\"ok\":true,\"message\":\"reboot in 2s\"}"
+             : "{\"ok\":false,\"error\":\"update failed\"}");
+        r->addHeader("Connection", "close");
+        req->send(r);
+        if (ok) {
+          xTaskCreate([](void*) {
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            ESP.restart();
+          }, "ota_reboot", 2048, nullptr, 1, nullptr);
+        }
+      },
+      // Handler upload (appelé en chunks)
+      [](AsyncWebServerRequest* req, String filename, size_t index,
+         uint8_t* data, size_t len, bool final) {
+        if (index == 0) {
+          Serial.printf("[OTA] début upload : %s\n", filename.c_str());
+          // U_FLASH = firmware (sketch). U_SPIFFS = LittleFS.
+          if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+            Update.printError(Serial);
+          }
+        }
+        if (len) {
+          if (Update.write(data, len) != len) Update.printError(Serial);
+        }
+        if (final) {
+          if (Update.end(true)) {
+            Serial.printf("[OTA] succès : %u bytes\n", (unsigned)(index + len));
+          } else {
+            Update.printError(Serial);
+          }
+        }
+      });
 
     // ---- DEMO PLAYER ------------------------------------------------------
 
