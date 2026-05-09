@@ -49,6 +49,26 @@ private:
   int      _lastBend    = 0;
   uint32_t _msgCount    = 0;
 
+  // Ring buffer d'activité MIDI (pour affichage UI)
+  static constexpr uint8_t LOG_SIZE = 32;
+  struct LogEntry {
+    uint32_t  ts;        // millis()
+    uint8_t   type;      // 0=NoteOn 1=NoteOff 2=CC 3=PB 4=AT
+    uint8_t   channel;
+    uint8_t   data1;
+    uint8_t   data2;
+    int16_t   bend;      // pour PB
+  };
+  LogEntry _log[LOG_SIZE];
+  uint8_t  _logHead = 0;
+  uint8_t  _logCount = 0;
+
+  void pushLog(uint8_t type, uint8_t ch, uint8_t d1, uint8_t d2, int16_t bend = 0) {
+    _log[_logHead] = { millis(), type, ch, d1, d2, bend };
+    _logHead = (_logHead + 1) % LOG_SIZE;
+    if (_logCount < LOG_SIZE) _logCount++;
+  }
+
   inline static MIDIHandler* _instance = nullptr;
 
 #if MIDI_SOURCE_SERIAL
@@ -98,6 +118,7 @@ private:
     _lastChannel = channel;
     _lastNote    = note;
     _msgCount++;
+    pushLog(0, channel, note, velocity);
 #if DEBUG_MODE
     Serial.printf("[MIDI] ch%u NoteOn %u vel=%u\n", channel, note, velocity);
 #endif
@@ -107,6 +128,7 @@ private:
   void dispatchNoteOff(uint8_t channel, uint8_t note) {
     _lastChannel = channel;
     _msgCount++;
+    pushLog(1, channel, note, 0);
 #if DEBUG_MODE
     Serial.printf("[MIDI] ch%u NoteOff %u\n", channel, note);
 #endif
@@ -117,6 +139,7 @@ private:
     _lastChannel = channel;
     _lastBend    = raw;
     _msgCount++;
+    pushLog(3, channel, 0, 0, (int16_t)raw);
     float semitones = (raw / 8192.0f) * PITCHBEND_RANGE_SEMITONES;
     if (_onPitchBend) _onPitchBend(channel, semitones);
   }
@@ -124,6 +147,7 @@ private:
   void dispatchAftertouch(uint8_t channel, uint8_t pressure) {
     _lastChannel = channel;
     _msgCount++;
+    pushLog(4, channel, pressure, 0);
     bool active = pressure > 10;
     if (_onAftertouch) _onAftertouch(channel, active, pressure);
   }
@@ -131,6 +155,7 @@ private:
   void dispatchCC(uint8_t channel, uint8_t number, uint8_t value) {
     _lastChannel = channel;
     _msgCount++;
+    pushLog(2, channel, number, value);
 #if DEBUG_MODE
     Serial.printf("[MIDI] ch%u CC%u=%u\n", channel, number, value);
 #endif
@@ -205,6 +230,19 @@ public:
   uint8_t  getLastNote()    const { return _lastNote; }
   int      getPitchBendValue() const { return _lastBend; }
   uint32_t getMessageCount() const { return _msgCount; }
+
+  // ---- Activity log -------------------------------------------------------
+  // Itère du plus ancien au plus récent, appelle cb(entry) pour chaque
+  template <typename Fn>
+  void forEachLog(Fn cb) const {
+    uint8_t start = (_logCount < LOG_SIZE)
+                  ? 0
+                  : _logHead;  // wrap : oldest = head
+    for (uint8_t i = 0; i < _logCount; ++i) {
+      uint8_t idx = (start + i) % LOG_SIZE;
+      cb(_log[idx]);
+    }
+  }
 };
 
 #endif // MIDI_HANDLER_H

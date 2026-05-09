@@ -135,6 +135,61 @@
   .lut-grid > div { padding: 2px 0; }
 
   .small { font-size: 11px; color: var(--muted); }
+
+  /* Slider position visualization */
+  .slider-track {
+    position: relative;
+    height: 22px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin: 6px 0;
+    overflow: hidden;
+  }
+  .slider-pos {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 6px;
+    background: var(--green);
+    border-radius: 2px;
+    transition: left .1s linear;
+  }
+  .slider-range {
+    position: absolute;
+    top: 0; bottom: 0;
+    background: rgba(0,208,132,.12);
+    border-left: 1px dashed var(--green);
+    border-right: 1px dashed var(--green);
+  }
+  .slider-label { font-size: 10px; color: var(--muted); display: flex; justify-content: space-between; }
+
+  /* MIDI log */
+  .log-box {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px;
+    height: 240px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 12px;
+  }
+  .log-line { padding: 1px 0; }
+  .log-NoteOn   { color: var(--green); }
+  .log-NoteOff  { color: var(--muted); }
+  .log-CC       { color: var(--yellow); }
+  .log-PitchBend{ color: #6dd; }
+  .log-Aftertouch{ color: #f7c; }
+
+  /* Pressure mini-graph (canvas) */
+  canvas.spark { display: block; width: 100%; height: 60px; background: var(--bg); border-radius: 4px; }
+
+  /* Mobile */
+  @media (max-width: 600px) {
+    header h1 { font-size: 15px; }
+    nav { overflow-x: auto; flex-wrap: nowrap; padding: 8px; }
+    nav button { white-space: nowrap; padding: 5px 10px; font-size: 12px; }
+    .page { padding: 10px; }
+    .row3, .row2 { grid-template-columns: 1fr; }
+    .grid { grid-template-columns: 1fr; gap: 8px; }
+    .key.white { width: 22px; height: 64px; }
+    .key.black { width: 14px; height: 40px; margin: 0 -7px; }
+  }
 </style>
 </head>
 <body>
@@ -152,7 +207,9 @@
   <button data-page="flutes">Flûtes</button>
   <button data-page="play">Jouer</button>
   <button data-page="pressure">Pression</button>
+  <button data-page="midi">MIDI</button>
   <button data-page="config">Réglages</button>
+  <button data-page="presets">Presets</button>
   <button data-page="wifi">WiFi</button>
 </nav>
 
@@ -179,6 +236,7 @@
       <div id="dashPressure">
         <div class="stat-value muted">module désactivé</div>
       </div>
+      <canvas id="pressSpark" class="spark" width="300" height="60" style="margin-top:8px"></canvas>
     </div>
   </div>
 
@@ -285,6 +343,14 @@
       <div><label>Legato (ms)</label><input id="cfgLegato" type="number"></div>
     </div>
     <div class="row2">
+      <div>
+        <label>Courbe de vélocité</label>
+        <select id="cfgVelCurve">
+          <option value="0">0 — Linéaire</option>
+          <option value="1">1 — Quadratique (musical)</option>
+          <option value="2">2 — Cubique (très expressive)</option>
+        </select>
+      </div>
       <div><label><input id="cfgEnabled" type="checkbox"> Activée</label></div>
       <div><label><input id="cfgMuted" type="checkbox"> Mute (ignore notes)</label></div>
       <div><label><input id="cfgUseLut" type="checkbox"> Utiliser la LUT</label></div>
@@ -296,6 +362,39 @@
 
     <h3 style="margin-top: 16px">Calibration (LUT)</h3>
     <div id="lutBox"></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- MIDI LOG -->
+<!-- ============================================================ -->
+<div id="page-midi" class="page">
+  <div class="card">
+    <h3>Activité MIDI <button class="btn" style="margin-left:auto" onclick="loadMidiLog()">⟲ Rafraîchir</button></h3>
+    <div class="small" style="margin-bottom:8px">Dernières 32 messages reçus (ring buffer ESP32). Les messages plus anciens sont écrasés.</div>
+    <div id="midiLog" class="log-box">Chargement...</div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- PRESETS -->
+<!-- ============================================================ -->
+<div id="page-presets" class="page">
+  <div class="card">
+    <h3>Presets <span class="small" style="margin-left:auto">snapshot complet (toutes flûtes + pression)</span></h3>
+    <div class="row2">
+      <div>
+        <label>Nouveau preset (1-14 caractères)</label>
+        <input id="presetName" type="text" maxlength="14" placeholder="ex: concert_a">
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="savePreset()">💾 Enregistrer la config courante</button>
+        </div>
+      </div>
+      <div>
+        <label>Presets sauvegardés</label>
+        <div id="presetsList" class="small">Chargement...</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -333,9 +432,11 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   document.getElementById('page-' + b.dataset.page).classList.add('active');
-  if (b.dataset.page === 'config') loadFluteCfg();
+  if (b.dataset.page === 'config')   loadFluteCfg();
   if (b.dataset.page === 'pressure') loadPressureCfg();
-  if (b.dataset.page === 'wifi') loadWifi();
+  if (b.dataset.page === 'wifi')     loadWifi();
+  if (b.dataset.page === 'midi')     loadMidiLog();
+  if (b.dataset.page === 'presets')  loadPresets();
 });
 
 // ============================================================================
@@ -429,13 +530,17 @@ function render() {
     let cls = 'card flute-card';
     if (!f.enabled) cls += ' disabled';
     else if (f.muted) cls += ' muted';
+    const travel = f.slider_travel_mm || 300;
+    const posPct = Math.max(0, Math.min(100, ((f.position_mm||0)/travel)*100));
     return `
       <div class="${cls}">
         <h3><span><span class="flute-id">#${f.id}</span> ${f.name}</span>
             <span class="pill">ch${f.midi_channel||'omni'}</span></h3>
-        <div class="stat"><span class="stat-label">Position</span>
-          <span class="stat-value">${f.position_mm?.toFixed?.(1)||'—'} mm</span></div>
-        <div class="stat"><span class="stat-label">Note</span>
+        <div class="slider-track">
+          <div class="slider-pos" style="left: calc(${posPct}% - 3px)"></div>
+        </div>
+        <div class="slider-label"><span>0</span><span>${f.position_mm?.toFixed?.(1)||'—'} mm</span><span>${travel}</span></div>
+        <div class="stat" style="margin-top:6px"><span class="stat-label">Note</span>
           <span class="stat-value">${f.note_active?noteName(f.last_note):'—'}</span></div>
         <div class="stat"><span class="stat-label">Air</span>
           <span class="stat-value ${f.air_open?'':'muted'}">${f.air_state}</span></div>
@@ -448,21 +553,30 @@ function render() {
     let cls = 'card flute-card';
     if (!f.enabled) cls += ' disabled';
     else if (f.muted) cls += ' muted';
+    // Slider position visualization (0..slider_travel)
+    const travel = f.slider_travel_mm || 300;
+    const posPct = Math.max(0, Math.min(100, ((f.position_mm||0)/travel)*100));
+    const span = (f.note_max - f.note_min) || 1;
     return `
       <div class="${cls}">
         <h3>
           <span><span class="flute-id">#${f.id}</span> ${f.name}</span>
           <span>${f.homed?'<span class="pill ok">homed</span>':'<span class="pill fault">not homed</span>'}</span>
         </h3>
-        <div class="stat"><span class="stat-label">Position</span>
-          <span class="stat-value">${f.position_mm?.toFixed?.(1)||'—'} mm</span></div>
-        <div class="stat"><span class="stat-label">Note (${f.note_min}-${f.note_max})</span>
+        <div class="slider-track">
+          <div class="slider-pos" style="left: calc(${posPct}% - 3px)"></div>
+        </div>
+        <div class="slider-label"><span>0 mm</span><span>${f.position_mm?.toFixed?.(1)||'—'} mm</span><span>${travel} mm</span></div>
+        <div class="stat" style="margin-top:8px"><span class="stat-label">Plage MIDI</span>
+          <span class="stat-value">${noteName(f.note_min)}–${noteName(f.note_max)} (ch ${f.midi_channel||'omni'})</span></div>
+        <div class="stat"><span class="stat-label">Note jouée</span>
           <span class="stat-value">${f.note_active?noteName(f.last_note):'—'}</span></div>
         <div class="stat"><span class="stat-label">Air</span>
           <span class="stat-value ${f.air_open?'':'muted'}">${f.air_state} (pwm ${f.pwm})</span></div>
         <div class="btn-row">
           <button class="btn" onclick="toggleEnable(${f.id}, ${!f.enabled})">${f.enabled?'Désactiver':'Activer'}</button>
           <button class="btn" onclick="toggleMute(${f.id}, ${!f.muted})">${f.muted?'Unmute':'Mute'}</button>
+          <button class="btn btn-warn" onclick="homeOne(${f.id})">⌂ Homing</button>
           <button class="btn btn-warn" onclick="testAir(${f.id})">Test air</button>
           <button class="btn btn-danger" onclick="panic(${f.id})">Panic</button>
         </div>
@@ -525,6 +639,7 @@ async function toggleEnable(id, en) { await postJson('/api/flute', {id, enabled:
 async function toggleMute(id, m)    { await postJson('/api/flute', {id, muted:m}); }
 async function testAir(id)          { await postJson('/api/flute/test',  {id}); }
 async function panic(id)            { await postJson('/api/flute/panic', {id}); }
+async function homeOne(id)          { await postJson('/api/flute/homing', {id}); }
 
 // ============================================================================
 // Config page
@@ -543,6 +658,7 @@ async function loadFluteCfg() {
   document.getElementById('cfgPwmHold').value  = c.pwm_hold;
   document.getElementById('cfgWait').value     = c.wait_delay_ms;
   document.getElementById('cfgLegato').value   = c.legato_ms;
+  document.getElementById('cfgVelCurve').value  = c.velocity_curve ?? 1;
   document.getElementById('cfgEnabled').checked = c.enabled;
   document.getElementById('cfgMuted').checked   = c.muted;
   document.getElementById('cfgUseLut').checked  = c.use_lut;
@@ -562,6 +678,7 @@ async function saveFluteCfg() {
     pwm_hold:     +document.getElementById('cfgPwmHold').value,
     wait_delay_ms:+document.getElementById('cfgWait').value,
     legato_ms:    +document.getElementById('cfgLegato').value,
+    velocity_curve: +document.getElementById('cfgVelCurve').value,
     enabled:      document.getElementById('cfgEnabled').checked,
     muted:        document.getElementById('cfgMuted').checked,
     use_lut:      document.getElementById('cfgUseLut').checked,
@@ -654,6 +771,116 @@ async function clearWifi() {
   await fetch('/api/wifi', {method:'DELETE'});
   setTimeout(loadWifi, 500);
 }
+
+// ============================================================================
+// MIDI activity log
+// ============================================================================
+async function loadMidiLog() {
+  const log = await getJson('/api/midi/log');
+  const box = document.getElementById('midiLog');
+  if (!log.length) { box.innerHTML = '<div class="small">Aucune activité MIDI récente.</div>'; return; }
+  box.innerHTML = log.slice().reverse().map(e => {
+    const age = e.t_rel_ms < 1000 ? `${e.t_rel_ms}ms` : `${(e.t_rel_ms/1000).toFixed(1)}s`;
+    let body = '';
+    if (e.type === 'NoteOn')        body = `note ${e.data1} (${noteName(e.data1)}) vel=${e.data2}`;
+    else if (e.type === 'NoteOff')  body = `note ${e.data1} (${noteName(e.data1)})`;
+    else if (e.type === 'CC')       body = `CC${e.data1}=${e.data2}`;
+    else if (e.type === 'PitchBend')body = `bend=${e.bend}`;
+    else if (e.type === 'Aftertouch')body= `pressure=${e.data1}`;
+    return `<div class="log-line log-${e.type}">-${age.padStart(6)} ch${e.channel} ${e.type.padEnd(10)} ${body}</div>`;
+  }).join('');
+}
+
+// ============================================================================
+// Presets
+// ============================================================================
+async function loadPresets() {
+  const list = await getJson('/api/presets');
+  const box = document.getElementById('presetsList');
+  if (!list.length) { box.innerHTML = '<div>Aucun preset enregistré.</div>'; return; }
+  box.innerHTML = list.map(name => `
+    <div class="stat" style="margin:4px 0">
+      <span style="color:var(--text); font-weight:600">${name}</span>
+      <span>
+        <button class="btn btn-primary" style="padding:4px 10px" onclick="loadPreset('${name}')">↑ Charger</button>
+        <button class="btn btn-danger" style="padding:4px 10px" onclick="deletePreset('${name}')">🗑</button>
+      </span>
+    </div>
+  `).join('');
+}
+async function savePreset() {
+  const name = document.getElementById('presetName').value.trim();
+  if (!name) return alert('Nom requis');
+  await postJson('/api/presets/save', {name});
+  document.getElementById('presetName').value = '';
+  loadPresets();
+}
+async function loadPreset(name) {
+  if (!confirm(`Charger le preset "${name}" ? La config courante sera écrasée.`)) return;
+  await postJson('/api/presets/load', {name});
+  alert('Preset chargé.');
+}
+async function deletePreset(name) {
+  if (!confirm(`Supprimer "${name}" ?`)) return;
+  await postJson('/api/presets/delete', {name});
+  loadPresets();
+}
+
+// ============================================================================
+// Pressure sparkline
+// ============================================================================
+const pressHistory = [];
+function pushPressure(p) {
+  if (p == null) return;
+  pressHistory.push({t: Date.now(), p});
+  if (pressHistory.length > 120) pressHistory.shift();
+}
+function drawSpark() {
+  const c = document.getElementById('pressSpark');
+  if (!c) return;
+  // Auto-resize buffer to displayed CSS size
+  const w = c.clientWidth, h = c.clientHeight;
+  if (w === 0) return;
+  if (c.width !== w) c.width = w;
+  if (c.height !== h) c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  if (!pressHistory.length) {
+    ctx.fillStyle = '#888'; ctx.font = '11px sans-serif';
+    ctx.fillText('aucune donnée', 8, h/2 + 4);
+    return;
+  }
+  // Range: 0..safety threshold (or 100 by default)
+  const max = Math.max(100, ...pressHistory.map(x=>x.p));
+  const min = 0;
+  const n = pressHistory.length;
+  // Grid line at target if available
+  if (state.pressure?.target) {
+    const y = h - ((state.pressure.target - min) / (max - min)) * (h - 4) - 2;
+    ctx.strokeStyle = 'rgba(0,208,132,.25)';
+    ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // Curve
+  ctx.strokeStyle = '#00d084';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  pressHistory.forEach((s, i) => {
+    const x = (i / (n - 1 || 1)) * w;
+    const y = h - ((s.p - min) / (max - min)) * (h - 4) - 2;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  // Last value label
+  const last = pressHistory[pressHistory.length-1];
+  ctx.fillStyle = '#00d084'; ctx.font = '10px ui-monospace, monospace';
+  ctx.fillText(`${last.p.toFixed(1)} kPa`, w - 60, 12);
+}
+setInterval(() => {
+  if (state.pressure?.has_sensor) pushPressure(state.pressure.pressure_kpa);
+  drawSpark();
+}, 500);
 
 // ============================================================================
 // Init

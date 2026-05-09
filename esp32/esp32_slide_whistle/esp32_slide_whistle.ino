@@ -37,6 +37,7 @@ WebInterface     webIface;
 
 volatile SystemState sysState        = SYS_INIT;
 volatile bool g_homingRequested      = false;
+volatile int  g_homingFluteId        = -1;     // -1 = aucun, sinon id flûte
 volatile int  g_testAirFluteId       = -1;
 volatile bool g_pressureStartRequested = false;
 volatile bool g_pressureStopRequested  = false;
@@ -182,7 +183,7 @@ void taskMotion(void* param) {
       xSemaphoreGive(motionMutex);
     }
 
-    // 4. Homing demandé depuis le web
+    // 4. Homing demandé depuis le web (global)
     if (g_homingRequested) {
       g_homingRequested = false;
       sysState = SYS_HOMING;
@@ -191,6 +192,21 @@ void taskMotion(void* param) {
       xSemaphoreGive(motionMutex);
       bool rehome = orchestra.homingAll();
       sysState    = rehome ? SYS_READY : SYS_ERROR;
+    }
+
+    // 4b. Homing demandé pour une flûte précise
+    if (g_homingFluteId >= 0) {
+      int id = g_homingFluteId;
+      g_homingFluteId = -1;
+      Flute* f = orchestra.get(id);
+      if (f) {
+        sysState = SYS_HOMING;
+        xSemaphoreTake(motionMutex, portMAX_DELAY);
+        f->panic();
+        xSemaphoreGive(motionMutex);
+        bool ok = orchestra.homingOne((uint8_t)id);
+        sysState = ok ? SYS_READY : SYS_ERROR;
+      }
     }
 
     // 5. Test air sur une flûte particulière

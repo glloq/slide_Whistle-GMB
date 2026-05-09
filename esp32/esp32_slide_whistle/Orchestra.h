@@ -58,6 +58,16 @@ public:
     return allOk;
   }
 
+  // Homing d'une flûte précise
+  bool homingOne(uint8_t id) {
+    if (id >= _count || !_flutes[id]) return false;
+    if (!_flutes[id]->isEnabled()) return false;
+#if DEBUG_MODE
+    Serial.printf("[Orchestra] homing flûte %u\n", id);
+#endif
+    return _flutes[id]->homing();
+  }
+
   // ---- Dispatch MIDI -------------------------------------------------------
 
   void onNoteOn(uint8_t channel, uint8_t note, uint8_t velocity) {

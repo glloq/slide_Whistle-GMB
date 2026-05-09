@@ -54,10 +54,13 @@ private:
 #endif
   }
 
+  // Courbe de vélocité runtime (initialisée depuis cfg, modifiable)
+  uint8_t _velocityCurve = 1;
+
   // Mapping vélocité → angle servo selon la courbe choisie
   int velocityToAngle(byte vel) const {
     float v = vel / 127.0f;
-    switch (_cfg.velocityCurve) {
+    switch (_velocityCurve) {
       case 1: v = v * v;        break;       // quadratique (musical)
       case 2: v = v * v * v;    break;       // cubique
       default: /* linéaire */   break;
@@ -75,6 +78,7 @@ public:
 
   void begin(const FluteHwConfig& cfg) {
     _cfg = cfg;
+    _velocityCurve = cfg.velocityCurve;
 
     // PWM solénoïde via LEDC (canal unique par flûte)
     ledcSetup(cfg.solenoidLedcChannel, DEFAULT_LEDC_FREQ, DEFAULT_LEDC_RES);
@@ -217,6 +221,8 @@ public:
   void setLegatoMs(uint16_t v)  { _legatoMs = v; }
   void setServoClosedAngle(uint8_t a) { _servoClosed = a; }
   void setServoOpenAngle(uint8_t a)   { _servoOpen   = a; }
+  void setVelocityCurve(uint8_t c)    { _velocityCurve = (c <= 2) ? c : 0; }
+  uint8_t getVelocityCurve() const    { return _velocityCurve; }
 
   // ---- Getters -----------------------------------------------------------
 

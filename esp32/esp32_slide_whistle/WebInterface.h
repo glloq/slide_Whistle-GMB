@@ -43,6 +43,7 @@
 
 extern volatile SystemState sysState;
 extern volatile bool g_homingRequested;
+extern volatile int  g_homingFluteId;     // -1 = aucun, sinon id flûte à re-homer
 extern volatile int  g_testAirFluteId;
 extern volatile bool g_pressureStartRequested;
 extern volatile bool g_pressureStopRequested;
@@ -80,6 +81,7 @@ private:
     obj["pwm"]          = f->air().getCurrentPwm();
     obj["last_note"]    = f->lastNote();
     obj["note_active"]  = f->isNoteActive();
+    obj["slider_travel_mm"] = f->config().sliderTravelMM;
   }
 
   String buildStatusJSON() {
@@ -125,11 +127,12 @@ private:
     doc["muted"]         = f->isMuted();
     doc["speed_mm_s"]    = f->stepper().getSpeedMmS();
     doc["accel_mm_s2"]   = f->stepper().getAccelMmS2();
-    doc["pwm_full"]      = f->air().getPwmFull();
-    doc["pwm_hold"]      = f->air().getPwmHold();
-    doc["wait_delay_ms"] = f->air().getWaitDelay();
-    doc["legato_ms"]     = f->air().getLegatoMs();
-    doc["use_lut"]       = f->stepper().getUseLUT();
+    doc["pwm_full"]       = f->air().getPwmFull();
+    doc["pwm_hold"]       = f->air().getPwmHold();
+    doc["wait_delay_ms"]  = f->air().getWaitDelay();
+    doc["legato_ms"]      = f->air().getLegatoMs();
+    doc["velocity_curve"] = f->air().getVelocityCurve();
+    doc["use_lut"]        = f->stepper().getUseLUT();
     doc["slider_travel_mm"] = f->config().sliderTravelMM;
     JsonArray lut = doc.createNestedArray("lut");
     const float* L = f->stepper().getLUT();
@@ -187,6 +190,7 @@ private:
     prefs.putUChar("pwmHold",  f->air().getPwmHold());
     prefs.putUShort("wait",    f->air().getWaitDelay());
     prefs.putUShort("legato",  f->air().getLegatoMs());
+    prefs.putUChar("velCurve", f->air().getVelocityCurve());
     prefs.putBool("useLUT",    f->stepper().getUseLUT());
     prefs.putBytes("lut",      f->stepper().getLUT(),
                    sizeof(float) * MIDI_LUT_SIZE);
@@ -208,6 +212,7 @@ private:
     f->air().setPwmHold(prefs.getUChar("pwmHold", DEFAULT_PWM_HOLD));
     f->air().setWaitDelay(prefs.getUShort("wait", DEFAULT_POSITION_WAIT));
     f->air().setLegatoMs(prefs.getUShort("legato", DEFAULT_LEGATO_THRESHOLD));
+    f->air().setVelocityCurve(prefs.getUChar("velCurve", f->air().getVelocityCurve()));
     f->stepper().setUseLUT(prefs.getBool("useLUT", false));
     if (prefs.getBytesLength("lut") == sizeof(float) * MIDI_LUT_SIZE) {
       float buf[MIDI_LUT_SIZE];
@@ -334,6 +339,11 @@ private:
           if (v < 0 || v > 2000) { req->send(400, "application/json", "{\"error\":\"legato\"}"); return; }
           f->air().setLegatoMs((uint16_t)v);
         }
+        if (o.containsKey("velocity_curve")) {
+          int v = o["velocity_curve"];
+          if (v < 0 || v > 2) { req->send(400, "application/json", "{\"error\":\"velocity_curve\"}"); return; }
+          f->air().setVelocityCurve((uint8_t)v);
+        }
         if (o.containsKey("use_lut")) f->stepper().setUseLUT(o["use_lut"].as<bool>());
 
         saveFluteConfigNVS(f);
@@ -445,6 +455,190 @@ private:
       if (_orchestra) _orchestra->panicAll();
       req->send(200, "application/json", "{\"ok\":true}");
     });
+
+    // POST /api/flute/homing — body {id}
+    server.addHandler(new AsyncCallbackJsonWebHandler("/api/flute/homing",
+      [this](AsyncWebServerRequest* req, JsonVariant& json) {
+        Flute* f = fluteFromJson(json, req);
+        if (!f) return;
+        g_homingFluteId = (int)f->id();
+        req->send(200, "application/json", "{\"ok\":true,\"message\":\"homing scheduled\"}");
+      }));
+
+    // GET /api/midi/log — dernières activités MIDI (ring buffer)
+    server.on("/api/midi/log", HTTP_GET, [this](AsyncWebServerRequest* req) {
+      DynamicJsonDocument doc(4096);
+      JsonArray arr = doc.to<JsonArray>();
+      if (_midi) {
+        const char* types[] = {"NoteOn","NoteOff","CC","PitchBend","Aftertouch"};
+        unsigned long now = millis();
+        _midi->forEachLog([&](const auto& e) {
+          JsonObject o = arr.createNestedObject();
+          o["t_rel_ms"] = (uint32_t)(now - e.ts);
+          o["type"]     = types[e.type < 5 ? e.type : 0];
+          o["channel"]  = e.channel;
+          o["data1"]    = e.data1;
+          o["data2"]    = e.data2;
+          if (e.type == 3) o["bend"] = e.bend;
+        });
+      }
+      String out; serializeJson(doc, out);
+      req->send(200, "application/json", out);
+    });
+
+    // ---- PRESETS ---------------------------------------------------------
+    // Presets globaux : snapshot complet de toutes les flûtes + pression.
+    // Stockés en NVS namespace "presets" (clés = noms).
+
+    server.on("/api/presets", HTTP_GET, [this](AsyncWebServerRequest* req) {
+      DynamicJsonDocument doc(1024);
+      JsonArray arr = doc.to<JsonArray>();
+      prefs.begin("presets_idx", true);
+      String list = prefs.getString("list", "");
+      prefs.end();
+      // list est CSV de noms
+      int start = 0;
+      while (start < (int)list.length()) {
+        int sep = list.indexOf(',', start);
+        String name = (sep < 0) ? list.substring(start) : list.substring(start, sep);
+        if (name.length() > 0) arr.add(name);
+        if (sep < 0) break;
+        start = sep + 1;
+      }
+      String out; serializeJson(doc, out);
+      req->send(200, "application/json", out);
+    });
+
+    server.addHandler(new AsyncCallbackJsonWebHandler("/api/presets/save",
+      [this](AsyncWebServerRequest* req, JsonVariant& json) {
+        String name = json["name"] | "";
+        if (name.length() == 0 || name.length() > 14) {
+          req->send(400, "application/json", "{\"error\":\"name 1-14 chars\"}"); return;
+        }
+        // Construire le snapshot complet en JSON
+        DynamicJsonDocument doc(8192);
+        JsonArray flutes = doc.createNestedArray("flutes");
+        for (uint8_t i = 0; i < _orchestra->count(); ++i) {
+          Flute* f = _orchestra->get(i);
+          if (!f) continue;
+          JsonObject o = flutes.createNestedObject();
+          o["id"]            = f->id();
+          o["midi_channel"]  = f->midiChannel();
+          o["note_min"]      = f->noteMin();
+          o["note_max"]      = f->noteMax();
+          o["enabled"]       = f->isEnabled();
+          o["muted"]         = f->isMuted();
+          o["speed"]         = f->stepper().getSpeedMmS();
+          o["accel"]         = f->stepper().getAccelMmS2();
+          o["pwm_full"]      = f->air().getPwmFull();
+          o["pwm_hold"]      = f->air().getPwmHold();
+          o["wait_delay_ms"] = f->air().getWaitDelay();
+          o["legato_ms"]     = f->air().getLegatoMs();
+          o["velocity_curve"] = f->air().getVelocityCurve();
+          o["use_lut"]       = f->stepper().getUseLUT();
+          JsonArray lut = o.createNestedArray("lut");
+          const float* L = f->stepper().getLUT();
+          for (int j = 0; j < MIDI_LUT_SIZE; ++j) lut.add(L[j]);
+        }
+        if (_pressure && _pressure->isEnabled()) {
+          JsonObject p = doc.createNestedObject("pressure");
+          p["target"]      = _pressure->getTarget();
+          p["min"]         = _pressure->getMin();
+          p["max"]         = _pressure->getMax();
+          p["safety"]      = _pressure->getSafety();
+          p["max_fill_ms"] = _pressure->getMaxFillMs();
+        }
+        String snapshot;
+        serializeJson(doc, snapshot);
+
+        // Stocker
+        prefs.begin("presets", false);
+        prefs.putString(name.c_str(), snapshot);
+        prefs.end();
+        // Mettre à jour l'index
+        prefs.begin("presets_idx", false);
+        String list = prefs.getString("list", "");
+        if (list.indexOf(name) < 0) {
+          if (list.length()) list += ",";
+          list += name;
+          prefs.putString("list", list);
+        }
+        prefs.end();
+        req->send(200, "application/json", "{\"ok\":true}");
+      }));
+
+    server.addHandler(new AsyncCallbackJsonWebHandler("/api/presets/load",
+      [this](AsyncWebServerRequest* req, JsonVariant& json) {
+        String name = json["name"] | "";
+        if (name.length() == 0) { req->send(400, "application/json", "{\"error\":\"name\"}"); return; }
+        prefs.begin("presets", true);
+        String snapshot = prefs.getString(name.c_str(), "");
+        prefs.end();
+        if (snapshot.length() == 0) { req->send(404, "application/json", "{\"error\":\"not found\"}"); return; }
+
+        DynamicJsonDocument doc(8192);
+        DeserializationError err = deserializeJson(doc, snapshot);
+        if (err) { req->send(500, "application/json", "{\"error\":\"corrupt preset\"}"); return; }
+
+        for (JsonObject o : doc["flutes"].as<JsonArray>()) {
+          int id = o["id"] | -1;
+          Flute* f = _orchestra->get(id);
+          if (!f) continue;
+          if (o.containsKey("midi_channel")) f->setMidiChannel(o["midi_channel"]);
+          if (o.containsKey("note_min") && o.containsKey("note_max")) {
+            f->setNoteRange(o["note_min"], o["note_max"]);
+          }
+          if (o.containsKey("enabled"))  f->setEnabled(o["enabled"]);
+          if (o.containsKey("muted"))    f->setMuted(o["muted"]);
+          if (o.containsKey("speed"))    f->stepper().setSpeed(o["speed"]);
+          if (o.containsKey("accel"))    f->stepper().setAcceleration(o["accel"]);
+          if (o.containsKey("pwm_full")) f->air().setPwmFull(o["pwm_full"]);
+          if (o.containsKey("pwm_hold")) f->air().setPwmHold(o["pwm_hold"]);
+          if (o.containsKey("wait_delay_ms")) f->air().setWaitDelay(o["wait_delay_ms"]);
+          if (o.containsKey("legato_ms"))     f->air().setLegatoMs(o["legato_ms"]);
+          if (o.containsKey("velocity_curve")) f->air().setVelocityCurve(o["velocity_curve"]);
+          if (o.containsKey("use_lut"))       f->stepper().setUseLUT(o["use_lut"]);
+          if (o.containsKey("lut")) {
+            float lut[MIDI_LUT_SIZE];
+            int j = 0;
+            for (float v : o["lut"].as<JsonArray>()) {
+              if (j < MIDI_LUT_SIZE) lut[j++] = v;
+            }
+            if (j == MIDI_LUT_SIZE) f->stepper().setLUT(lut);
+          }
+          saveFluteConfigNVS(f);
+        }
+        if (doc.containsKey("pressure") && _pressure) {
+          JsonObject p = doc["pressure"];
+          if (p.containsKey("target"))      _pressure->setTarget(p["target"]);
+          if (p.containsKey("min"))         _pressure->setMin(p["min"]);
+          if (p.containsKey("max"))         _pressure->setMax(p["max"]);
+          if (p.containsKey("safety"))      _pressure->setSafety(p["safety"]);
+          if (p.containsKey("max_fill_ms")) _pressure->setMaxFillMs(p["max_fill_ms"]);
+          savePressureNVS();
+        }
+        req->send(200, "application/json", "{\"ok\":true}");
+      }));
+
+    server.addHandler(new AsyncCallbackJsonWebHandler("/api/presets/delete",
+      [this](AsyncWebServerRequest* req, JsonVariant& json) {
+        String name = json["name"] | "";
+        if (name.length() == 0) { req->send(400, "application/json", "{\"error\":\"name\"}"); return; }
+        prefs.begin("presets", false);
+        prefs.remove(name.c_str());
+        prefs.end();
+        prefs.begin("presets_idx", false);
+        String list = prefs.getString("list", "");
+        // retirer le nom (avec virgules)
+        String needle1 = name + ",";
+        String needle2 = "," + name;
+        if (list.startsWith(needle1)) list = list.substring(needle1.length());
+        else if (list.indexOf(needle2) >= 0) list.replace(needle2, "");
+        else if (list == name) list = "";
+        prefs.putString("list", list);
+        prefs.end();
+        req->send(200, "application/json", "{\"ok\":true}");
+      }));
 
     // ---- PRESSION ---------------------------------------------------------
 

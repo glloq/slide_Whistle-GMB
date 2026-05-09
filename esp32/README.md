@@ -173,7 +173,18 @@ POST /api/flute/panic      {id}                ─ coupure immédiate
 
 ```
 POST /api/homing                 — re-homing toutes flûtes
+POST /api/flute/homing           — body {id} — homing d'une flûte précise
 POST /api/panic                  — panic toutes flûtes
+GET  /api/midi/log               — ring buffer des 32 derniers messages MIDI
+```
+
+### Presets (snapshot complet)
+
+```
+GET    /api/presets              — liste des noms enregistrés
+POST   /api/presets/save         {name}   — sauvegarde la config courante
+POST   /api/presets/load         {name}   — restaure la config
+POST   /api/presets/delete       {name}
 ```
 
 ### Pression
