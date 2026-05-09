@@ -1,16 +1,14 @@
 /*
- * MIDIHandler.h — MIDI multi-source (ESP32)
+ * MIDIHandler.h — MIDI multi-source, broadcast canal-aware (ESP32)
  *
- * Corrections vs v1 :
- *   - _instance déclaré comme 'inline static' (C++17) → une seule définition,
- *     quel que soit le nombre d'unités de compilation (fix ODR + BLE guard)
- *   - La déclaration n'est plus protégée par #if MIDI_SOURCE_SERIAL :
- *     les callbacks BLE en ont aussi besoin
- *   - La définition externe au bas du fichier est supprimée (inline static suffit)
+ * Refactor v3 :
+ *   - Plus de filtrage par canal au niveau handler. Le canal MIDI est passé
+ *     aux callbacks ; c'est l'Orchestra qui décide quelle flûte consomme.
+ *   - Signature unifiée : NoteOn(channel, note, velocity) etc.
  *
  * Sources :
  *   MIDI_SOURCE_SERIAL → DIN-5 via UART2 (GPIO16 RX2)
- *   MIDI_SOURCE_BLE    → BLE MIDI (bibliothèque lathoub/Arduino-BLE-MIDI)
+ *   MIDI_SOURCE_BLE    → BLE MIDI (lathoub/Arduino-BLE-MIDI)
  *
  * Bibliothèques :
  *   MIDI Library  — FortySevenEffects/Arduino-MIDI-Library
@@ -31,11 +29,11 @@
   #include <BLEMidi.h>
 #endif
 
-typedef void (*NoteOnCallback)(byte note, byte velocity);
-typedef void (*NoteOffCallback)(byte note);
-typedef void (*PitchBendCallback)(float semitones);
-typedef void (*AftertouchCallback)(bool active, byte pressure);
-typedef void (*CCCallback)(byte cc, byte value);
+typedef void (*NoteOnCallback)(uint8_t channel, uint8_t note, uint8_t velocity);
+typedef void (*NoteOffCallback)(uint8_t channel, uint8_t note);
+typedef void (*PitchBendCallback)(uint8_t channel, float semitones);
+typedef void (*AftertouchCallback)(uint8_t channel, bool active, uint8_t pressure);
+typedef void (*CCCallback)(uint8_t channel, uint8_t cc, uint8_t value);
 
 class MIDIHandler {
 private:
@@ -45,121 +43,101 @@ private:
   AftertouchCallback _onAftertouch = nullptr;
   CCCallback         _onCC         = nullptr;
 
-  byte lastNote       = 0;
-  bool noteActive     = false;
-  int  pitchBendValue = 0;
-  byte aftertouchPres = 0;
+  // Statistiques (pour status web)
+  uint8_t  _lastChannel = 0;
+  uint8_t  _lastNote    = 0;
+  int      _lastBend    = 0;
+  uint32_t _msgCount    = 0;
 
-  // Singleton pour les callbacks statiques (Serial + BLE)
-  // 'inline static' = défini ici, une seule instance (C++17)
   inline static MIDIHandler* _instance = nullptr;
 
-  // ---- Callbacks statiques Serial MIDI ------------------------------------
 #if MIDI_SOURCE_SERIAL
   static void _onSerialNoteOn(byte ch, byte note, byte vel) {
-    if (!_instance || (MIDI_CHANNEL && ch != MIDI_CHANNEL)) return;
-    if (vel > 0) _instance->dispatchNoteOn(note, vel);
-    else         _instance->dispatchNoteOff(note);
+    if (!_instance) return;
+    if (vel > 0) _instance->dispatchNoteOn(ch, note, vel);
+    else         _instance->dispatchNoteOff(ch, note);
   }
   static void _onSerialNoteOff(byte ch, byte note, byte vel) {
     (void)vel;
-    if (!_instance || (MIDI_CHANNEL && ch != MIDI_CHANNEL)) return;
-    _instance->dispatchNoteOff(note);
+    if (_instance) _instance->dispatchNoteOff(ch, note);
   }
   static void _onSerialPitchBend(byte ch, int bend) {
-    if (!_instance || (MIDI_CHANNEL && ch != MIDI_CHANNEL)) return;
-    _instance->dispatchPitchBend(bend);
+    if (_instance) _instance->dispatchPitchBend(ch, bend);
   }
   static void _onSerialAftertouch(byte ch, byte pressure) {
-    if (!_instance || (MIDI_CHANNEL && ch != MIDI_CHANNEL)) return;
-    _instance->dispatchAftertouch(pressure);
+    if (_instance) _instance->dispatchAftertouch(ch, pressure);
   }
   static void _onSerialCC(byte ch, byte num, byte val) {
-    if (!_instance || (MIDI_CHANNEL && ch != MIDI_CHANNEL)) return;
-    _instance->dispatchCC(num, val);
+    if (_instance) _instance->dispatchCC(ch, num, val);
   }
-#endif // MIDI_SOURCE_SERIAL
+#endif
 
-  // ---- Callbacks statiques BLE MIDI ---------------------------------------
 #if MIDI_SOURCE_BLE
   static void _onBleNoteOn(uint8_t ch, uint8_t note, uint8_t vel, uint16_t) {
-    if (!_instance || (MIDI_CHANNEL && ch != MIDI_CHANNEL)) return;
-    if (vel > 0) _instance->dispatchNoteOn(note, vel);
-    else         _instance->dispatchNoteOff(note);
+    if (!_instance) return;
+    if (vel > 0) _instance->dispatchNoteOn(ch, note, vel);
+    else         _instance->dispatchNoteOff(ch, note);
   }
   static void _onBleNoteOff(uint8_t ch, uint8_t note, uint8_t, uint16_t) {
-    if (!_instance || (MIDI_CHANNEL && ch != MIDI_CHANNEL)) return;
-    _instance->dispatchNoteOff(note);
+    if (_instance) _instance->dispatchNoteOff(ch, note);
   }
   static void _onBlePitchBend(uint8_t ch, int16_t val, uint16_t) {
-    if (!_instance || (MIDI_CHANNEL && ch != MIDI_CHANNEL)) return;
-    _instance->dispatchPitchBend((int)val);
+    if (_instance) _instance->dispatchPitchBend(ch, (int)val);
   }
   static void _onBleAftertouch(uint8_t ch, uint8_t pressure, uint16_t) {
-    if (!_instance || (MIDI_CHANNEL && ch != MIDI_CHANNEL)) return;
-    _instance->dispatchAftertouch(pressure);
+    if (_instance) _instance->dispatchAftertouch(ch, pressure);
   }
   static void _onBleCC(uint8_t ch, uint8_t num, uint8_t val, uint16_t) {
-    if (!_instance || (MIDI_CHANNEL && ch != MIDI_CHANNEL)) return;
-    _instance->dispatchCC(num, val);
+    if (_instance) _instance->dispatchCC(ch, num, val);
   }
-#endif // MIDI_SOURCE_BLE
+#endif
 
   // ---- Dispatch interne ---------------------------------------------------
 
-  void dispatchNoteOn(byte note, byte velocity) {
-    if (note < MIDI_NOTE_MIN || note > MIDI_NOTE_MAX) return;
-    lastNote   = note;
-    noteActive = true;
+  void dispatchNoteOn(uint8_t channel, uint8_t note, uint8_t velocity) {
+    _lastChannel = channel;
+    _lastNote    = note;
+    _msgCount++;
 #if DEBUG_MODE
-    Serial.printf("[MIDI] NoteOn  %d vel=%d\n", note, velocity);
+    Serial.printf("[MIDI] ch%u NoteOn %u vel=%u\n", channel, note, velocity);
 #endif
-    if (_onNoteOn) _onNoteOn(note, velocity);
+    if (_onNoteOn) _onNoteOn(channel, note, velocity);
   }
 
-  void dispatchNoteOff(byte note) {
-    if (note != lastNote || !noteActive) return;
-    noteActive    = false;
-    aftertouchPres = 0;
+  void dispatchNoteOff(uint8_t channel, uint8_t note) {
+    _lastChannel = channel;
+    _msgCount++;
 #if DEBUG_MODE
-    Serial.printf("[MIDI] NoteOff %d\n", note);
+    Serial.printf("[MIDI] ch%u NoteOff %u\n", channel, note);
 #endif
-#if AFTERTOUCH_ENABLED
-    if (_onAftertouch) _onAftertouch(false, 0);
-#endif
-    if (_onNoteOff) _onNoteOff(note);
+    if (_onNoteOff) _onNoteOff(channel, note);
   }
 
-  void dispatchPitchBend(int raw) {
-#if PITCHBEND_ENABLED
-    pitchBendValue = raw;
+  void dispatchPitchBend(uint8_t channel, int raw) {
+    _lastChannel = channel;
+    _lastBend    = raw;
+    _msgCount++;
     float semitones = (raw / 8192.0f) * PITCHBEND_RANGE_SEMITONES;
-#if DEBUG_MODE
-    Serial.printf("[MIDI] PitchBend %d → %.2f st\n", raw, semitones);
-#endif
-    if (_onPitchBend) _onPitchBend(semitones);
-#endif
+    if (_onPitchBend) _onPitchBend(channel, semitones);
   }
 
-  void dispatchAftertouch(byte pressure) {
-#if AFTERTOUCH_ENABLED
-    aftertouchPres = pressure;
-    bool active    = pressure > 10;
-#if DEBUG_MODE
-    Serial.printf("[MIDI] Aftertouch %d → vibrato %s\n", pressure, active ? "ON" : "OFF");
-#endif
-    if (_onAftertouch) _onAftertouch(active, pressure);
-#endif
+  void dispatchAftertouch(uint8_t channel, uint8_t pressure) {
+    _lastChannel = channel;
+    _msgCount++;
+    bool active = pressure > 10;
+    if (_onAftertouch) _onAftertouch(channel, active, pressure);
   }
 
-  void dispatchCC(byte number, byte value) {
+  void dispatchCC(uint8_t channel, uint8_t number, uint8_t value) {
+    _lastChannel = channel;
+    _msgCount++;
 #if DEBUG_MODE
-    Serial.printf("[MIDI] CC %d = %d\n", number, value);
+    Serial.printf("[MIDI] ch%u CC%u=%u\n", channel, number, value);
 #endif
-    if (_onCC) _onCC(number, value);
-    // CC1 modulation wheel → vibrato alternatif
-    if (number == 1 && AFTERTOUCH_ENABLED) {
-      dispatchAftertouch(value);
+    if (_onCC) _onCC(channel, number, value);
+    // CC1 (modulation wheel) → traduit en aftertouch pour vibrato
+    if (number == 1 && _onAftertouch) {
+      _onAftertouch(channel, value > 10, value);
     }
   }
 
@@ -199,26 +177,34 @@ public:
 #if MIDI_SOURCE_SERIAL
     MIDI_SERIAL.read();
 #endif
-    // BLE MIDI : event-driven, pas de polling
   }
 
-  // Déclenchement direct depuis l'interface web (même chemin callbacks)
-  void triggerNoteOn(byte note, byte velocity) { dispatchNoteOn(note, velocity); }
-  void triggerNoteOff(byte note)               { dispatchNoteOff(note); }
-  void triggerCC(byte number, byte value)      { dispatchCC(number, value); }
+  // ---- Déclenchement direct depuis le web (passe par le même chemin) ------
 
-  // Enregistrement callbacks
-  void setNoteOnCallback(NoteOnCallback cb)        { _onNoteOn     = cb; }
-  void setNoteOffCallback(NoteOffCallback cb)      { _onNoteOff    = cb; }
-  void setPitchBendCallback(PitchBendCallback cb)  { _onPitchBend  = cb; }
-  void setAftertouchCallback(AftertouchCallback cb){ _onAftertouch  = cb; }
-  void setCCCallback(CCCallback cb)                { _onCC         = cb; }
+  void triggerNoteOn(uint8_t channel, uint8_t note, uint8_t velocity) {
+    dispatchNoteOn(channel, note, velocity);
+  }
+  void triggerNoteOff(uint8_t channel, uint8_t note) {
+    dispatchNoteOff(channel, note);
+  }
+  void triggerCC(uint8_t channel, uint8_t cc, uint8_t value) {
+    dispatchCC(channel, cc, value);
+  }
 
-  // Getters
-  byte getLastNote()           const { return lastNote; }
-  bool isNoteActive()          const { return noteActive; }
-  int  getPitchBendValue()     const { return pitchBendValue; }
-  byte getAftertouchPressure() const { return aftertouchPres; }
+  // ---- Enregistrement callbacks ------------------------------------------
+
+  void setNoteOnCallback(NoteOnCallback cb)         { _onNoteOn     = cb; }
+  void setNoteOffCallback(NoteOffCallback cb)       { _onNoteOff    = cb; }
+  void setPitchBendCallback(PitchBendCallback cb)   { _onPitchBend  = cb; }
+  void setAftertouchCallback(AftertouchCallback cb) { _onAftertouch = cb; }
+  void setCCCallback(CCCallback cb)                 { _onCC         = cb; }
+
+  // ---- Getters -----------------------------------------------------------
+
+  uint8_t  getLastChannel() const { return _lastChannel; }
+  uint8_t  getLastNote()    const { return _lastNote; }
+  int      getPitchBendValue() const { return _lastBend; }
+  uint32_t getMessageCount() const { return _msgCount; }
 };
 
 #endif // MIDI_HANDLER_H

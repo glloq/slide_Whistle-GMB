@@ -1,130 +1,264 @@
-# ESP32 MIDI Slide Whistle Controller
+# 🎼 ESP32 MIDI Slide Whistle — v3 (multi-flûtes + pression)
 
-Version ESP32 complète, combinant le meilleur des deux versions Arduino
-(Fan+Servo et Solénoïde+Servo) avec une interface web intégrée.
+Version ESP32 du contrôleur, refacturée pour piloter **plusieurs flûtes** depuis
+un seul micro-contrôleur, avec un module de **gestion pompe + réservoir +
+capteur de pression** intégré, et une interface web complète.
 
-## Fonctionnalités
+> ⚠️ Cette version remplace l'API v2 (single-flûte). Voir [Migration](#migration-depuis-v2) ci-dessous.
 
-| Fonction | Détail |
-|---|---|
-| Moteur | AccelStepper, homing 3 phases, LUT calibrée |
-| Air | Machine à états 5 états, PWM solénoïde, legato |
-| MIDI | DIN-5 (Serial2) + BLE MIDI simultanés |
-| Web UI | Hotspot WiFi + réseau externe, WebSocket temps-réel |
-| Config | Persistance NVS (Preferences), pas de recompilation |
-| Calibration | Interface web assistée, table LUT note par note |
+---
 
-## Structure
+## 🏗 Architecture
 
 ```
-esp32/
-└── esp32_slide_whistle/
-    ├── esp32_slide_whistle.ino   ← programme principal (FreeRTOS)
-    ├── settings.h                ← tous les paramètres (pins, mécanique, MIDI)
-    ├── StepperControl.h          ← moteur AccelStepper (adapté ESP32)
-    ├── AirControl.h              ← solénoïde PWM + servo (machine à états)
-    ├── MIDIHandler.h             ← MIDI multi-source (Serial + BLE)
-    ├── WiFiManager.h             ← hotspot AP + client STA + NVS
-    ├── WebInterface.h            ← AsyncWebServer + WebSocket + API REST
-    └── data/
-        └── index.html            ← interface web (LittleFS)
+                ┌──────────────────────────┐
+                │      MIDIHandler         │  Serial UART2 / BLE MIDI
+                │  (broadcast canal-aware) │
+                └──────────┬───────────────┘
+                           │ (channel, msg)
+                           ▼
+                ┌──────────────────────────┐
+                │        Orchestra         │  routage par canal
+                └──┬─────────┬────────┬────┘
+                   │         │        │
+              ┌────▼──┐ ┌────▼──┐ ┌──▼────┐
+              │Flute 0│ │Flute 1│ │Flute N│   chacune = StepperControl + AirControl
+              └───────┘ └───────┘ └───────┘
+                   │         │        │
+                   ▼         ▼        ▼
+              solénoïde ─── solénoïde ─── solénoïde
+                   ▲         ▲        ▲
+                   └───┬─────┴────────┘
+                       │
+                ┌──────┴───────────────┐
+                │  PressureControl     │  pompe + capteur + FSM
+                │   (pump → réservoir) │
+                └──────────────────────┘
 ```
 
-## Bibliothèques requises
+### Modules
 
-Installer via Arduino Library Manager :
+| Fichier             | Rôle                                                          |
+|---------------------|----------------------------------------------------------------|
+| `settings.h`        | Configs matérielles par flûte (`DEFAULT_FLUTE_CONFIGS[]`) + pression |
+| `StepperControl.h`  | Pilotage moteur pas-à-pas, instanciable, LUT par instance      |
+| `AirControl.h`      | Solénoïde PWM + servo, instanciable, courbes de vélocité       |
+| `Flute.h`           | Encapsulation d'un instrument (stepper + air + état + watchdog) |
+| `Orchestra.h`       | Tableau de flûtes, dispatch MIDI par canal                      |
+| `PressureControl.h` | Pompe + capteur pression + FSM (FILLING/MAINTAIN/SAFETY)        |
+| `MIDIHandler.h`     | Multi-source (Serial + BLE), callbacks `(channel, ...)`         |
+| `WiFiManager.h`     | AP + STA, credentials NVS                                       |
+| `WebInterface.h`    | API REST + WebSocket + sauvegarde NVS par flûte                 |
 
-| Bibliothèque | Auteur | Utilisation |
-|---|---|---|
-| AccelStepper | Mike McCauley | Moteur pas à pas |
-| ESP32Servo | Kevin Harrington | Servomoteur |
-| ESPAsyncWebServer | me-no-dev | Serveur web async |
-| AsyncTCP | me-no-dev | Requis par ESPAsyncWebServer |
-| ArduinoJson | bblanchon | JSON API |
-| MIDI Library | FortySevenEffects | MIDI DIN-5 série |
-| BLE-MIDI | lathoub | BLE MIDI |
+---
 
-## Pins ESP32 (modifiables dans settings.h)
+## 🎺 Multi-flûtes
 
-| Signal | GPIO | Notes |
-|---|---|---|
-| STEP driver | 26 | |
-| DIR driver | 27 | |
-| ENABLE driver | 14 | LOW = actif |
-| Endstop | 34 | Input-only ! Pull-up 10kΩ externe obligatoire |
-| Solénoïde | 25 | PWM LEDC |
-| Servo | 32 | ESP32Servo |
-| LED status | 2 | LED intégrée |
-| MIDI RX (DIN) | 16 | Serial2 RX |
+### Principe
 
-## Upload de l'interface web
+Chaque flûte est définie par un `FluteHwConfig` (pins, canal MIDI, plage de
+notes, pulley, canaux LEDC, etc.). On peut activer 1 à `MAX_FLUTES` (4 par
+défaut) flûtes sur le même ESP32.
 
-L'interface web est stockée sur LittleFS (flash ESP32).
+```cpp
+// settings.h
+#define MAX_FLUTES          4    // borne haute compile-time
+#define DEFAULT_FLUTE_COUNT 1    // nombre de flûtes activées au boot
 
-**Arduino IDE :**
-1. Installer le plugin "ESP32 LittleFS Data Upload"  
-2. `Outils → ESP32 LittleFS Data Upload`
-
-**PlatformIO :**
-```ini
-[env:esp32]
-platform = espressif32
-board = esp32dev
-framework = arduino
-board_build.filesystem = littlefs
-```
-puis : `pio run --target uploadfs`
-
-## Accès interface web
-
-Par défaut, l'ESP32 crée un hotspot WiFi :
-- **SSID** : `SlideWhistle`
-- **Mot de passe** : `midi1234`
-- **URL** : http://192.168.4.1
-
-Depuis l'onglet WiFi, configurer un réseau externe pour accès depuis votre réseau local.
-
-## Architecture FreeRTOS
-
-```
-Core 0 (priorité basse)    Core 1 (priorité haute)
-─────────────────────────  ──────────────────────────
-WiFi (AP + STA)            MIDI parsing (Serial + BLE)
-Web server (async)         Stepper control (AccelStepper)
-WebSocket push (200ms)     Air control (machine à états)
-Config NVS load/save       Homing séquentiel
+static const FluteHwConfig DEFAULT_FLUTE_CONFIGS[MAX_FLUTES] = {
+  { "Flute 0", 1, /*…pins, plage MIDI…*/ },
+  { "Flute 1", 2, /*…*/ },
+  { "Flute 2", 3, /*…*/ },
+  { "Flute 3", 4, /*…*/ }
+};
 ```
 
-## Différences vs versions Arduino
+### Routage MIDI
 
-| Aspect | Arduino | ESP32 |
-|---|---|---|
-| MIDI | MIDIUSB (USB) | Serial2 (DIN-5) + BLE |
-| Servo | Servo standard | ESP32Servo |
-| PWM | analogWrite Arduino | ledcWrite (LEDC) |
-| LUT | PROGMEM | RAM normale |
-| Config | Recompiler | NVS (Preferences) |
-| Interface | Série (calibration) | Web (temps-réel) |
-| Multi-tâches | Loop unique | FreeRTOS dual-core |
+Chaque flûte a un canal MIDI :
+- canal `0` (OMNI) → reçoit tous les canaux
+- canal `1..16` → ne reçoit que ce canal
 
-## Calibration
+Une flûte peut aussi limiter sa **plage de notes** (`note_min`, `note_max`) pour
+faire un split clavier : flûte grave 48-66, flûte aiguë 67-84, etc.
 
-1. Connecter au hotspot `SlideWhistle`
-2. Ouvrir http://192.168.4.1
-3. Onglet **Calibration**
-4. Sélectionner note la plus aiguë (C6)
-5. Ajuster position avec les boutons jog
-6. Tester la note (bouton "Tester note")
-7. Sauvegarder → répéter pour chaque note
-8. Activer "Utiliser LUT calibrée" dans Configuration
+Tout est modifiable au runtime via l'API web (`POST /api/flute`) et persisté en
+NVS.
 
-## Paramètres MIDI
+### Limites matérielles
 
-| Message | Action |
-|---|---|
-| Note On | Position coulisse + ouverture air |
-| Note Off | Fermeture air |
-| Pitch Bend | Micro-ajustement position |
-| Aftertouch | Vibrato (profondeur + vitesse configurables) |
-| CC1 | Vibrato (alternative modulation wheel) |
-| CC2 / CC11 | Débit air (expression) |
+| Ressource           | Disponible ESP32   | Coût par flûte | Max         |
+|---------------------|--------------------|----------------|-------------|
+| GPIO output         | ~25                | 6 (step/dir/en/end/sol/servo) | ~4 |
+| Canaux LEDC         | 16 (8 HS + 8 LS)   | 1 solénoïde    | 4 (LS 8,10,12,14) + pompe |
+| Timers ESP32Servo   | 4                  | 1              | 4           |
+| ADC                 | 18 canaux          | -              | 1 capteur pression |
+
+→ Au-delà de **4 flûtes**, prévoir un PCA9685 (I²C) pour multiplier les sorties PWM.
+
+---
+
+## 💨 Module pression — pompe + réservoir
+
+### Pourquoi ?
+
+Sur la version solénoïde v2, l'air provient d'un compresseur externe avec
+pression supposée constante. La v3 intègre la régulation : **pompe + réservoir
+tampon + capteur de pression**, ce qui permet :
+
+- Fonctionnement autonome (sans compresseur externe)
+- Régulation par hystérésis ou seuils mesurés
+- Coupure d'urgence (surpression / réservoir vide)
+- Diagnostics via l'interface web
+
+### FSM
+
+```
+   ┌─────┐        start()        ┌─────────┐
+   │IDLE ├──────────────────────▶│FILLING  │
+   └──┬──┘                       └────┬────┘
+      ▲                               │ p ≥ target
+      │ stop()                        ▼
+      │                          ┌──────────┐
+      │             ┌────────────┤MAINTAIN  │
+      │             │   p < min  └────┬─────┘
+      │             ▼                 │ p > safety
+      │        FILLING ←─────┐        │ ou réservoir vide
+      │                      │        ▼
+   ┌──┴──┐                  ┌──────────┐
+   │RESET│◀─── reset() ─────┤ SAFETY   │
+   └─────┘                  └──────────┘
+```
+
+### Modes
+
+- **Avec capteur** (`pressureSensorPin >= 0`) : régulation par seuils kPa.
+- **Sans capteur** : alternance temporelle ON/OFF programmable.
+
+### Sécurités
+
+- Timeout de remplissage (`maxFillTimeMs`)
+- Surpression (`pressureSafety`)
+- Réservoir vide (capteur flotteur optionnel)
+- Anti-cyclage pompe (`pumpMinOffMs`)
+
+---
+
+## 🌐 API Web
+
+### Status global
+
+```
+GET  /api/status
+GET  /api/flutes                   — liste résumée (status court par flûte)
+GET  /api/flute?id=N               — config détaillée flûte N
+```
+
+### Flûte (id dans le body JSON)
+
+```
+POST /api/flute            {id, midi_channel, note_min, note_max,
+                            speed_mm_s, accel_mm_s2,
+                            pwm_full, pwm_hold, wait_delay_ms, legato_ms,
+                            enabled, muted, use_lut}
+POST /api/flute/lut        {id, lut: [{note, position}…]}
+POST /api/flute/lut_point  {id, note, position_mm}
+POST /api/flute/note       {id, note, velocity, on}
+POST /api/flute/jog        {id, mm}
+POST /api/flute/test       {id}                ─ séquence de test air
+POST /api/flute/panic      {id}                ─ coupure immédiate
+```
+
+### Globaux
+
+```
+POST /api/homing                 — re-homing toutes flûtes
+POST /api/panic                  — panic toutes flûtes
+```
+
+### Pression
+
+```
+GET  /api/pressure
+POST /api/pressure/config        {target, min, max, safety, max_fill_ms}
+POST /api/pressure/start
+POST /api/pressure/stop
+POST /api/pressure/reset
+```
+
+### WiFi
+
+```
+GET    /api/wifi
+POST   /api/wifi                 {ssid, password}
+DELETE /api/wifi                 — oublier credentials
+```
+
+### WebSocket
+
+`ws://<ip>/ws` diffuse l'état complet (toutes flûtes + pression) toutes les
+200 ms, et envoie un push immédiat à la connexion.
+
+---
+
+## 🧰 Pins par défaut
+
+| Flûte    | Step | Dir | En  | Endstop | Solénoïde (LEDC) | Servo (timer) |
+|----------|------|-----|-----|---------|-------------------|----------------|
+| Flûte 0  | 26   | 27  | 14  | 34      | 25 (ch 8)         | 32 (t 0)       |
+| Flûte 1  | 13   | 12  | 15  | 35      | 19 (ch 10)        | 18 (t 1)       |
+| Flûte 2  | 5    | 17  | 16  | 39      | 4 (ch 12)         | 2 (t 2)        |
+| Flûte 3  | 33   | 21  | 22  | 36      | 23 (ch 14)        | 3 (t 3)        |
+| Pompe    | 22   | -   | -   | -       | (LEDC ch 15)      | -              |
+| Capteur  | 36   | -   | -   | -       | -                 | -              |
+
+> Endstops sur GPIO 34/35/36/39 = input-only → pull-up externe 10 kΩ obligatoire.
+>
+> ⚠️ Le pin pompe (22) collide avec la flûte 3 — à remapper si on active 4 flûtes.
+
+---
+
+## 🔧 Compilation
+
+Bibliothèques requises (Arduino IDE) :
+
+- AccelStepper
+- ESP32Servo
+- ESPAsyncWebServer + AsyncTCP
+- ArduinoJson
+- MIDI Library (FortySevenEffects)
+- Arduino-BLE-MIDI (lathoub)
+
+Cible : **ESP32 (Wrover/DevKitC v4 ou compatible)**, partition incluant LittleFS.
+
+```
+Outils → Carte : ESP32 Dev Module
+Outils → Partition Scheme : Default 4MB with spiffs (1.2MB APP/1.5MB SPIFFS)
+Outils → Téléverser le contenu LittleFS (data/index.html)
+```
+
+---
+
+## ↪️ Migration depuis v2
+
+| v2                                     | v3                                            |
+|----------------------------------------|-----------------------------------------------|
+| `stepper`, `air`, `midi` globaux       | `orchestra.get(id)` puis `f->stepper()` etc.  |
+| `STEPPER_STEP_PIN` `#define`           | `DEFAULT_FLUTE_CONFIGS[0].stepperStepPin`     |
+| `runtimeCfg` partagé                   | NVS namespace `flute0`, `flute1`...           |
+| Endpoints `/api/config`, `/api/lut`    | `/api/flute`, `/api/flute/lut`                |
+| `MIDI_CHANNEL` global                  | par flûte (`midi_channel`)                    |
+| Pas de pompe                           | `PressureControl` complet (FSM + capteur)     |
+
+Pour rester en single-flûte (équivalent v2) : `DEFAULT_FLUTE_COUNT = 1`.
+
+---
+
+## 🚀 Démarrage rapide
+
+1. Cloner et ouvrir `esp32/esp32_slide_whistle/esp32_slide_whistle.ino` dans Arduino IDE
+2. Ajuster `DEFAULT_FLUTE_COUNT` et les pins dans `settings.h`
+3. Téléverser le sketch
+4. Téléverser LittleFS (Outils → ESP32 Sketch Data Upload) avec le dossier `data/`
+5. Se connecter au WiFi `SlideWhistle` (mot de passe `midi1234`)
+6. Ouvrir `http://192.168.4.1` → l'interface web pilote tout
