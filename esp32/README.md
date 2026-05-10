@@ -38,17 +38,26 @@ capteur de pression** intégré, et une interface web complète.
 
 ### Modules
 
-| Fichier             | Rôle                                                          |
-|---------------------|----------------------------------------------------------------|
-| `settings.h`        | Configs matérielles par flûte (`DEFAULT_FLUTE_CONFIGS[]`) + pression |
-| `StepperControl.h`  | Pilotage moteur pas-à-pas, instanciable, LUT par instance      |
-| `AirControl.h`      | Solénoïde PWM + servo, instanciable, courbes de vélocité       |
-| `Flute.h`           | Encapsulation d'un instrument (stepper + air + état + watchdog) |
-| `Orchestra.h`       | Tableau de flûtes, dispatch MIDI par canal                      |
-| `PressureControl.h` | Pompe + capteur pression + FSM (FILLING/MAINTAIN/SAFETY)        |
-| `MIDIHandler.h`     | Multi-source (Serial + BLE), callbacks `(channel, ...)`         |
-| `WiFiManager.h`     | AP + STA, credentials NVS                                       |
-| `WebInterface.h`    | API REST + WebSocket + sauvegarde NVS par flûte                 |
+| Fichier             | Rôle                                                                  |
+|---------------------|------------------------------------------------------------------------|
+| `settings.h`        | Configs matérielles par flûte (`DEFAULT_FLUTE_CONFIGS[]`) + pression   |
+| `StepperControl.h`  | Pilotage moteur pas-à-pas, instanciable, LUT par instance              |
+| `AirControl.h`      | Solénoïde PWM + servo, instanciable, courbes de vélocité               |
+| `Flute.h`           | Encapsulation d'un instrument (stepper + air + état + watchdog + sustain) |
+| `Orchestra.h`       | Tableau de flûtes, dispatch MIDI par canal                              |
+| `PressureControl.h` | Pompe + capteur pression + FSM (FILLING/MAINTAIN/SAFETY)                |
+| `MIDIHandler.h`     | Multi-source (Serial + BLE), callbacks `(channel, ...)` + ring buffer log |
+| `DemoPlayer.h`      | Mélodies de démo non-bloquantes (start/stop/loop)                       |
+| `StressTester.h`    | Burn-in : notes aléatoires sur les flûtes activées                      |
+| `WiFiManager.h`     | AP + STA + mDNS + scan, credentials NVS, validation longueur            |
+| `NVSKeys.h`         | Clés NVS centralisées (un seul endroit pour tout renommer)              |
+| `NVSStore.h`        | save/load Flute + PressureControl (extrait de WebInterface)             |
+| `WebInterface.h`    | API REST + WebSocket (orchestration des routes)                         |
+| `data/index.html`   | Squelette HTML (686 lignes), modaux et pages                            |
+| `data/app.css`      | Styles (750 lignes) — variables thème + composants + responsive         |
+| `data/app.js`       | Logique frontend (2426 lignes) — WS, rendu, piano, presets, etc.        |
+| `data/sw.js`        | Service worker PWA (cache shell, bypass /api/* et /ws)                  |
+| `data/manifest.webmanifest` | Manifeste PWA (icônes SVG inline)                              |
 
 ---
 
