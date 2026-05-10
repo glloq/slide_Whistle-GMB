@@ -141,6 +141,7 @@ panic</pre>
   <span id="fluteCount" class="pill" aria-label="Nombre de flûtes">0 flûtes</span>
   <span id="pressBadge" class="pill" style="display:none" aria-label="État pression">PRESSION</span>
   <span id="demoBadge" class="pill" style="display:none" aria-label="Démo en cours">▶ démo</span>
+  <span id="learnBadge" class="pill" style="display:none; background:var(--orange); color:#fff" aria-live="assertive">🎯 MIDI Learn — envoie un CC</span>
   <span style="margin-left:auto" class="small" aria-label="Version">v3 · multi-flute</span>
   <button class="theme-btn" id="compactToggle" onclick="toggleCompact()" aria-label="Vue compacte" title="Vue compacte"><span aria-hidden="true">📋</span></button>
   <button class="theme-btn" id="synthToggleBtn" onclick="toggleSynth()" aria-label="Activer ou désactiver la preview audio (raccourci S)" title="Preview audio (S)"><span aria-hidden="true">🔊</span></button>
@@ -345,80 +346,108 @@ panic</pre>
 <div id="page-config" class="page">
   <div class="card">
     <h3>Flûte
-      <select id="cfgFluteSel" style="width: auto" onchange="loadFluteCfg()"></select>
-      <span class="small" style="margin-left:auto">
+      <select id="cfgFluteSel" style="width: auto" onchange="loadFluteCfg()" aria-label="Choisir la flûte à éditer"></select>
+      <span class="small" style="margin-left:auto;display:flex;gap:14px">
         <label><input type="checkbox" id="cfgAutoSave"> auto-save</label>
+        <label><input type="checkbox" id="cfgAdvanced"> mode avancé</label>
       </span>
     </h3>
-    <label>Nom personnalisé <span class="help" title="Vide = utilise le nom par défaut">?</span></label>
-    <input id="cfgCustomName" type="text" maxlength="22" placeholder="laisser vide pour défaut">
-    <label>Couleur (UI uniquement, sauvée dans le navigateur)</label>
-    <div id="cfgColorSwatches"></div>
-    <div class="row3">
-      <div><label>Canal MIDI <span class="help" title="0=OMNI (tous canaux), 1-16=canal spécifique">?</span></label>
-        <input id="cfgChan" type="number" min="0" max="16"></div>
-      <div><label>Note min</label><input id="cfgNmin" type="number" min="0" max="127"></div>
-      <div><label>Note max</label><input id="cfgNmax" type="number" min="0" max="127"></div>
-    </div>
-    <label>Plage MIDI (drag) <span id="rangeLabel" class="small"></span></label>
-    <div class="range-editor">
-      <div class="track"></div>
-      <div id="rangeSel" class="selected"></div>
-      <input id="rangeMin" type="range" min="0" max="127" step="1">
-      <input id="rangeMax" type="range" min="0" max="127" step="1">
-      <div class="range-labels"><span id="rngLblMin"></span><span id="rngLblMax"></span></div>
-    </div>
-    <div class="row2">
-      <div><label>Vitesse (mm/s)</label><input id="cfgSpeed" type="number" step="1"></div>
-      <div><label>Accélération (mm/s²)</label><input id="cfgAccel" type="number" step="10"></div>
-      <div><label>PWM full</label><input id="cfgPwmFull" type="number" min="0" max="255"></div>
-      <div><label>PWM hold</label><input id="cfgPwmHold" type="number" min="0" max="255"></div>
-      <div><label>Wait delay (ms)</label><input id="cfgWait" type="number"></div>
-      <div><label>Legato (ms)</label><input id="cfgLegato" type="number"></div>
-    </div>
-    <div class="row2">
-      <div>
-        <label>Courbe de vélocité <span class="help" title="Mapping vélocité MIDI (0-127) vers angle servo. Quadratique = plus naturel pour une flûte.">?</span></label>
-        <select id="cfgVelCurve" onchange="drawVelCurve()">
-          <option value="0">0 — Linéaire</option>
-          <option value="1">1 — Quadratique (musical)</option>
-          <option value="2">2 — Cubique (très expressive)</option>
-        </select>
-        <canvas id="velCurveCanvas" width="200" height="100" style="margin-top:6px"></canvas>
-      </div>
-      <div>
-        <label><input id="cfgEnabled" type="checkbox"> Activée <span class="help" title="Désactivée : toutes les notes/CC sont ignorés">?</span></label>
-        <label style="margin-top:6px"><input id="cfgMuted" type="checkbox"> Mute <span class="help" title="Reçoit les events mais n'ouvre pas l'air. Utile pour solo flute.">?</span></label>
-        <label style="margin-top:6px"><input id="cfgUseLut" type="checkbox"> Utiliser la LUT <span class="help" title="LUT = table de calibration note→position. Sinon mapping linéaire (approximatif).">?</span></label>
-      </div>
-    </div>
 
-    <h3 style="margin-top: 16px">Mapping CC
-      <span class="small" style="margin-left:auto">0 = désactivé · 🎯 MIDI Learn : cliquez puis envoyez un CC</span>
-    </h3>
-    <div class="row3">
-      <div><label>CC Breath <span class="help" title="Contrôle le débit d'air (servo). Standard : 2.">?</span> <button class="btn" style="padding:1px 6px;font-size:11px" onclick="midiLearn('cfgCcBreath')">🎯</button></label>
-        <input id="cfgCcBreath" type="number" min="0" max="127"></div>
-      <div><label>CC Expression <span class="help" title="Standard : 11. Aussi mappé sur le débit air.">?</span> <button class="btn" style="padding:1px 6px;font-size:11px" onclick="midiLearn('cfgCcExpr')">🎯</button></label>
-        <input id="cfgCcExpr" type="number" min="0" max="127"></div>
-      <div><label>CC Volume <span class="help" title="Standard : 7. Mappé sur débit air.">?</span> <button class="btn" style="padding:1px 6px;font-size:11px" onclick="midiLearn('cfgCcVolume')">🎯</button></label>
-        <input id="cfgCcVolume" type="number" min="0" max="127"></div>
-      <div><label>CC Vibrato <span class="help" title="Mod wheel = 1. Déclenche vibrato sur le slide.">?</span> <button class="btn" style="padding:1px 6px;font-size:11px" onclick="midiLearn('cfgCcVibrato')">🎯</button></label>
-        <input id="cfgCcVibrato" type="number" min="0" max="127"></div>
-      <div><label>CC Sustain <span class="help" title="Pédale = 64. Réservé pour future implémentation.">?</span> <button class="btn" style="padding:1px 6px;font-size:11px" onclick="midiLearn('cfgCcSustain')">🎯</button></label>
-        <input id="cfgCcSustain" type="number" min="0" max="127"></div>
-    </div>
+    <!-- ========== Identité (toujours visible) ========== -->
+    <fieldset class="cfg-section">
+      <legend>Identité</legend>
+      <label for="cfgCustomName">Nom personnalisé <span class="help" title="Vide = utilise le nom par défaut">?</span></label>
+      <input id="cfgCustomName" type="text" maxlength="22" placeholder="laisser vide pour défaut">
+      <label>Couleur (UI uniquement, sauvée dans le navigateur)</label>
+      <div id="cfgColorSwatches" role="radiogroup" aria-label="Couleur de la flûte"></div>
+    </fieldset>
 
-    <div class="row2" style="margin-top:8px">
-      <div>
-        <label>Transpose (demi-tons) <span class="help" title="Décale les notes entrantes de N demi-tons (ex: +12 = octave plus haute). Notes hors plage sont ignorées.">?</span></label>
-        <input id="cfgTranspose" type="number" min="-36" max="36" value="0">
+    <!-- ========== Plage MIDI (toujours visible) ========== -->
+    <fieldset class="cfg-section">
+      <legend>Plage MIDI</legend>
+      <div class="row3">
+        <div><label for="cfgChan">Canal <span class="help" title="0=OMNI (tous canaux), 1-16=canal spécifique">?</span></label>
+          <input id="cfgChan" type="number" min="0" max="16"></div>
+        <div><label for="cfgNmin">Note min</label><input id="cfgNmin" type="number" min="0" max="127"></div>
+        <div><label for="cfgNmax">Note max</label><input id="cfgNmax" type="number" min="0" max="127"></div>
       </div>
-      <div class="small" style="align-self:end; padding-bottom:4px">
-        Ex : ch1 reçoit C4, transpose +12 → flûte joue C5
+      <label>Plage (drag) <span id="rangeLabel" class="small"></span></label>
+      <div class="range-editor">
+        <div class="track" aria-hidden="true"></div>
+        <div id="rangeSel" class="selected" aria-hidden="true"></div>
+        <input id="rangeMin" type="range" min="0" max="127" step="1" aria-label="Note minimum">
+        <input id="rangeMax" type="range" min="0" max="127" step="1" aria-label="Note maximum">
+        <div class="range-labels" aria-hidden="true"><span id="rngLblMin"></span><span id="rngLblMax"></span></div>
       </div>
-    </div>
-    <div class="btn-row">
+    </fieldset>
+
+    <!-- ========== Comportement (toujours visible) ========== -->
+    <fieldset class="cfg-section">
+      <legend>Comportement</legend>
+      <div class="row2">
+        <div>
+          <label for="cfgVelCurve">Courbe de vélocité <span class="help" title="Mapping vélocité MIDI (0-127) vers angle servo. Quadratique = plus naturel pour une flûte.">?</span></label>
+          <select id="cfgVelCurve" onchange="drawVelCurve()">
+            <option value="0">Linéaire</option>
+            <option value="1">Quadratique (musical)</option>
+            <option value="2">Cubique (très expressive)</option>
+          </select>
+          <canvas id="velCurveCanvas" width="200" height="100" style="margin-top:6px"
+                  role="img" aria-label="Aperçu de la courbe vélocité"></canvas>
+        </div>
+        <div>
+          <label><input id="cfgEnabled" type="checkbox"> Activée <span class="help" title="Désactivée : toutes les notes/CC sont ignorés">?</span></label>
+          <label style="margin-top:6px"><input id="cfgMuted" type="checkbox"> Mute <span class="help" title="Reçoit les events mais n'ouvre pas l'air. Utile pour solo.">?</span></label>
+          <label style="margin-top:6px"><input id="cfgUseLut" type="checkbox"> Utiliser la LUT <span class="help" title="LUT = table de calibration note→position. Sinon mapping linéaire (approximatif).">?</span></label>
+          <label style="margin-top:6px" class="adv-only" hidden>Transpose (±36 demi-tons) <span class="help" title="Décale les notes entrantes. Ex : +12 = octave plus haute.">?</span></label>
+          <input id="cfgTranspose" type="number" min="-36" max="36" value="0" class="adv-only" hidden>
+        </div>
+      </div>
+    </fieldset>
+
+    <!-- ========== Mapping CC (visible — collapse) ========== -->
+    <details class="cfg-collapse" open>
+      <summary>Mapping CC <span class="small">— routes les Control Changes vers les fonctions audio</span></summary>
+      <p class="small" style="margin: 4px 0 8px">0 = désactivé · 🎯 = MIDI Learn (cliquez puis envoyez un CC depuis votre contrôleur)</p>
+      <div class="row3">
+        <div><label for="cfgCcBreath">CC Breath <span class="help" title="Contrôle le débit d'air. Standard : 2.">?</span>
+          <button class="btn learn-btn" onclick="midiLearn('cfgCcBreath')" aria-label="MIDI Learn pour CC Breath">🎯 Learn</button></label>
+          <input id="cfgCcBreath" type="number" min="0" max="127"></div>
+        <div><label for="cfgCcExpr">CC Expression <span class="help" title="Standard : 11. Mappé sur débit air.">?</span>
+          <button class="btn learn-btn" onclick="midiLearn('cfgCcExpr')" aria-label="MIDI Learn pour CC Expression">🎯 Learn</button></label>
+          <input id="cfgCcExpr" type="number" min="0" max="127"></div>
+        <div><label for="cfgCcVolume">CC Volume <span class="help" title="Standard : 7. Mappé sur débit air.">?</span>
+          <button class="btn learn-btn" onclick="midiLearn('cfgCcVolume')" aria-label="MIDI Learn pour CC Volume">🎯 Learn</button></label>
+          <input id="cfgCcVolume" type="number" min="0" max="127"></div>
+        <div><label for="cfgCcVibrato">CC Vibrato <span class="help" title="Mod wheel = 1. Déclenche vibrato.">?</span>
+          <button class="btn learn-btn" onclick="midiLearn('cfgCcVibrato')" aria-label="MIDI Learn pour CC Vibrato">🎯 Learn</button></label>
+          <input id="cfgCcVibrato" type="number" min="0" max="127"></div>
+        <div><label for="cfgCcSustain">CC Sustain <span class="help" title="Pédale = 64. Tient les notes tant que la pédale est enfoncée.">?</span>
+          <button class="btn learn-btn" onclick="midiLearn('cfgCcSustain')" aria-label="MIDI Learn pour CC Sustain">🎯 Learn</button></label>
+          <input id="cfgCcSustain" type="number" min="0" max="127"></div>
+      </div>
+    </details>
+
+    <!-- ========== Moteur / Air (avancé — collapse) ========== -->
+    <details class="cfg-collapse">
+      <summary>Moteur & Air <span class="small">— paramètres techniques (mode avancé)</span></summary>
+      <div class="row2" style="margin-top:8px">
+        <div><label for="cfgSpeed">Vitesse (mm/s) <span class="help" title="Vitesse max du moteur. 45 = équilibre standard.">?</span></label>
+          <input id="cfgSpeed" type="number" step="1"></div>
+        <div><label for="cfgAccel">Accélération (mm/s²) <span class="help" title="Plus = plus réactif mais plus de bruit. 800 = standard.">?</span></label>
+          <input id="cfgAccel" type="number" step="10"></div>
+        <div><label for="cfgPwmFull">PWM full (0-255) <span class="help" title="Puissance pleine du solénoïde à l'ouverture.">?</span></label>
+          <input id="cfgPwmFull" type="number" min="0" max="255"></div>
+        <div><label for="cfgPwmHold">PWM hold (0-255) <span class="help" title="Puissance de maintien après ouverture. Économise l'énergie.">?</span></label>
+          <input id="cfgPwmHold" type="number" min="0" max="255"></div>
+        <div><label for="cfgWait">Wait delay (ms) <span class="help" title="Attente moteur en position avant d'ouvrir l'air.">?</span></label>
+          <input id="cfgWait" type="number"></div>
+        <div><label for="cfgLegato">Legato (ms) <span class="help" title="Seuil pour considérer notes consécutives comme legato (air maintenu).">?</span></label>
+          <input id="cfgLegato" type="number"></div>
+      </div>
+    </details>
+
+    <div class="btn-row" style="margin-top:14px">
       <button class="btn btn-primary" onclick="saveFluteCfg()">💾 Sauvegarder</button>
       <button class="btn btn-warn" onclick="testFluteAir()">🌬 Test air</button>
     </div>

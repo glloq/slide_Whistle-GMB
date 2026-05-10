@@ -541,14 +541,49 @@
   nav button .nav-badge.warn  { background: var(--yellow); color: #000; }
   nav button .nav-badge.info  { background: var(--green);  color: #000; }
 
-  /* MIDI Learn mode */
+  /* MIDI Learn mode — bordure plus épaisse + glow plus marqué */
   input.learning {
-    border-color: var(--orange) !important;
+    border: 2px solid var(--orange) !important;
+    background: rgba(233,69,96,.08) !important;
     animation: learnPulse 1s infinite;
   }
   @keyframes learnPulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(233,69,96,.5); }
-    50%      { box-shadow: 0 0 0 4px rgba(233,69,96,0); }
+    0%, 100% { box-shadow: 0 0 0 0 rgba(233,69,96,.6); }
+    50%      { box-shadow: 0 0 0 6px rgba(233,69,96,0); }
+  }
+  /* Petit bouton MIDI Learn à côté des inputs CC */
+  .learn-btn {
+    padding: 1px 6px; font-size: 11px;
+    margin-left: 6px; vertical-align: middle;
+  }
+
+  /* Sections de config (fieldset + collapse) */
+  fieldset.cfg-section {
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 14px 12px; margin: 12px 0;
+  }
+  fieldset.cfg-section legend {
+    color: var(--green); font-weight: 600; font-size: 12px;
+    text-transform: uppercase; letter-spacing: .5px;
+    padding: 0 6px;
+  }
+  details.cfg-collapse {
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 14px; margin: 12px 0;
+  }
+  details.cfg-collapse > summary {
+    cursor: pointer; color: var(--green); font-weight: 600;
+    font-size: 12px; text-transform: uppercase; letter-spacing: .5px;
+    padding: 4px 0; user-select: none;
+  }
+  details.cfg-collapse > summary:hover { color: var(--text); }
+  details.cfg-collapse[open] > summary { margin-bottom: 8px; }
+
+  /* Mode avancé : champs marqués .adv-only sont masqués sauf si le toggle
+     est actif (la classe est appliquée sur <body>). */
+  body:not(.advanced-mode) .adv-only { display: none !important; }
+  body.advanced-mode details.cfg-collapse:not([open]) {
+    border-color: var(--green); border-style: dashed;
   }
 
   /* Inline validation */

@@ -597,7 +597,19 @@ function midiLearn(inputId) {
   if (_learnTarget) _learnTarget.classList.remove('learning');
   _learnTarget = inp;
   inp.classList.add('learning');
+  // Badge global persistant tant que learn actif
+  const badge = document.getElementById('learnBadge');
+  if (badge) badge.style.display = 'inline-block';
+  inp.scrollIntoView({behavior: 'smooth', block: 'center'});
   toast('🎯 Envoie un CC sur ton contrôleur (Esc pour annuler)', 'warn', 8000);
+}
+function endMidiLearn(reason) {
+  if (!_learnTarget) return;
+  _learnTarget.classList.remove('learning');
+  _learnTarget = null;
+  const badge = document.getElementById('learnBadge');
+  if (badge) badge.style.display = 'none';
+  if (reason) toast(reason);
 }
 // Pris en compte dans onWsMessage : si _learnTarget actif et message CC reçu,
 // on remplit le champ. On utilise l'event log MIDI.
@@ -610,11 +622,10 @@ async function pollForLearn() {
   const recent = log.filter(e => e.type === 'CC').sort((a, b) => a.t_rel_ms - b.t_rel_ms);
   if (recent.length && recent[0].t_rel_ms < 4000) {
     const cc = recent[0].data1;
-    _learnTarget.value = cc;
-    _learnTarget.classList.remove('learning');
-    _learnTarget.dispatchEvent(new Event('input', {bubbles:true}));
-    toast(`CC${cc} appris pour ${_learnTarget.id.replace('cfgCc','')}`, 'success');
-    _learnTarget = null;
+    const target = _learnTarget;
+    target.value = cc;
+    target.dispatchEvent(new Event('input', {bubbles: true}));
+    endMidiLearn(`CC${cc} appris pour ${target.id.replace('cfgCc','')}`);
   }
 }
 setInterval(pollForLearn, 600);
@@ -622,13 +633,10 @@ setInterval(pollForLearn, 600);
 // Échap = annuler le learn
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    if (_learnTarget) {
-      _learnTarget.classList.remove('learning');
-      _learnTarget = null;
-      toast('MIDI Learn annulé');
-    }
+    if (_learnTarget) endMidiLearn('MIDI Learn annulé');
     document.getElementById('shortcutsModal')?.classList.remove('show');
     document.getElementById('bulkModal')?.classList.remove('show');
+    document.getElementById('macroEditor')?.classList.remove('show');
   }
 });
 
@@ -1657,6 +1665,20 @@ function setupDirtyTracking() {
     cb.checked = localStorage.getItem('autosave') === '1';
     cb.addEventListener('change', () => localStorage.setItem('autosave', cb.checked ? '1' : '0'));
   }
+  // Mode avancé toggle (affiche transpose, ouvre le panneau Moteur & Air)
+  const adv = document.getElementById('cfgAdvanced');
+  if (adv) {
+    const restore = localStorage.getItem('advanced') === '1';
+    adv.checked = restore;
+    if (restore) document.body.classList.add('advanced-mode');
+    adv.addEventListener('change', () => {
+      document.body.classList.toggle('advanced-mode', adv.checked);
+      localStorage.setItem('advanced', adv.checked ? '1' : '0');
+      // Auto-ouvrir/fermer le panneau Moteur & Air
+      const panel = document.querySelector('details.cfg-collapse:nth-of-type(2)');
+      if (panel) panel.open = adv.checked;
+    });
+  }
 }
 
 async function saveFluteCfg() {
@@ -1975,16 +1997,24 @@ function filterLogByChannel(ch) {
   if (inp) { inp.value = ch; loadMidiLog(); }
 }
 async function loadMidiLog() {
-  const log = await getJson('/api/midi/log');
   const box = document.getElementById('midiLog');
-  if (!log) return;
+  if (!box) return;
+  // Skeleton pendant le fetch
+  if (!box._loaded) box.innerHTML = '<div class="small skeleton skeleton-block">Chargement…</div>';
+  const log = await getJson('/api/midi/log');
+  if (!log) { box.innerHTML = '<div class="empty-state"><div class="ico">📡</div><div class="msg">Erreur de chargement.</div></div>'; return; }
+  box._loaded = true;
   const filterType = document.getElementById('midiFilterType')?.value || '';
   const filterCh   = +document.getElementById('midiFilterCh')?.value || 0;
   const filtered = log.filter(e =>
     (!filterType || e.type === filterType) &&
     (!filterCh   || e.channel === filterCh)
   );
-  if (!filtered.length) { box.innerHTML = '<div class="small">Aucune activité correspondant aux filtres.</div>'; return; }
+  if (!filtered.length) {
+    box.innerHTML = '<div class="empty-state"><div class="ico">🎵</div>' +
+      '<div class="msg">' + (log.length ? 'Aucune activité ne correspond aux filtres.' : 'Aucune activité MIDI reçue récemment. Branchez un contrôleur ou lancez une démo depuis Jouer.') + '</div></div>';
+    return;
+  }
   box.innerHTML = filtered.slice().reverse().map(e => {
     const age = e.t_rel_ms < 1000 ? `${e.t_rel_ms}ms` : `${(e.t_rel_ms/1000).toFixed(1)}s`;
     let body = '';
@@ -2009,13 +2039,18 @@ async function otaUpload() {
   const f = document.getElementById('otaFile').files[0];
   if (!f) { toast('Sélectionnez un fichier .bin', 'warn'); return; }
   if (!await confirmDialog(
-        `Flasher "${f.name}" (${(f.size/1024).toFixed(1)} KB) ?\nLe système redémarrera automatiquement.`,
+        `Flasher "${f.name}" (${(f.size/1024).toFixed(1)} KB) ?\n\n` +
+        `⚠ ATTENTION :\n` +
+        `• L'ESP32 sera indisponible pendant ~30 secondes\n` +
+        `• Toutes les notes en cours seront coupées\n` +
+        `• Si le flash échoue, débranchez/rebranchez et flashez à nouveau`,
         'Mise à jour OTA', 'Flasher')) return;
   const btn = document.getElementById('otaBtn');
   const prog = document.getElementById('otaProgress');
   btn.disabled = true;
-  prog.textContent = 'Upload en cours...';
-  showLoading();
+  // Spinner persistant + barre de progression visuelle
+  prog.innerHTML = '<div class="spinner" style="width:20px;height:20px;border-width:2px;display:inline-block;vertical-align:middle"></div> Upload 0%' +
+    '<div class="progress-bar" style="margin-top:8px"><div id="otaBar" class="progress-fill" style="width:0%"></div></div>';
   try {
     const fd = new FormData();
     fd.append('firmware', f, f.name);
@@ -2024,30 +2059,30 @@ async function otaUpload() {
     xhr.upload.onprogress = e => {
       if (e.lengthComputable) {
         const pct = (e.loaded / e.total) * 100;
-        prog.textContent = `Upload ${pct.toFixed(0)}% (${(e.loaded/1024).toFixed(1)}/${(e.total/1024).toFixed(1)} KB)`;
+        const bar = document.getElementById('otaBar');
+        if (bar) bar.style.width = pct + '%';
+        prog.firstChild.nextSibling.textContent = ` Upload ${pct.toFixed(0)}% (${(e.loaded/1024).toFixed(1)}/${(e.total/1024).toFixed(1)} KB)`;
       }
     };
     xhr.onload = () => {
-      hideLoading();
       btn.disabled = false;
       if (xhr.status === 200) {
-        prog.innerHTML = '<span style="color:var(--green)">✓ Mise à jour OK — redémarrage en cours...</span>';
-        toast('Firmware flashé, reboot...', 'success', 8000);
+        prog.innerHTML = '<span class="health-ok">✓ Mise à jour OK — redémarrage en cours… patientez 30 s puis rechargez la page</span>';
+        toast('Firmware flashé, reboot...', 'success', 10000);
       } else {
-        prog.innerHTML = '<span style="color:var(--orange)">✗ Échec : ' + xhr.responseText + '</span>';
+        prog.innerHTML = '<span class="health-error">✗ Échec : ' + xhr.responseText + '</span>';
         toast('Échec OTA', 'error', 6000);
       }
     };
     xhr.onerror = () => {
-      hideLoading();
       btn.disabled = false;
-      prog.innerHTML = '<span style="color:var(--orange)">✗ Erreur réseau</span>';
+      prog.innerHTML = '<span class="health-error">✗ Erreur réseau pendant l\'upload</span>';
+      toast('Erreur réseau', 'error');
     };
     xhr.send(fd);
-  } catch(e) {
-    hideLoading();
+  } catch (e) {
     btn.disabled = false;
-    prog.textContent = 'Erreur : ' + e.message;
+    prog.innerHTML = '<span class="health-error">✗ ' + e.message + '</span>';
   }
 }
 
@@ -2057,7 +2092,13 @@ async function otaUpload() {
 async function loadPresets() {
   const list = await getJson('/api/presets');
   const box = document.getElementById('presetsList');
-  if (!list.length) { box.innerHTML = '<div>Aucun preset enregistré.</div>'; return; }
+  if (!list || !list.length) {
+    box.innerHTML = '<div class="empty-state"><div class="ico">💾</div>' +
+      '<div class="msg">Aucun preset enregistré.</div>' +
+      '<div class="small">Tape un nom à gauche puis clique <em>Enregistrer la config courante</em> pour créer ton premier snapshot.</div>' +
+      '</div>';
+    return;
+  }
   box.innerHTML = list.map(name => `
     <div class="stat" style="margin:4px 0">
       <span style="color:var(--text); font-weight:600">${name}</span>
