@@ -815,6 +815,13 @@
   .toast.error   { border-left-color: var(--orange); }
   .toast.warn    { border-left-color: var(--yellow); }
   .toast.success { border-left-color: var(--green); }
+  .toast .toast-undo {
+    background: var(--green); color: #000;
+    border: none; padding: 4px 10px; border-radius: 4px;
+    cursor: pointer; font-size: 12px; margin-left: 10px;
+    font-weight: 600;
+  }
+  .toast .toast-undo:hover { opacity: .85; }
   @keyframes toastIn {
     from { transform: translateX(20px); opacity: 0; }
     to   { transform: translateX(0); opacity: 1; }

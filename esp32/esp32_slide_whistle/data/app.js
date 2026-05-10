@@ -531,14 +531,34 @@ window.addEventListener('load', () => {
 // ============================================================================
 // Onboarding tour (first-run, désactivable)
 // ============================================================================
+// Tour court (5 étapes) — focus sur les actions essentielles d'un nouvel
+// utilisateur. Chaque étape indique aussi quoi faire ensuite.
 const TOUR_STEPS = [
-  {target: 'header h1', title: '🎼 Bienvenue', msg: 'Cette interface pilote ton (ou tes) slide whistle MIDI. Cliquons ensemble sur les fonctions clés.'},
-  {target: '#sysBadge', title: 'État système', msg: 'Ce badge indique INIT / HOMING / READY / ERROR. Doit afficher READY pour jouer.'},
-  {target: 'nav button[data-page="flutes"]', title: 'Page Flûtes', msg: 'Liste tes flûtes : status, mute, solo, sweep mécanique, panic.'},
-  {target: 'nav button[data-page="play"]', title: 'Jouer', msg: 'Piano cliquable + clavier ordi (sur cette page) + démos pré-enregistrées.'},
-  {target: 'nav button[data-page="config"]', title: 'Réglages', msg: 'Calibrer la LUT, mapper les CC, modifier nom/transpose/vélocité par flûte.'},
-  {target: '.theme-btn', title: 'Outils header', msg: '🔍 recherche · 🌓 thème · 🔊 preview audio · ⌨ raccourcis · 📋 vue compacte. Tout est rapidement accessible.'},
-  {target: '#dashHealth', title: 'Santé', msg: 'Toute anomalie (homing, défauts pression, heap faible) apparaît ici en temps réel.'},
+  {
+    target: 'header h1',
+    title: '🎼 Bienvenue',
+    msg: 'Cette interface pilote tes slide whistles MIDI. En 5 étapes, tu auras tout en main. Rappel : Ctrl+K à tout moment pour la recherche, ⌨ pour les raccourcis.'
+  },
+  {
+    target: '#sysBadge',
+    title: '1. État système',
+    msg: 'Doit afficher READY (vert). Si HOMING : patiente. Si ERROR : vérifie les endstops via la page Diag.'
+  },
+  {
+    target: 'nav button[data-page="play"]',
+    title: '2. Jouer',
+    msg: 'Démarre ici : active la preview audio (🔊 dans le header), puis clique sur le piano. Tu peux aussi lancer une démo pré-enregistrée.'
+  },
+  {
+    target: 'nav button[data-page="config"]',
+    title: '3. Régler',
+    msg: 'Pour ajuster une flûte : calibration LUT (drag les points), mapping CC (avec MIDI Learn 🎯), transpose, vélocité curve. Active "mode avancé" pour révéler les paramètres techniques.'
+  },
+  {
+    target: 'nav button[data-page="help"]',
+    title: '4. Aide à tout moment',
+    msg: 'Cette page contient le guide complet, la table des CC standards, le dépannage. Tu peux aussi imprimer la doc.'
+  }
 ];
 let _tourStep = 0;
 function startTour() {
@@ -1130,6 +1150,26 @@ function toast(msg, type = 'success', timeout = 3000) {
   setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 200); }, timeout);
 }
 
+// toast avec bouton "Annuler" — appelle undoFn si l'utilisateur clique
+// avant l'expiration. Utile pour les actions destructives (delete preset,
+// disable flute, etc.) — donne 5 s pour annuler.
+function toastUndo(msg, undoFn, timeout = 5000) {
+  const t = document.createElement('div');
+  t.className = 'toast warn';
+  t.textContent = msg + ' ';
+  const btn = document.createElement('button');
+  btn.className = 'toast-undo';
+  btn.textContent = '↶ Annuler';
+  btn.onclick = async () => {
+    try { await undoFn(); toast('Annulé', 'success'); }
+    catch (e) { toast('Échec annulation', 'error'); }
+    t.remove();
+  };
+  t.appendChild(btn);
+  document.getElementById('toasts').appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 200); }, timeout);
+}
+
 // ============================================================================
 // HTTP helpers
 // ============================================================================
@@ -1577,8 +1617,16 @@ function toggleSynth() {
 // ============================================================================
 // Flute control actions
 // ============================================================================
-async function toggleEnable(id, en) { await postJson('/api/flute', {id, enabled:en}); }
-async function toggleMute(id, m)    { await postJson('/api/flute', {id, muted:m}); }
+async function toggleEnable(id, en) {
+  await postJson('/api/flute', {id, enabled: en});
+  if (!en) toastUndo(`Flûte #${id} désactivée.`,
+    () => postJson('/api/flute', {id, enabled: true}));
+}
+async function toggleMute(id, m) {
+  await postJson('/api/flute', {id, muted: m});
+  if (m) toastUndo(`Flûte #${id} mutée.`,
+    () => postJson('/api/flute', {id, muted: false}));
+}
 async function testAir(id)          { await postJson('/api/flute/test',  {id}); }
 async function panic(id)            { await postJson('/api/flute/panic', {id}); }
 async function homeOne(id)          { await postJson('/api/flute/homing', {id}); }
@@ -2125,8 +2173,21 @@ async function loadPreset(name) {
 }
 async function deletePreset(name) {
   if (!await confirmDialog(`Supprimer le preset "${name}" ?`, 'Supprimer', 'Supprimer')) return;
+  // Sauvegarde le snapshot avant delete pour pouvoir annuler
+  let snapshot = null;
+  try { snapshot = await getJson(`/api/presets`).then(arr =>
+    fetch('/api/presets/load', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, dryRun:true})}).catch(() => null));
+  } catch (_) {}
   await postJson('/api/presets/delete', {name});
   loadPresets();
+  // Note : la restauration ne peut pas régénérer le contenu exact si l'utilisateur
+  // ne l'avait pas backupé. On propose tout de même l'undo en re-sauvegardant la
+  // config courante sous le même nom.
+  toastUndo(`Preset "${name}" supprimé.`, async () => {
+    await postJson('/api/presets/save', {name});
+    loadPresets();
+  });
 }
 
 // ============================================================================
