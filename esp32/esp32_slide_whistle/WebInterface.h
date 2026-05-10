@@ -53,6 +53,7 @@ extern volatile bool g_pressureResetRequested;
 extern volatile int  g_demoMelodyId;      // -1 = stop, sinon index de mélodie à lancer
 extern volatile bool g_demoLoop;
 extern volatile int  g_sweepFluteId;
+extern volatile int  g_stressDurationSec;
 
 class WebInterface {
 private:
@@ -910,6 +911,15 @@ private:
       req->send(200, "application/json", "{\"ok\":true}");
     });
 
+    // POST /api/stress {duration_sec} — burn-in : notes aléatoires
+    server.addHandler(new AsyncCallbackJsonWebHandler("/api/stress",
+      [](AsyncWebServerRequest* req, JsonVariant& json) {
+        int sec = json["duration_sec"] | 30;
+        if (sec < 0 || sec > 600) { req->send(400, "application/json", "{\"error\":\"0-600s\"}"); return; }
+        g_stressDurationSec = sec;
+        req->send(200, "application/json", "{\"ok\":true}");
+      }));
+
     // ---- SOLO -------------------------------------------------------------
     // Met en mute toutes les flûtes sauf {id}. Si id < 0, libère le solo.
 
@@ -1052,6 +1062,11 @@ private:
     server.on("/api/wifi", HTTP_GET, [this](AsyncWebServerRequest* req) {
       if (_wifi) req->send(200, "application/json", _wifi->getStatusJSON());
       else       req->send(503, "application/json", "{\"error\":\"no wifi\"}");
+    });
+    // GET /api/wifi/scan — liste les réseaux disponibles
+    server.on("/api/wifi/scan", HTTP_GET, [this](AsyncWebServerRequest* req) {
+      if (!_wifi) { req->send(503, "application/json", "{}"); return; }
+      req->send(200, "application/json", _wifi->scanNetworksJSON());
     });
     server.addHandler(new AsyncCallbackJsonWebHandler("/api/wifi",
       [this](AsyncWebServerRequest* req, JsonVariant& json) {

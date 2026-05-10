@@ -45,6 +45,18 @@ private:
     return (float)steps / _cfg.stepsPerMM;
   }
 
+  // Lecture endstop avec debounce logiciel (3 lectures concordantes sur 1ms)
+  bool endstopActive() {
+    int s1 = digitalRead(_cfg.endstopPin);
+    if (s1 != _cfg.endstopActiveState) return false;
+    delayMicroseconds(300);
+    int s2 = digitalRead(_cfg.endstopPin);
+    if (s2 != _cfg.endstopActiveState) return false;
+    delayMicroseconds(300);
+    int s3 = digitalRead(_cfg.endstopPin);
+    return s3 == _cfg.endstopActiveState;
+  }
+
   void applyMove(float positionMM) {
 #if ENABLE_SOFT_LIMITS
     positionMM = constrain(positionMM, 0.0f, _cfg.sliderTravelMM);
@@ -116,7 +128,7 @@ public:
 
     // Phase 1 — recherche rapide
     _stepper->setSpeed(-fastSteps * _dirMult);
-    while (digitalRead(_cfg.endstopPin) != _cfg.endstopActiveState) {
+    while (!endstopActive()) {
       _stepper->runSpeed();
       if (millis() - t0 > DEFAULT_MAX_HOMING_TIME) {
 #if DEBUG_MODE
@@ -135,7 +147,7 @@ public:
     // Phase 3 — approche lente
     _stepper->setSpeed(-fastSteps * 0.25f * _dirMult);
     unsigned long t3 = millis();
-    while (digitalRead(_cfg.endstopPin) != _cfg.endstopActiveState) {
+    while (!endstopActive()) {
       _stepper->runSpeed();
       if (millis() - t3 > 5000) {
 #if DEBUG_MODE

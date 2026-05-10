@@ -127,6 +127,22 @@ public:
   String getSTAIP() { return WiFi.localIP().toString(); }
   String getSTASSID() { return staSSID; }
 
+  // Scan synchrone des réseaux WiFi (renvoie JSON array)
+  String scanNetworksJSON() {
+    int n = WiFi.scanNetworks(false, true);    // sync, show hidden
+    String out = "[";
+    for (int i = 0; i < n; ++i) {
+      if (i) out += ",";
+      out += "{\"ssid\":\"" + WiFi.SSID(i) +
+             "\",\"rssi\":" + String(WiFi.RSSI(i)) +
+             ",\"enc\":" + String((int)WiFi.encryptionType(i)) +
+             ",\"ch\":" + String(WiFi.channel(i)) + "}";
+    }
+    out += "]";
+    WiFi.scanDelete();
+    return out;
+  }
+
   String getStatusJSON() {
     bool sta = isSTAConnected();
     char buf[320];

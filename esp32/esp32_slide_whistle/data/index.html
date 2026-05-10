@@ -520,7 +520,55 @@
   .activity-time { color: var(--muted); min-width: 56px; font-family: ui-monospace, monospace; }
   .activity-icon { width: 18px; text-align: center; }
 
-  /* Print stylesheet */
+  /* Animated tab indicator (sliding underline) */
+  nav { position: relative; }
+  nav::after {
+    content: ''; position: absolute;
+    bottom: 6px; height: 2px;
+    background: var(--green); border-radius: 1px;
+    transition: left .25s ease, width .25s ease;
+    pointer-events: none;
+    left: 0; width: 0;
+  }
+
+  /* Loading skeletons */
+  .skeleton {
+    background: linear-gradient(90deg, var(--border) 0%, var(--accent) 50%, var(--border) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.4s infinite;
+    border-radius: 4px; color: transparent;
+  }
+  @keyframes shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+  .skeleton-block { height: 16px; margin: 8px 0; }
+  .skeleton-card  { height: 140px; }
+
+  /* WiFi scan dropdown */
+  .scan-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--border);
+    border-radius: 4px; margin: 6px 0; }
+  .scan-item { padding: 8px 12px; cursor: pointer; display: flex; justify-content: space-between;
+    border-bottom: 1px solid var(--border); font-size: 13px; }
+  .scan-item:last-child { border-bottom: none; }
+  .scan-item:hover { background: var(--accent); }
+  .scan-rssi { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+  .scan-lock { color: var(--muted); margin-right: 6px; }
+
+  /* LUT canvas crosshair tooltip */
+  .lut-tooltip {
+    position: absolute; background: var(--card); color: var(--text);
+    border: 1px solid var(--green); padding: 4px 8px; border-radius: 4px;
+    font-size: 11px; pointer-events: none; display: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,.3); white-space: nowrap;
+  }
+
+  /* Per-channel sparkline */
+  .ch-cell { position: relative; }
+  .ch-cell .ch-spark {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 6px; opacity: .55;
+  }
+
   @media print {
     nav, header, #toasts, #loading-overlay, #cmdRoot, #modalRoot,
     #bulkModal, #tourRoot, .theme-btn, .btn-row, .sticky-save { display: none !important; }
@@ -963,7 +1011,10 @@
     </div>
 
     <h3 style="margin-top: 16px">Calibration (LUT)</h3>
-    <canvas id="lutCanvas" width="600" height="220"></canvas>
+    <div style="position:relative">
+      <canvas id="lutCanvas" width="600" height="220"></canvas>
+      <div id="lutTooltip" class="lut-tooltip"></div>
+    </div>
     <div class="small" style="margin: 4px 0 12px">
       Vert = LUT calibrée · gris = mapping linéaire de référence. La courbe d'une slide whistle
       réelle est non-linéaire (1/Longueur ∝ fréquence) donc la LUT doit s'incurver vers le bas.
@@ -1062,6 +1113,18 @@
   <div class="card" style="margin-top:12px">
     <h3>Diagnostic pression</h3>
     <div id="diagPressure" class="small">—</div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h3>Stress test <span class="small">⚠ joue des notes aléatoires pour vérifier la stabilité mécanique/thermique</span></h3>
+    <div class="row3">
+      <div><label>Durée (s)</label><input id="stressDuration" type="number" min="1" max="600" value="30"></div>
+      <div><label>&nbsp;</label><button class="btn btn-warn" onclick="startStress()" style="width:100%">▶ Lancer</button></div>
+      <div><label>&nbsp;</label><button class="btn" onclick="stopStress()" style="width:100%">■ Arrêter</button></div>
+    </div>
+    <div class="small" style="margin-top:6px">
+      Désactive la flûte 0 ou mute les autres si tu veux cibler une seule. Le test ouvre/ferme l'air ~3-5 fois/s pendant la durée choisie.
+    </div>
   </div>
 
   <div class="card" style="margin-top:12px">
@@ -1172,7 +1235,10 @@
     <div id="wifiStatus" class="small">Chargement...</div>
   </div>
   <div class="card" style="margin-top:12px">
-    <h3>Connecter à un réseau</h3>
+    <h3>Connecter à un réseau
+      <button class="btn" onclick="scanWifi()" style="margin-left:auto">🔍 Scan</button>
+    </h3>
+    <div id="wifiScanList" class="scan-list" style="display:none"></div>
     <label>SSID</label><input id="wSsid" type="text">
     <label>Mot de passe</label><input id="wPass" type="text">
     <div class="btn-row">
@@ -1192,11 +1258,28 @@ let ws = null;
 // ============================================================================
 // Navigation
 // ============================================================================
+function updateTabIndicator() {
+  const nav = document.querySelector('nav');
+  const active = document.querySelector('nav button.active');
+  if (!nav || !active) return;
+  const navRect = nav.getBoundingClientRect();
+  const r = active.getBoundingClientRect();
+  nav.style.setProperty('--ind-left', (r.left - navRect.left + nav.scrollLeft) + 'px');
+  nav.style.setProperty('--ind-width', r.width + 'px');
+  nav.style.cssText = nav.style.cssText;       // force reflow
+}
+// Sync via CSS variables (custom selector)
+const _styleSheet = document.createElement('style');
+_styleSheet.textContent = 'nav::after { left: var(--ind-left, 0); width: var(--ind-width, 0); }';
+document.head.appendChild(_styleSheet);
+window.addEventListener('resize', updateTabIndicator);
+
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
   document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
   document.getElementById('page-' + b.dataset.page).classList.add('active');
+  updateTabIndicator();
   // Sync URL hash (sans déclencher hashchange en boucle)
   if (location.hash !== '#' + b.dataset.page) {
     history.replaceState(null, '', '#' + b.dataset.page);
@@ -2033,27 +2116,45 @@ function render() {
     fl.innerHTML += `<div class="card" style="text-align:center"><button class="btn btn-primary" onclick="clearSolo()">Libérer le solo (unmute toutes)</button></div>`;
   }
 
-  // MIDI channels strip
+  // MIDI channels strip avec sparkline d'activité
   const strip = document.getElementById('midiChStrip');
   if (strip) {
     const counts = state.midi_count_by_channel || [];
     const last = state.midi_last_channel;
     const usedChannels = new Set();
     (state.flutes||[]).forEach(f => { if (f.midi_channel) usedChannels.add(f.midi_channel); });
+    // Push delta dans l'historique par canal
+    if (!_chHistory) window._chHistory = Array.from({length:17}, () => []);
+    if (!_prevChCounts) window._prevChCounts = Array(17).fill(0);
+    for (let ch = 1; ch <= 16; ch++) {
+      const cur = counts[ch-1] || 0;
+      const delta = Math.max(0, cur - _prevChCounts[ch]);
+      _chHistory[ch].push(delta);
+      if (_chHistory[ch].length > 20) _chHistory[ch].shift();
+      _prevChCounts[ch] = cur;
+    }
     let html = '';
     for (let ch = 1; ch <= 16; ch++) {
       const cnt = counts[ch-1] || 0;
       const isLast = ch === last;
       const isUsed = usedChannels.has(ch);
-      let style = '';
+      let style = '', barColor = 'var(--green)';
       if (isUsed) {
-        // Trouver couleur de la flûte attribuée à ce canal (la première trouvée)
         const f = (state.flutes||[]).find(x => x.midi_channel === ch);
-        if (f) style = `border-color:${fluteColor(f.id)}`;
+        if (f) { style = `border-color:${fluteColor(f.id)}`; barColor = fluteColor(f.id); }
       }
-      html += `<div class="ch-cell ${isLast?'active':''}" style="${style}" title="${cnt} messages">
+      // Sparkline SVG en bas de la cellule
+      const hist = _chHistory[ch];
+      const maxH = Math.max(1, ...hist);
+      let bars = '';
+      for (let i = 0; i < hist.length; i++) {
+        const h = (hist[i] / maxH) * 6;
+        bars += `<rect x="${i*1.2}" y="${6-h}" width="1" height="${h}" fill="${barColor}"/>`;
+      }
+      html += `<div class="ch-cell ${isLast?'active':''}" style="${style}" title="${cnt} messages · cliquer pour filtrer log" onclick="filterLogByChannel(${ch})">
         <span class="ch-num">${ch}</span>
         <span class="ch-cnt">${cnt > 999 ? Math.round(cnt/100)/10+'k' : cnt}</span>
+        <svg class="ch-spark" viewBox="0 0 24 6" preserveAspectRatio="none">${bars}</svg>
       </div>`;
     }
     strip.innerHTML = html;
@@ -2424,11 +2525,39 @@ function drawLutCanvas() {
   }
 }
 
-// Drag sur le canvas pour modifier les points
+// Drag sur le canvas pour modifier les points + crosshair info
 (function setupLutDrag() {
   const c = document.getElementById('lutCanvas');
   if (!c) return;
   let dragIdx = -1;
+
+  // Hover : afficher tooltip avec note + position
+  c.addEventListener('mousemove', e => {
+    const rect = c.getBoundingClientRect();
+    const xRel = e.clientX - rect.left;
+    if (!_currentLut.length) return;
+    const padL = 32, padR = 8;
+    const plotW = c.clientWidth - padL - padR;
+    const n = _currentLut.length;
+    let best = 0, bestD = 1e9;
+    for (let i = 0; i < n; i++) {
+      const xx = padL + (i / (n-1)) * plotW;
+      const d = Math.abs(xx - xRel);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    const p = _currentLut[best];
+    const tip = document.getElementById('lutTooltip');
+    if (tip) {
+      tip.style.display = 'block';
+      tip.style.left = (xRel + 12) + 'px';
+      tip.style.top  = (e.clientY - rect.top - 32) + 'px';
+      tip.textContent = `${noteName(p.note)} (${p.note}) → ${p.position.toFixed(1)} mm · ${noteFreq(p.note).toFixed(1)}Hz`;
+    }
+  });
+  c.addEventListener('mouseleave', () => {
+    const tip = document.getElementById('lutTooltip');
+    if (tip) tip.style.display = 'none';
+  });
   c.addEventListener('mousedown', e => {
     if (!_currentLut.length) return;
     const rect = c.getBoundingClientRect();
@@ -2519,6 +2648,44 @@ setInterval(() => {
 // ============================================================================
 // WiFi
 // ============================================================================
+async function scanWifi() {
+  const list = document.getElementById('wifiScanList');
+  list.style.display = 'block';
+  list.innerHTML = '<div class="scan-item"><span class="skeleton">scan en cours…</span></div>';
+  showLoading();
+  try {
+    const networks = await getJson('/api/wifi/scan');
+    if (!networks || !networks.length) {
+      list.innerHTML = '<div class="scan-item small">Aucun réseau détecté.</div>';
+      return;
+    }
+    networks.sort((a, b) => b.rssi - a.rssi);
+    list.innerHTML = networks.map(n => {
+      const lock = n.enc !== 0 ? '🔒' : '🔓';
+      const bars = n.rssi > -50 ? '▮▮▮▮' : n.rssi > -65 ? '▮▮▮▯' : n.rssi > -75 ? '▮▮▯▯' : '▮▯▯▯';
+      return `<div class="scan-item" onclick="document.getElementById('wSsid').value='${n.ssid.replace(/'/g, "\\'")}'; document.getElementById('wPass').focus()">
+        <span><span class="scan-lock">${lock}</span>${n.ssid || '<em>(caché)</em>'}</span>
+        <span class="scan-rssi">${bars} ${n.rssi}dBm · ch${n.ch}</span>
+      </div>`;
+    }).join('');
+  } catch(e) { list.innerHTML = '<div class="scan-item">Erreur scan.</div>'; }
+  finally { hideLoading(); }
+}
+
+// ============================================================================
+// Stress test (Diag page)
+// ============================================================================
+async function startStress() {
+  const sec = +document.getElementById('stressDuration').value || 30;
+  if (!await confirmDialog(`Lancer un stress test pendant ${sec}s ?`, 'Stress test', 'Démarrer')) return;
+  await postJson('/api/stress', {duration_sec: sec});
+  toast(`Stress test démarré (${sec}s)`, 'warn');
+}
+async function stopStress() {
+  await postJson('/api/stress', {duration_sec: 0});
+  toast('Stress test stoppé');
+}
+
 async function loadWifi() {
   const w = await getJson('/api/wifi');
   if (!w) return;
@@ -2544,6 +2711,11 @@ async function clearWifi() {
 // ============================================================================
 // MIDI activity log
 // ============================================================================
+function filterLogByChannel(ch) {
+  navigateTo('midi');
+  const inp = document.getElementById('midiFilterCh');
+  if (inp) { inp.value = ch; loadMidiLog(); }
+}
 async function loadMidiLog() {
   const log = await getJson('/api/midi/log');
   const box = document.getElementById('midiLog');
@@ -2839,13 +3011,40 @@ async function sweepOne(id) { await postJson('/api/flute/sweep', {id}); toast('S
 // ============================================================================
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
-  localStorage.setItem('theme', t);
+  if (t === 'auto') localStorage.removeItem('theme');
+  else              localStorage.setItem('theme', t);
+}
+function effectiveTheme() {
+  const stored = localStorage.getItem('theme');
+  if (stored === 'light' || stored === 'dark') return stored;
+  // auto → suit le système
+  return window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches
+    ? 'dark' : 'light';
 }
 function toggleTheme() {
-  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
-  applyTheme(cur === 'dark' ? 'light' : 'dark');
+  // Cycle dark → light → auto
+  const cur = localStorage.getItem('theme') || 'auto';
+  const next = cur === 'dark' ? 'light' : cur === 'light' ? 'auto' : 'dark';
+  if (next === 'auto') {
+    localStorage.removeItem('theme');
+    document.documentElement.setAttribute('data-theme', effectiveTheme());
+    toast('Thème : auto (suit le système)');
+  } else {
+    applyTheme(next);
+    toast('Thème : ' + (next === 'dark' ? 'sombre' : 'clair'));
+  }
 }
-applyTheme(localStorage.getItem('theme') || 'dark');
+// Init thème (suit système si pas de préférence stockée)
+document.documentElement.setAttribute('data-theme',
+  localStorage.getItem('theme') || effectiveTheme());
+// Réagit au changement système si en mode auto
+if (window.matchMedia) {
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+    if (!localStorage.getItem('theme')) {
+      document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+    }
+  });
+}
 
 // ============================================================================
 // Range editor (note range double slider)
@@ -3001,6 +3200,7 @@ buildPiano();
 setupRangeEditor();
 setupDirtyTracking();
 connectWs();
+setTimeout(updateTabIndicator, 50);
 // premier fetch immédiat
 getJson('/api/status').then(s => {
   state = s; render(); refreshHealth();
