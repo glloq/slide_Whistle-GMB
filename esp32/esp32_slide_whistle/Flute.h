@@ -49,12 +49,17 @@ private:
   uint8_t  _ccExpr    = 11;    // expression (additif)
   uint8_t  _ccVolume  = 7;     // volume
   uint8_t  _ccVibrato = 1;     // mod wheel
-  uint8_t  _ccSustain = 64;    // pédale sustain (placeholder)
+  uint8_t  _ccSustain = 64;    // pédale sustain — verrouille les noteOff jusqu'à relâchement
 
   // Transpose : ajouté à chaque note entrante. Borne automatiquement à
   // [_noteMin, _noteMax]. Permet par exemple de jouer ch1 en C major mais
   // que la flûte sonne une octave plus haut.
   int8_t   _transpose = 0;     // demi-tons (-24 à +24 typiquement)
+
+  // Sustain pedal state (CC64) — quand actif, les noteOff sont mémorisés et
+  // libérés au relâchement de la pédale (comportement piano standard).
+  bool     _sustainHeld     = false;   // pédale enfoncée (CC64 ≥ 64)
+  bool     _sustainPending  = false;   // un noteOff est en attente de relâchement
 
 public:
   Flute(uint8_t id, const FluteHwConfig& cfg)
@@ -100,6 +105,8 @@ public:
     if (!_enabled || _muted) return;
     uint8_t effective = applyTranspose(note);
     if (effective == 0xFF) return;             // hors plage après transpose
+    // Si une note est tenue par sustain, on annule la libération en attente
+    _sustainPending = false;
     _lastNote      = effective;
     _noteActive    = true;
     _lastMidiActMs = millis();
@@ -111,8 +118,13 @@ public:
     uint8_t effective = applyTranspose(note);
     if (effective == 0xFF) return;
     if (effective != _lastNote || !_noteActive) return;
-    _noteActive    = false;
     _lastMidiActMs = millis();
+    if (_sustainHeld) {
+      // Pédale enfoncée → on diffère la libération
+      _sustainPending = true;
+      return;
+    }
+    _noteActive    = false;
     _air.stopAir();
     _stepper.setVibrato(false, 0);
   }
@@ -134,6 +146,16 @@ public:
       _air.setAirflow(value);                        // débit air
     } else if (cc == _ccVibrato) {
       _stepper.setVibrato(value > 10, value);        // vibrato
+    } else if (cc == _ccSustain) {                   // sustain pedal (standard = CC64)
+      bool nowHeld = (value >= 64);
+      if (_sustainHeld && !nowHeld && _sustainPending && _noteActive) {
+        // Relâchement pédale → libère la note en attente
+        _noteActive    = false;
+        _sustainPending = false;
+        _air.stopAir();
+        _stepper.setVibrato(false, 0);
+      }
+      _sustainHeld = nowHeld;
     } else if (cc == 123 || cc == 120) {             // all notes / sound off
       panic();
     }
@@ -156,11 +178,15 @@ public:
     }
   }
 
-  // Coupure air + reset vibrato
+  // Coupure air + reset vibrato + reset sustain
   void panic() {
     _air.forceClose();
     _stepper.setVibrato(false, 0);
-    _noteActive = false;
+    _noteActive     = false;
+    _sustainPending = false;
+    // _sustainHeld inchangé : le contrôleur est physiquement responsable de
+    // l'état réel de la pédale. Si elle est encore enfoncée, le prochain
+    // noteOn sera correctement traité.
   }
 
   // ---- Accesseurs / setters -----------------------------------------------

@@ -20,6 +20,7 @@
 #include "MIDIHandler.h"
 #include "WiFiManager.h"
 #include "DemoPlayer.h"
+#include "StressTester.h"
 #include "WebInterface.h"
 
 // ============================================================================
@@ -31,6 +32,7 @@ PressureControl  pressure;
 MIDIHandler      midi;
 WiFiManager      wifiMgr;
 DemoPlayer       demoPlayer;
+StressTester     stressTester;
 WebInterface     webIface;
 
 // ============================================================================
@@ -47,7 +49,11 @@ volatile bool g_pressureResetRequested = false;
 volatile int  g_demoMelodyId           = -1;   // -2=stop signal, -1=idle, >=0=play
 volatile bool g_demoLoop               = false;
 volatile int  g_sweepFluteId           = -1;   // -1 = aucun, sinon id flûte à sweep
-volatile int  g_stressDurationSec      = 0;    // >0 = stress test en cours, secondes restantes
+// Stress test : commande pendante.
+//   -1  = pas de commande
+//    0  = stop immédiat
+//   >0  = démarrer pour N secondes
+volatile int  g_stressDurationSec      = -1;
 
 // Mutex FreeRTOS — protège orchestre/pression contre accès concurrent inter-core.
 SemaphoreHandle_t motionMutex = nullptr;
@@ -133,6 +139,9 @@ void taskMotion(void* param) {
     [](uint8_t ch, uint8_t note, uint8_t vel) { midi.triggerNoteOn(ch, note, vel); },
     [](uint8_t ch, uint8_t note)              { midi.triggerNoteOff(ch, note); }
   );
+
+  // StressTester partage le même chemin pour passer dans le routing/log
+  stressTester.begin(&orchestra, &midi);
 
 #if LED_ENABLED
   digitalWrite(STATUS_LED_PIN, HIGH);
@@ -252,40 +261,15 @@ void taskMotion(void* param) {
     }
     demoPlayer.update();
 
-    // 8b. Stress test : génère des notes aléatoires pendant N secondes
-    static unsigned long _stressNextNote = 0;
-    static unsigned long _stressEndAt    = 0;
-    static byte _stressActiveNote = 0;
-    if (g_stressDurationSec > 0 && _stressEndAt == 0) {
-      _stressEndAt = millis() + (unsigned long)g_stressDurationSec * 1000UL;
-      _stressNextNote = millis();
-      Serial.printf("[Stress] démarrage %ds\n", g_stressDurationSec);
+    // 8b. Stress test (burn-in) — démarre/arrête via flag, tick non bloquant
+    if (g_stressDurationSec > 0) {
+      stressTester.start((uint16_t)g_stressDurationSec);
+      g_stressDurationSec = -1;
+    } else if (g_stressDurationSec == 0) {
+      stressTester.stop();
+      g_stressDurationSec = -1;
     }
-    if (_stressEndAt) {
-      if (millis() > _stressEndAt) {
-        if (_stressActiveNote) { midi.triggerNoteOff(1, _stressActiveNote); _stressActiveNote = 0; }
-        _stressEndAt = 0;
-        g_stressDurationSec = 0;
-        Serial.println(F("[Stress] terminé"));
-      } else if (millis() >= _stressNextNote) {
-        if (_stressActiveNote) midi.triggerNoteOff(1, _stressActiveNote);
-        // Choisir une flûte enabled au hasard
-        Flute* target = nullptr;
-        for (uint8_t tries = 0; tries < orchestra.count(); ++tries) {
-          uint8_t i = esp_random() % orchestra.count();
-          Flute* f = orchestra.get(i);
-          if (f && f->isEnabled()) { target = f; break; }
-        }
-        if (target) {
-          uint8_t lo = target->noteMin(), hi = target->noteMax();
-          uint8_t note = lo + (esp_random() % (hi - lo + 1));
-          uint8_t vel  = 60 + (esp_random() % 60);
-          midi.triggerNoteOn(target->midiChannel() ? target->midiChannel() : 1, note, vel);
-          _stressActiveNote = note;
-        }
-        _stressNextNote = millis() + 200 + (esp_random() % 400);
-      }
-    }
+    stressTester.update();
 
     // 8. Sweep test sur une flûte (visualisation du déplacement complet)
     if (g_sweepFluteId >= 0) {

@@ -36,6 +36,7 @@
 #include <LittleFS.h>
 #include <Preferences.h>
 #include <Update.h>
+#include "NVSKeys.h"
 #include "settings.h"
 #include "Orchestra.h"
 #include "PressureControl.h"
@@ -189,69 +190,65 @@ private:
   }
 
   // ---- NVS ---------------------------------------------------------------
-
-  String fluteNs(uint8_t id) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "flute%u", id);
-    return String(buf);
-  }
+  // Toutes les clés sont définies dans NVSKeys.h pour éviter les fautes de
+  // frappe silencieuses et faciliter la migration de schéma.
 
   void saveFluteConfigNVS(Flute* f) {
     if (!f) return;
-    prefs.begin(fluteNs(f->id()).c_str(), false);
-    prefs.putUChar("ch",       f->midiChannel());
-    prefs.putUChar("nMin",     f->noteMin());
-    prefs.putUChar("nMax",     f->noteMax());
-    prefs.putBool("enabled",   f->isEnabled());
-    prefs.putBool("muted",     f->isMuted());
-    prefs.putFloat("speed",    f->stepper().getSpeedMmS());
-    prefs.putFloat("accel",    f->stepper().getAccelMmS2());
-    prefs.putUChar("pwmFull",  f->air().getPwmFull());
-    prefs.putUChar("pwmHold",  f->air().getPwmHold());
-    prefs.putUShort("wait",    f->air().getWaitDelay());
-    prefs.putUShort("legato",  f->air().getLegatoMs());
-    prefs.putUChar("velCurve", f->air().getVelocityCurve());
-    prefs.putString("cName",   f->customName());
-    prefs.putUChar("ccBreath",  f->getCcBreath());
-    prefs.putUChar("ccExpr",    f->getCcExpr());
-    prefs.putUChar("ccVolume",  f->getCcVolume());
-    prefs.putUChar("ccVibrato", f->getCcVibrato());
-    prefs.putUChar("ccSustain", f->getCcSustain());
-    prefs.putChar("trans",      f->getTranspose());
-    prefs.putBool("useLUT",    f->stepper().getUseLUT());
-    prefs.putBytes("lut",      f->stepper().getLUT(),
-                   sizeof(float) * MIDI_LUT_SIZE);
+    prefs.begin(NVSKeys::fluteNamespace(f->id()).c_str(), false);
+    prefs.putUChar (NVSKeys::MIDI_CHANNEL, f->midiChannel());
+    prefs.putUChar (NVSKeys::NOTE_MIN,     f->noteMin());
+    prefs.putUChar (NVSKeys::NOTE_MAX,     f->noteMax());
+    prefs.putBool  (NVSKeys::ENABLED,      f->isEnabled());
+    prefs.putBool  (NVSKeys::MUTED,        f->isMuted());
+    prefs.putFloat (NVSKeys::SPEED,        f->stepper().getSpeedMmS());
+    prefs.putFloat (NVSKeys::ACCEL,        f->stepper().getAccelMmS2());
+    prefs.putUChar (NVSKeys::PWM_FULL,     f->air().getPwmFull());
+    prefs.putUChar (NVSKeys::PWM_HOLD,     f->air().getPwmHold());
+    prefs.putUShort(NVSKeys::WAIT_DELAY,   f->air().getWaitDelay());
+    prefs.putUShort(NVSKeys::LEGATO,       f->air().getLegatoMs());
+    prefs.putUChar (NVSKeys::VEL_CURVE,    f->air().getVelocityCurve());
+    prefs.putString(NVSKeys::CUSTOM_NAME,  f->customName());
+    prefs.putUChar (NVSKeys::CC_BREATH,    f->getCcBreath());
+    prefs.putUChar (NVSKeys::CC_EXPR,      f->getCcExpr());
+    prefs.putUChar (NVSKeys::CC_VOLUME,    f->getCcVolume());
+    prefs.putUChar (NVSKeys::CC_VIBRATO,   f->getCcVibrato());
+    prefs.putUChar (NVSKeys::CC_SUSTAIN,   f->getCcSustain());
+    prefs.putChar  (NVSKeys::TRANSPOSE,    f->getTranspose());
+    prefs.putBool  (NVSKeys::USE_LUT,      f->stepper().getUseLUT());
+    prefs.putBytes (NVSKeys::LUT_BLOB,     f->stepper().getLUT(),
+                    sizeof(float) * MIDI_LUT_SIZE);
     prefs.end();
   }
 
   void loadFluteConfigNVS(Flute* f) {
     if (!f) return;
-    prefs.begin(fluteNs(f->id()).c_str(), true);
-    f->setMidiChannel(prefs.getUChar("ch", f->midiChannel()));
-    uint8_t lo = prefs.getUChar("nMin", f->noteMin());
-    uint8_t hi = prefs.getUChar("nMax", f->noteMax());
+    prefs.begin(NVSKeys::fluteNamespace(f->id()).c_str(), true);
+    f->setMidiChannel(prefs.getUChar(NVSKeys::MIDI_CHANNEL, f->midiChannel()));
+    uint8_t lo = prefs.getUChar(NVSKeys::NOTE_MIN, f->noteMin());
+    uint8_t hi = prefs.getUChar(NVSKeys::NOTE_MAX, f->noteMax());
     f->setNoteRange(lo, hi);
-    f->setEnabled(prefs.getBool("enabled", true));
-    f->setMuted(prefs.getBool("muted", false));
-    f->stepper().setSpeed(prefs.getFloat("speed", DEFAULT_STEPPER_SPEED));
-    f->stepper().setAcceleration(prefs.getFloat("accel", DEFAULT_STEPPER_ACCEL));
-    f->air().setPwmFull(prefs.getUChar("pwmFull", DEFAULT_PWM_FULL));
-    f->air().setPwmHold(prefs.getUChar("pwmHold", DEFAULT_PWM_HOLD));
-    f->air().setWaitDelay(prefs.getUShort("wait", DEFAULT_POSITION_WAIT));
-    f->air().setLegatoMs(prefs.getUShort("legato", DEFAULT_LEGATO_THRESHOLD));
-    f->air().setVelocityCurve(prefs.getUChar("velCurve", f->air().getVelocityCurve()));
-    String cn = prefs.getString("cName", "");
+    f->setEnabled(prefs.getBool(NVSKeys::ENABLED, true));
+    f->setMuted  (prefs.getBool(NVSKeys::MUTED,   false));
+    f->stepper().setSpeed       (prefs.getFloat (NVSKeys::SPEED,      DEFAULT_STEPPER_SPEED));
+    f->stepper().setAcceleration(prefs.getFloat (NVSKeys::ACCEL,      DEFAULT_STEPPER_ACCEL));
+    f->air().setPwmFull         (prefs.getUChar (NVSKeys::PWM_FULL,   DEFAULT_PWM_FULL));
+    f->air().setPwmHold         (prefs.getUChar (NVSKeys::PWM_HOLD,   DEFAULT_PWM_HOLD));
+    f->air().setWaitDelay       (prefs.getUShort(NVSKeys::WAIT_DELAY, DEFAULT_POSITION_WAIT));
+    f->air().setLegatoMs        (prefs.getUShort(NVSKeys::LEGATO,     DEFAULT_LEGATO_THRESHOLD));
+    f->air().setVelocityCurve   (prefs.getUChar (NVSKeys::VEL_CURVE,  f->air().getVelocityCurve()));
+    String cn = prefs.getString(NVSKeys::CUSTOM_NAME, "");
     f->setCustomName(cn.c_str());
-    f->setCcBreath (prefs.getUChar("ccBreath",  2));
-    f->setCcExpr   (prefs.getUChar("ccExpr",   11));
-    f->setCcVolume (prefs.getUChar("ccVolume",  7));
-    f->setCcVibrato(prefs.getUChar("ccVibrato", 1));
-    f->setCcSustain(prefs.getUChar("ccSustain",64));
-    f->setTranspose(prefs.getChar("trans", 0));
-    f->stepper().setUseLUT(prefs.getBool("useLUT", false));
-    if (prefs.getBytesLength("lut") == sizeof(float) * MIDI_LUT_SIZE) {
+    f->setCcBreath (prefs.getUChar(NVSKeys::CC_BREATH,    2));
+    f->setCcExpr   (prefs.getUChar(NVSKeys::CC_EXPR,     11));
+    f->setCcVolume (prefs.getUChar(NVSKeys::CC_VOLUME,    7));
+    f->setCcVibrato(prefs.getUChar(NVSKeys::CC_VIBRATO,   1));
+    f->setCcSustain(prefs.getUChar(NVSKeys::CC_SUSTAIN,  64));
+    f->setTranspose(prefs.getChar (NVSKeys::TRANSPOSE,    0));
+    f->stepper().setUseLUT(prefs.getBool(NVSKeys::USE_LUT, false));
+    if (prefs.getBytesLength(NVSKeys::LUT_BLOB) == sizeof(float) * MIDI_LUT_SIZE) {
       float buf[MIDI_LUT_SIZE];
-      prefs.getBytes("lut", buf, sizeof(buf));
+      prefs.getBytes(NVSKeys::LUT_BLOB, buf, sizeof(buf));
       f->stepper().setLUT(buf);
     }
     prefs.end();
@@ -260,22 +257,22 @@ private:
   void savePressureNVS() {
     if (!_pressure) return;
     prefs.begin("pressure", false);
-    prefs.putFloat("target", _pressure->getTarget());
-    prefs.putFloat("min",    _pressure->getMin());
-    prefs.putFloat("max",    _pressure->getMax());
-    prefs.putFloat("safety", _pressure->getSafety());
-    prefs.putUShort("fillMs", _pressure->getMaxFillMs());
+    prefs.putFloat (NVSKeys::P_TARGET,  _pressure->getTarget());
+    prefs.putFloat (NVSKeys::P_MIN,     _pressure->getMin());
+    prefs.putFloat (NVSKeys::P_MAX,     _pressure->getMax());
+    prefs.putFloat (NVSKeys::P_SAFETY,  _pressure->getSafety());
+    prefs.putUShort(NVSKeys::P_FILL_MS, _pressure->getMaxFillMs());
     prefs.end();
   }
 
   void loadPressureNVS() {
     if (!_pressure) return;
     prefs.begin("pressure", true);
-    _pressure->setTarget(prefs.getFloat("target", _pressure->getTarget()));
-    _pressure->setMin(prefs.getFloat("min", _pressure->getMin()));
-    _pressure->setMax(prefs.getFloat("max", _pressure->getMax()));
-    _pressure->setSafety(prefs.getFloat("safety", _pressure->getSafety()));
-    _pressure->setMaxFillMs(prefs.getUShort("fillMs", _pressure->getMaxFillMs()));
+    _pressure->setTarget   (prefs.getFloat (NVSKeys::P_TARGET,  _pressure->getTarget()));
+    _pressure->setMin      (prefs.getFloat (NVSKeys::P_MIN,     _pressure->getMin()));
+    _pressure->setMax      (prefs.getFloat (NVSKeys::P_MAX,     _pressure->getMax()));
+    _pressure->setSafety   (prefs.getFloat (NVSKeys::P_SAFETY,  _pressure->getSafety()));
+    _pressure->setMaxFillMs(prefs.getUShort(NVSKeys::P_FILL_MS, _pressure->getMaxFillMs()));
     prefs.end();
   }
 
@@ -1072,11 +1069,13 @@ private:
       [this](AsyncWebServerRequest* req, JsonVariant& json) {
         String ssid = json["ssid"]     | "";
         String pass = json["password"] | "";
-        if (ssid.length() == 0) { req->send(400, "application/json", "{\"error\":\"ssid vide\"}"); return; }
-        if (_wifi) {
-          _wifi->saveSTACredentials(ssid, pass);
-          _wifi->connectSTA();
+        if (!_wifi) { req->send(503, "application/json", "{\"error\":\"no wifi\"}"); return; }
+        if (!_wifi->saveSTACredentials(ssid, pass)) {
+          req->send(400, "application/json",
+                    "{\"error\":\"ssid 1-32 chars, password 0 ou 8-63 chars\"}");
+          return;
         }
+        _wifi->connectSTA();
         req->send(200, "application/json", "{\"ok\":true}");
       }));
     server.on("/api/wifi", HTTP_DELETE, [this](AsyncWebServerRequest* req) {

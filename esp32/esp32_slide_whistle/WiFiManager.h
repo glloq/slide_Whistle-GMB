@@ -100,13 +100,31 @@ public:
     return staConnected;
   }
 
-  void saveSTACredentials(const String& ssid, const String& password) {
+  // Sauvegarde des credentials STA en NVS.
+  // Validation : SSID 1-32 octets (norme 802.11), password 0 ou 8-63 caractères
+  // (WPA/WPA2). Renvoie false si invalide.
+  bool saveSTACredentials(const String& ssid, const String& password) {
+    if (ssid.length() == 0 || ssid.length() > 32) {
+#if DEBUG_MODE
+      Serial.printf("[WiFi] SSID invalide (longueur %u, attendu 1-32)\n", ssid.length());
+#endif
+      return false;
+    }
+    // password vide = réseau ouvert ; sinon WPA/WPA2 = 8-63
+    if (password.length() != 0 && (password.length() < 8 || password.length() > 63)) {
+#if DEBUG_MODE
+      Serial.printf("[WiFi] mot de passe invalide (longueur %u, attendu 0 ou 8-63)\n",
+                    password.length());
+#endif
+      return false;
+    }
     staSSID = ssid;
     staPassword = password;
     prefs.begin("wifi", false);
     prefs.putString("ssid",     ssid);
     prefs.putString("password", password);
     prefs.end();
+    return true;
   }
 
   void clearSTACredentials() {
