@@ -37,6 +37,7 @@
 #include <Preferences.h>
 #include <Update.h>
 #include "NVSKeys.h"
+#include "NVSStore.h"
 #include "settings.h"
 #include "Orchestra.h"
 #include "PressureControl.h"
@@ -190,91 +191,13 @@ private:
   }
 
   // ---- NVS ---------------------------------------------------------------
-  // Toutes les clés sont définies dans NVSKeys.h pour éviter les fautes de
-  // frappe silencieuses et faciliter la migration de schéma.
+  // Délégués au module NVSStore (cf. NVSStore.h). Les wrappers ci-dessous
+  // existent pour ne pas modifier les call sites des routes.
 
-  void saveFluteConfigNVS(Flute* f) {
-    if (!f) return;
-    prefs.begin(NVSKeys::fluteNamespace(f->id()).c_str(), false);
-    prefs.putUChar (NVSKeys::MIDI_CHANNEL, f->midiChannel());
-    prefs.putUChar (NVSKeys::NOTE_MIN,     f->noteMin());
-    prefs.putUChar (NVSKeys::NOTE_MAX,     f->noteMax());
-    prefs.putBool  (NVSKeys::ENABLED,      f->isEnabled());
-    prefs.putBool  (NVSKeys::MUTED,        f->isMuted());
-    prefs.putFloat (NVSKeys::SPEED,        f->stepper().getSpeedMmS());
-    prefs.putFloat (NVSKeys::ACCEL,        f->stepper().getAccelMmS2());
-    prefs.putUChar (NVSKeys::PWM_FULL,     f->air().getPwmFull());
-    prefs.putUChar (NVSKeys::PWM_HOLD,     f->air().getPwmHold());
-    prefs.putUShort(NVSKeys::WAIT_DELAY,   f->air().getWaitDelay());
-    prefs.putUShort(NVSKeys::LEGATO,       f->air().getLegatoMs());
-    prefs.putUChar (NVSKeys::VEL_CURVE,    f->air().getVelocityCurve());
-    prefs.putString(NVSKeys::CUSTOM_NAME,  f->customName());
-    prefs.putUChar (NVSKeys::CC_BREATH,    f->getCcBreath());
-    prefs.putUChar (NVSKeys::CC_EXPR,      f->getCcExpr());
-    prefs.putUChar (NVSKeys::CC_VOLUME,    f->getCcVolume());
-    prefs.putUChar (NVSKeys::CC_VIBRATO,   f->getCcVibrato());
-    prefs.putUChar (NVSKeys::CC_SUSTAIN,   f->getCcSustain());
-    prefs.putChar  (NVSKeys::TRANSPOSE,    f->getTranspose());
-    prefs.putBool  (NVSKeys::USE_LUT,      f->stepper().getUseLUT());
-    prefs.putBytes (NVSKeys::LUT_BLOB,     f->stepper().getLUT(),
-                    sizeof(float) * MIDI_LUT_SIZE);
-    prefs.end();
-  }
-
-  void loadFluteConfigNVS(Flute* f) {
-    if (!f) return;
-    prefs.begin(NVSKeys::fluteNamespace(f->id()).c_str(), true);
-    f->setMidiChannel(prefs.getUChar(NVSKeys::MIDI_CHANNEL, f->midiChannel()));
-    uint8_t lo = prefs.getUChar(NVSKeys::NOTE_MIN, f->noteMin());
-    uint8_t hi = prefs.getUChar(NVSKeys::NOTE_MAX, f->noteMax());
-    f->setNoteRange(lo, hi);
-    f->setEnabled(prefs.getBool(NVSKeys::ENABLED, true));
-    f->setMuted  (prefs.getBool(NVSKeys::MUTED,   false));
-    f->stepper().setSpeed       (prefs.getFloat (NVSKeys::SPEED,      DEFAULT_STEPPER_SPEED));
-    f->stepper().setAcceleration(prefs.getFloat (NVSKeys::ACCEL,      DEFAULT_STEPPER_ACCEL));
-    f->air().setPwmFull         (prefs.getUChar (NVSKeys::PWM_FULL,   DEFAULT_PWM_FULL));
-    f->air().setPwmHold         (prefs.getUChar (NVSKeys::PWM_HOLD,   DEFAULT_PWM_HOLD));
-    f->air().setWaitDelay       (prefs.getUShort(NVSKeys::WAIT_DELAY, DEFAULT_POSITION_WAIT));
-    f->air().setLegatoMs        (prefs.getUShort(NVSKeys::LEGATO,     DEFAULT_LEGATO_THRESHOLD));
-    f->air().setVelocityCurve   (prefs.getUChar (NVSKeys::VEL_CURVE,  f->air().getVelocityCurve()));
-    String cn = prefs.getString(NVSKeys::CUSTOM_NAME, "");
-    f->setCustomName(cn.c_str());
-    f->setCcBreath (prefs.getUChar(NVSKeys::CC_BREATH,    2));
-    f->setCcExpr   (prefs.getUChar(NVSKeys::CC_EXPR,     11));
-    f->setCcVolume (prefs.getUChar(NVSKeys::CC_VOLUME,    7));
-    f->setCcVibrato(prefs.getUChar(NVSKeys::CC_VIBRATO,   1));
-    f->setCcSustain(prefs.getUChar(NVSKeys::CC_SUSTAIN,  64));
-    f->setTranspose(prefs.getChar (NVSKeys::TRANSPOSE,    0));
-    f->stepper().setUseLUT(prefs.getBool(NVSKeys::USE_LUT, false));
-    if (prefs.getBytesLength(NVSKeys::LUT_BLOB) == sizeof(float) * MIDI_LUT_SIZE) {
-      float buf[MIDI_LUT_SIZE];
-      prefs.getBytes(NVSKeys::LUT_BLOB, buf, sizeof(buf));
-      f->stepper().setLUT(buf);
-    }
-    prefs.end();
-  }
-
-  void savePressureNVS() {
-    if (!_pressure) return;
-    prefs.begin("pressure", false);
-    prefs.putFloat (NVSKeys::P_TARGET,  _pressure->getTarget());
-    prefs.putFloat (NVSKeys::P_MIN,     _pressure->getMin());
-    prefs.putFloat (NVSKeys::P_MAX,     _pressure->getMax());
-    prefs.putFloat (NVSKeys::P_SAFETY,  _pressure->getSafety());
-    prefs.putUShort(NVSKeys::P_FILL_MS, _pressure->getMaxFillMs());
-    prefs.end();
-  }
-
-  void loadPressureNVS() {
-    if (!_pressure) return;
-    prefs.begin("pressure", true);
-    _pressure->setTarget   (prefs.getFloat (NVSKeys::P_TARGET,  _pressure->getTarget()));
-    _pressure->setMin      (prefs.getFloat (NVSKeys::P_MIN,     _pressure->getMin()));
-    _pressure->setMax      (prefs.getFloat (NVSKeys::P_MAX,     _pressure->getMax()));
-    _pressure->setSafety   (prefs.getFloat (NVSKeys::P_SAFETY,  _pressure->getSafety()));
-    _pressure->setMaxFillMs(prefs.getUShort(NVSKeys::P_FILL_MS, _pressure->getMaxFillMs()));
-    prefs.end();
-  }
+  void saveFluteConfigNVS(Flute* f)        { NVSStore::saveFlute(prefs, f); }
+  void loadFluteConfigNVS(Flute* f)        { NVSStore::loadFlute(prefs, f); }
+  void savePressureNVS()                   { NVSStore::savePressure(prefs, _pressure); }
+  void loadPressureNVS()                   { NVSStore::loadPressure(prefs, _pressure); }
 
   // ---- Helpers ------------------------------------------------------------
 
