@@ -633,6 +633,35 @@
     min-width: 60px; text-align: center;
   }
 
+  /* Quick edit popover */
+  .quick-popover {
+    position: absolute; z-index: 100;
+    background: var(--card); border: 1px solid var(--green);
+    border-radius: 8px; padding: 14px;
+    min-width: 280px; max-width: 320px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.5);
+    animation: modalIn .15s ease-out;
+  }
+  .quick-popover h5 { color: var(--green); font-size: 13px; margin-bottom: 8px; }
+  .quick-popover label { font-size: 11px; }
+  .quick-popover input, .quick-popover select { font-size: 12px; padding: 4px 6px; }
+
+  /* Macro editor */
+  .macro-list-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 12px; background: var(--bg);
+    border-radius: 6px; margin-bottom: 4px; font-size: 13px;
+  }
+  .macro-list-item .actions { color: var(--muted); font-size: 11px; }
+
+  /* Latency badge */
+  #sbLatency { color: var(--text); font-weight: 600; }
+  #sbLatency.high { color: var(--orange); }
+
+  /* Page slide hint (touch swipe) */
+  body.swipe-left  .page.active { transform: translateX(-30px); transition: transform .12s; }
+  body.swipe-right .page.active { transform: translateX( 30px); transition: transform .12s; }
+
   @media print {
     nav, header, #toasts, #loading-overlay, #cmdRoot, #modalRoot,
     #bulkModal, #tourRoot, .theme-btn, .btn-row, .sticky-save { display: none !important; }
@@ -784,6 +813,28 @@
   </div>
 </div>
 
+<!-- Macro editor modal -->
+<div id="macroEditor" class="modal-backdrop">
+  <div class="modal" style="min-width:420px;max-width:560px">
+    <h4>Macros personnalisables</h4>
+    <p>Chaque macro est une suite d'étapes. Format YAML simplifié, une étape par ligne :</p>
+    <pre class="small" style="background:var(--bg);padding:8px;border-radius:4px;color:var(--muted);margin:6px 0">homing
+sleep 1500
+pressure_start
+demo 0 loop
+panic</pre>
+    <div id="macroList"></div>
+    <div class="btn-row" style="margin-top:8px">
+      <button class="btn" onclick="addMacro()">➕ Ajouter</button>
+      <button class="btn" onclick="resetMacros()">↺ Réinitialiser défauts</button>
+      <button class="btn btn-primary" style="margin-left:auto" onclick="document.getElementById('macroEditor').classList.remove('show')">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Quick edit popover (réinjecté dans le DOM par JS) -->
+<div id="quickPopover" class="quick-popover" style="display:none"></div>
+
 <!-- Bulk edit modal -->
 <div id="bulkModal" class="modal-backdrop">
   <div class="modal" style="min-width: 360px">
@@ -879,7 +930,10 @@
         <button class="btn" onclick="postJson('/api/flutes/all',{action:'unmuteAll'})" title="Unmute toutes (U)">Unmute all</button>
         <button class="btn" onclick="postJson('/api/flutes/all',{action:'enableAll'})">Activer toutes</button>
       </div>
-      <div class="small" style="margin-top:10px"><strong>Macros</strong> <span class="help" title="Chaînes d'actions personnalisables (modifiable dans le code, futur : NVS)">?</span></div>
+      <div class="small" style="margin-top:10px;display:flex;align-items:center">
+        <strong>Macros</strong> <span class="help" title="Chaînes d'actions personnalisables">?</span>
+        <button class="btn" style="margin-left:auto;padding:2px 8px;font-size:11px" onclick="openMacroEditor()">✎ Éditer</button>
+      </div>
       <div id="macroBar" class="macro-row"></div>
     </div>
 
@@ -1113,7 +1167,20 @@
       <button class="btn btn-warn" onclick="testFluteAir()">🌬 Test air</button>
     </div>
 
-    <h3 style="margin-top: 16px">Calibration (LUT)</h3>
+    <h3 style="margin-top: 16px">Calibration (LUT)
+      <span style="margin-left:auto; display:flex; gap:6px">
+        <select id="lutPresetSel" onchange="applyLutPreset()" style="width:auto;font-size:12px">
+          <option value="">Charger un preset...</option>
+          <option value="linear">Linéaire</option>
+          <option value="real">Slide whistle réelle (1/f)</option>
+          <option value="exp">Exponentielle</option>
+          <option value="reverse">Inversée</option>
+        </select>
+        <select id="cfgCopyFrom" onchange="copyConfigFrom()" style="width:auto;font-size:12px">
+          <option value="">Copier config depuis...</option>
+        </select>
+      </span>
+    </h3>
     <div style="position:relative">
       <canvas id="lutCanvas" width="600" height="220"></canvas>
       <div id="lutTooltip" class="lut-tooltip"></div>
@@ -1357,6 +1424,7 @@
   <span class="sb-item"><span class="sb-label">Heap</span><span id="sbHeap" class="sb-value">—</span></span>
   <span class="sb-item"><span class="sb-label">Uptime</span><span id="sbUptime" class="sb-value">—</span></span>
   <span class="sb-item"><span class="sb-label">MIDI</span><span id="sbMidi" class="sb-value">0</span></span>
+  <span class="sb-item"><span class="sb-label">Latence</span><span id="sbLatency">—</span></span>
   <span style="flex:1"></span>
   <span class="sb-item"><span id="sbWebMidi" class="sb-label">no Web MIDI</span></span>
   <span class="sb-item"><span class="sb-label">v3</span></span>
@@ -1377,9 +1445,9 @@ if ('serviceWorker' in navigator) {
 }
 
 // ============================================================================
-// Macros (chaînes d'actions, personnalisables localement)
+// Macros — défauts + personnalisation (localStorage)
 // ============================================================================
-const DEFAULT_MACROS = [
+const DEFAULT_MACROS_BUILTIN = [
   {label: '🎬 Démarrage spectacle', desc: 'Homing + air ON + démo arpèges',
     actions: [
       ['POST', '/api/homing'],
@@ -1397,18 +1465,81 @@ const DEFAULT_MACROS = [
   {label: '🎯 Test complet', desc: 'Test air sur chaque flûte',
     actions: 'TEST_ALL'},
 ];
+
+// User macros = stored in localStorage as plaintext lines (DSL)
+function loadUserMacros() {
+  const raw = localStorage.getItem('user_macros');
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (_) { return null; }
+}
+function saveUserMacros(arr) {
+  localStorage.setItem('user_macros', JSON.stringify(arr));
+}
+function getMacros() {
+  return loadUserMacros() || DEFAULT_MACROS_BUILTIN.map(m => ({
+    label: m.label, desc: m.desc,
+    script: macroToScript(m)
+  }));
+}
+
+// Mini DSL : "homing", "panic", "sleep N", "pressure_start", "pressure_stop",
+// "demo N [loop]", "mute_all", "unmute_all", "test_all", "homing_one N",
+// "test N", "sweep N"
+function parseScript(text) {
+  const actions = [];
+  text.split('\n').forEach(line => {
+    line = line.trim();
+    if (!line || line.startsWith('#')) return;
+    const parts = line.split(/\s+/);
+    const cmd = parts[0].toLowerCase();
+    switch (cmd) {
+      case 'sleep':         actions.push(['SLEEP', +parts[1] || 500]); break;
+      case 'homing':        actions.push(['POST', '/api/homing']); break;
+      case 'panic':         actions.push(['POST', '/api/panic']); break;
+      case 'pressure_start':actions.push(['POST', '/api/pressure/start']); break;
+      case 'pressure_stop': actions.push(['POST', '/api/pressure/stop']); break;
+      case 'mute_all':      actions.push(['POST', '/api/flutes/all', {action:'muteAll'}]); break;
+      case 'unmute_all':    actions.push(['POST', '/api/flutes/all', {action:'unmuteAll'}]); break;
+      case 'demo':          actions.push(['POST', '/api/demo/play', {id:+parts[1]||0, loop:parts.includes('loop')}]); break;
+      case 'demo_stop':     actions.push(['POST', '/api/demo/stop']); break;
+      case 'test':          actions.push(['POST', '/api/flute/test',  {id:+parts[1]||0}]); break;
+      case 'sweep':         actions.push(['POST', '/api/flute/sweep', {id:+parts[1]||0}]); break;
+      case 'homing_one':    actions.push(['POST', '/api/flute/homing',{id:+parts[1]||0}]); break;
+      case 'test_all':      actions.push(['TEST_ALL']); break;
+    }
+  });
+  return actions;
+}
+// Réciproque pour pré-remplir les défauts en mode script
+function macroToScript(m) {
+  if (m.actions === 'TEST_ALL') return 'test_all';
+  return (m.actions || []).map(a => {
+    if (a[0] === 'SLEEP') return 'sleep ' + a[1];
+    if (a[0] === 'POST' && a[1] === '/api/homing') return 'homing';
+    if (a[0] === 'POST' && a[1] === '/api/panic') return 'panic';
+    if (a[0] === 'POST' && a[1] === '/api/pressure/start') return 'pressure_start';
+    if (a[0] === 'POST' && a[1] === '/api/pressure/stop')  return 'pressure_stop';
+    if (a[0] === 'POST' && a[1] === '/api/flutes/all' && a[2]?.action === 'muteAll')   return 'mute_all';
+    if (a[0] === 'POST' && a[1] === '/api/flutes/all' && a[2]?.action === 'unmuteAll') return 'unmute_all';
+    if (a[0] === 'POST' && a[1] === '/api/demo/play') return 'demo ' + (a[2]?.id || 0) + (a[2]?.loop ? ' loop' : '');
+    if (a[0] === 'POST' && a[1] === '/api/demo/stop') return 'demo_stop';
+    return '# unknown';
+  }).join('\n');
+}
+
 async function runMacro(macro) {
   toast(`Macro : ${macro.label}`, 'success');
-  if (macro.actions === 'TEST_ALL') {
-    for (const f of (state.flutes || [])) {
-      if (!f.enabled) continue;
-      await postJson('/api/flute/test', {id: f.id});
-      await new Promise(r => setTimeout(r, 2000));
-    }
-    return;
-  }
-  for (const a of macro.actions) {
+  const actions = macro.actions || parseScript(macro.script || '');
+  for (const a of actions) {
     if (a[0] === 'SLEEP') { await new Promise(r => setTimeout(r, a[1])); continue; }
+    if (a[0] === 'TEST_ALL') {
+      for (const f of (state.flutes || [])) {
+        if (!f.enabled) continue;
+        await postJson('/api/flute/test', {id: f.id});
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      continue;
+    }
     if (a[0] === 'POST') {
       if (a[2]) await postJson(a[1], a[2]);
       else      await postNoBody(a[1]);
@@ -1418,11 +1549,59 @@ async function runMacro(macro) {
 function renderMacros() {
   const bar = document.getElementById('macroBar');
   if (!bar) return;
-  bar.innerHTML = DEFAULT_MACROS.map((m, i) =>
-    `<button class="macro-chip" onclick="runMacro(DEFAULT_MACROS[${i}])" title="${m.desc}">${m.label}</button>`
+  const macros = getMacros();
+  bar.innerHTML = macros.map((m, i) =>
+    `<button class="macro-chip" data-idx="${i}" title="${m.desc || ''}">${m.label}</button>`
   ).join('');
+  bar.querySelectorAll('.macro-chip').forEach(c => c.onclick = () => runMacro(macros[+c.dataset.idx]));
 }
-window.DEFAULT_MACROS = DEFAULT_MACROS;
+function openMacroEditor() {
+  document.getElementById('macroEditor').classList.add('show');
+  renderMacroList();
+}
+function renderMacroList() {
+  const macros = getMacros();
+  const box = document.getElementById('macroList');
+  box.innerHTML = macros.map((m, i) => `
+    <div class="macro-list-item">
+      <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+        <input value="${m.label}" data-idx="${i}" data-field="label" placeholder="Nom">
+        <input value="${m.desc || ''}" data-idx="${i}" data-field="desc" placeholder="Description">
+        <textarea rows="3" data-idx="${i}" data-field="script" placeholder="Script">${m.script || ''}</textarea>
+      </div>
+      <button class="btn btn-danger" onclick="deleteMacro(${i})" style="margin-left:8px">🗑</button>
+    </div>
+  `).join('');
+  // Bind editing
+  box.querySelectorAll('input, textarea').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const arr = getMacros();
+      arr[+inp.dataset.idx][inp.dataset.field] = inp.value;
+      saveUserMacros(arr);
+      renderMacros();
+    });
+  });
+}
+function addMacro() {
+  const arr = getMacros();
+  arr.push({label: '✨ Ma macro', desc: '', script: 'homing\nsleep 1000'});
+  saveUserMacros(arr);
+  renderMacroList();
+  renderMacros();
+}
+function deleteMacro(i) {
+  const arr = getMacros();
+  arr.splice(i, 1);
+  saveUserMacros(arr);
+  renderMacroList();
+  renderMacros();
+}
+function resetMacros() {
+  localStorage.removeItem('user_macros');
+  renderMacroList();
+  renderMacros();
+  toast('Macros réinitialisées');
+}
 
 // ============================================================================
 // Web MIDI API (browser ↔ external USB controller → ESP32)
@@ -1503,6 +1682,187 @@ function updateStatusBar() {
   }
 }
 setInterval(updateStatusBar, 1000);
+
+// ============================================================================
+// Latency indicator (ping)
+// ============================================================================
+let _lastPingMs = 0;
+async function pingLatency() {
+  const t0 = performance.now();
+  try {
+    await fetch('/api/status', {method: 'GET', cache: 'no-store'});
+    const dt = performance.now() - t0;
+    _lastPingMs = dt;
+    const el = document.getElementById('sbLatency');
+    if (el) {
+      el.textContent = dt.toFixed(0) + 'ms';
+      el.classList.toggle('high', dt > 200);
+    }
+  } catch (_) {
+    document.getElementById('sbLatency').textContent = 'KO';
+  }
+}
+setInterval(pingLatency, 4000);
+setTimeout(pingLatency, 1500);
+
+// ============================================================================
+// Touch swipe entre pages (mobile)
+// ============================================================================
+(function() {
+  let sx = 0, sy = 0, t0 = 0;
+  document.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; t0 = Date.now();
+  }, {passive: true});
+  document.addEventListener('touchend', e => {
+    if (e.changedTouches.length !== 1) return;
+    const dx = e.changedTouches[0].clientX - sx;
+    const dy = e.changedTouches[0].clientY - sy;
+    const dt = Date.now() - t0;
+    if (dt > 500) return;
+    if (Math.abs(dx) < 80 || Math.abs(dy) > 60) return;
+    // Swipe horizontal
+    const buttons = Array.from(document.querySelectorAll('nav button'));
+    const cur = buttons.findIndex(b => b.classList.contains('active'));
+    if (cur < 0) return;
+    const next = dx < 0 ? Math.min(buttons.length - 1, cur + 1) : Math.max(0, cur - 1);
+    if (next !== cur) {
+      document.body.classList.add(dx < 0 ? 'swipe-left' : 'swipe-right');
+      setTimeout(() => document.body.classList.remove('swipe-left', 'swipe-right'), 200);
+      buttons[next].click();
+    }
+  }, {passive: true});
+})();
+
+// ============================================================================
+// LUT presets (linear / 1/f / exp / reverse)
+// ============================================================================
+async function applyLutPreset() {
+  const sel = document.getElementById('lutPresetSel');
+  const preset = sel.value;
+  if (!preset) return;
+  if (!await confirmDialog(`Remplacer la LUT actuelle par le preset "${preset}" ?`,
+                            'Preset LUT', 'Appliquer')) {
+    sel.value = ''; return;
+  }
+  const id = +document.getElementById('cfgFluteSel').value;
+  const f  = (state.flutes || []).find(x => x.id === id);
+  if (!f) return;
+  const travel = f.slider_travel_mm || 300;
+  const span = f.note_max - f.note_min;
+  const lut = [];
+  for (let i = 0; i <= span; i++) {
+    let pos;
+    const r = i / span;
+    if (preset === 'linear')      pos = r * travel;
+    else if (preset === 'real')   pos = travel * (1 - 1 / (1 + r * 1.5));   // approche 1/f
+    else if (preset === 'exp')    pos = travel * Math.pow(r, 0.6);
+    else if (preset === 'reverse')pos = (1 - r) * travel;
+    else                          pos = r * travel;
+    lut.push({note: f.note_min + i, position: pos});
+  }
+  await postJson('/api/flute/lut', {id, lut});
+  toast(`Preset LUT "${preset}" appliqué`);
+  loadFluteCfg();
+  sel.value = '';
+}
+
+// ============================================================================
+// Copy config from another flute
+// ============================================================================
+function refreshCopyFromOptions() {
+  const sel = document.getElementById('cfgCopyFrom');
+  if (!sel) return;
+  const cur = +document.getElementById('cfgFluteSel').value;
+  sel.innerHTML = '<option value="">Copier config depuis...</option>' +
+    (state.flutes || []).filter(f => f.id !== cur).map(f =>
+      `<option value="${f.id}">#${f.id} ${f.name}</option>`).join('');
+}
+async function copyConfigFrom() {
+  const src = +document.getElementById('cfgCopyFrom').value;
+  const dst = +document.getElementById('cfgFluteSel').value;
+  document.getElementById('cfgCopyFrom').value = '';
+  if (!src && src !== 0) return;
+  if (src === dst) return;
+  if (!await confirmDialog(`Copier la config de #${src} sur #${dst} ?\n(ne copie pas le canal MIDI ni la plage de notes ni le custom_name)`,
+                            'Copier config', 'Copier')) return;
+  showLoading();
+  try {
+    const c = await getJson(`/api/flute?id=${src}`);
+    if (!c) return;
+    // On copie tout sauf : id, midi_channel, note_min, note_max, custom_name
+    const body = {
+      id: dst,
+      speed_mm_s:    c.speed_mm_s,
+      accel_mm_s2:   c.accel_mm_s2,
+      pwm_full:      c.pwm_full,
+      pwm_hold:      c.pwm_hold,
+      wait_delay_ms: c.wait_delay_ms,
+      legato_ms:     c.legato_ms,
+      velocity_curve: c.velocity_curve,
+      cc_breath:     c.cc_breath,
+      cc_expression: c.cc_expression,
+      cc_volume:     c.cc_volume,
+      cc_vibrato:    c.cc_vibrato,
+      cc_sustain:    c.cc_sustain,
+      transpose:     c.transpose,
+      use_lut:       c.use_lut
+    };
+    await postJson('/api/flute', body);
+    // Copier la LUT séparément
+    if (c.lut) await postJson('/api/flute/lut', {id: dst, lut: c.lut});
+    toast(`Config copiée de #${src} vers #${dst}`);
+    loadFluteCfg();
+  } finally { hideLoading(); }
+}
+
+// ============================================================================
+// Quick edit popover sur les cartes de flûte
+// ============================================================================
+function quickEditFlute(id, ev) {
+  ev.stopPropagation();
+  const pop = document.getElementById('quickPopover');
+  const f = (state.flutes || []).find(x => x.id === id);
+  if (!f) return;
+  pop.style.display = 'block';
+  pop.innerHTML = `
+    <h5>#${f.id} ${f.name} <span style="float:right;cursor:pointer;color:var(--muted)" onclick="closeQuickEdit()">✕</span></h5>
+    <label>Canal MIDI</label>
+    <input type="number" min="0" max="16" id="qpChan" value="${f.midi_channel}">
+    <div class="row2" style="margin-top:6px">
+      <div><label>Note min</label><input type="number" id="qpNmin" min="0" max="127" value="${f.note_min}"></div>
+      <div><label>Note max</label><input type="number" id="qpNmax" min="0" max="127" value="${f.note_max}"></div>
+    </div>
+    <div class="btn-row" style="margin-top:8px">
+      <button class="btn btn-primary" onclick="saveQuickEdit(${f.id})">💾 Appliquer</button>
+      <button class="btn" onclick="navigateTo('config'); document.getElementById('cfgFluteSel').value=${f.id}; loadFluteCfg(); closeQuickEdit()">↗ Détails</button>
+    </div>
+  `;
+  // Position popover proche de la cible
+  const r = ev.target.getBoundingClientRect();
+  const top  = Math.min(window.innerHeight - 240, r.bottom + window.scrollY + 6);
+  const left = Math.min(window.innerWidth - 320, r.left + window.scrollX);
+  pop.style.top  = top + 'px';
+  pop.style.left = left + 'px';
+}
+function closeQuickEdit() {
+  document.getElementById('quickPopover').style.display = 'none';
+}
+async function saveQuickEdit(id) {
+  await postJson('/api/flute', {
+    id,
+    midi_channel: +document.getElementById('qpChan').value,
+    note_min:     +document.getElementById('qpNmin').value,
+    note_max:     +document.getElementById('qpNmax').value
+  });
+  toast('Modifications appliquées');
+  closeQuickEdit();
+}
+// Click extérieur ferme
+document.addEventListener('click', e => {
+  const pop = document.getElementById('quickPopover');
+  if (pop?.style.display === 'block' && !pop.contains(e.target)) closeQuickEdit();
+});
 
 // ============================================================================
 // Quick mute par canal (click droit sur cellule du strip)
@@ -2365,6 +2725,7 @@ function render() {
         <div class="stat"><span class="stat-label">Air</span>
           <span class="stat-value ${f.air_open?'':'muted'}">${f.air_state} (pwm ${f.pwm})</span></div>
         <div class="btn-row">
+          <button class="btn" onclick="quickEditFlute(${f.id}, event)">✎ Éditer</button>
           <button class="btn" onclick="toggleEnable(${f.id}, ${!f.enabled})">${f.enabled?'Désactiver':'Activer'}</button>
           <button class="btn" onclick="toggleMute(${f.id}, ${!f.muted})">${f.muted?'Unmute':'Mute'}</button>
           <button class="btn" onclick="soloFlute(${f.id})">🎯 Solo</button>
@@ -2645,6 +3006,7 @@ async function loadFluteCfg() {
   drawVelCurve();
   buildLutBox(c.lut || []);
   buildColorSwatches(c.id);
+  refreshCopyFromOptions();
   clearCfgDirty();
 }
 
