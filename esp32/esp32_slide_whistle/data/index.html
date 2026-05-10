@@ -3,719 +3,723 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f3460">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>Slide Whistle Controller</title>
-<style>
-  :root {
-    --bg: #1a1a2e;
-    --card: #16213e;
-    --accent: #0f3460;
-    --green: #00d084;
-    --orange: #e94560;
-    --text: #e0e0e0;
-    --muted: #888;
-    --border: #2a2a4a;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; font-size: 14px; }
-
-  header {
-    background: var(--accent);
-    padding: 14px 20px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    border-bottom: 2px solid var(--green);
-  }
-  header h1 { font-size: 18px; font-weight: 600; }
-  .badge {
-    padding: 3px 10px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .5px;
-  }
-  .badge-ready   { background: var(--green); color: #000; }
-  .badge-homing  { background: #ffaa00; color: #000; }
-  .badge-error   { background: var(--orange); color: #fff; }
-  .badge-init    { background: var(--muted); color: #fff; }
-
-  nav {
-    display: flex;
-    gap: 2px;
-    padding: 10px 16px;
-    background: var(--card);
-    border-bottom: 1px solid var(--border);
-  }
-  nav button {
-    background: none;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    padding: 6px 16px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 13px;
-    transition: all .15s;
-  }
-  nav button.active, nav button:hover {
-    background: var(--accent);
-    color: var(--text);
-    border-color: var(--green);
-  }
-
-  .page { display: none; padding: 16px; }
-  .page.active { display: block; }
-
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
-
-  .card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px;
-  }
-  .card h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 12px; }
-
-  .stat { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  .stat-label { color: var(--muted); font-size: 13px; }
-  .stat-value { font-size: 20px; font-weight: 700; color: var(--green); }
-  .stat-value.red { color: var(--orange); }
-
-  .progress-bar {
-    height: 8px;
-    background: var(--border);
-    border-radius: 4px;
-    overflow: hidden;
-    margin: 8px 0;
-  }
-  .progress-fill {
-    height: 100%;
-    background: var(--green);
-    border-radius: 4px;
-    transition: width .15s;
-  }
-
-  /* Piano keyboard */
-  .piano { display: flex; gap: 2px; align-items: flex-end; padding: 10px 0; overflow-x: auto; }
-  .key {
-    border-radius: 0 0 4px 4px;
-    cursor: pointer;
-    border: 1px solid #333;
-    transition: background .05s;
-    flex-shrink: 0;
-  }
-  .key.white { width: 28px; height: 80px; background: #e8e8e8; }
-  .key.black { width: 20px; height: 52px; background: #222; margin: 0 -10px; z-index: 2; }
-  .key.white:hover, .key.white.active { background: var(--green); }
-  .key.black:hover, .key.black.active { background: #00a060; }
-
-  /* Controls */
-  .btn {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 8px 16px;
-    border-radius: 7px;
-    border: none;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
-    transition: opacity .15s;
-  }
-  .btn:hover { opacity: .85; }
-  .btn-green  { background: var(--green);  color: #000; }
-  .btn-red    { background: var(--orange); color: #fff; }
-  .btn-blue   { background: #1a6bb5;      color: #fff; }
-  .btn-gray   { background: var(--border); color: var(--text); }
-  .btn-sm     { padding: 5px 12px; font-size: 12px; }
-
-  .jog-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
-
-  label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; margin-top: 10px; }
-  input[type=number], input[type=text], input[type=password], select {
-    width: 100%;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 7px 10px;
-    border-radius: 6px;
-    font-size: 13px;
-  }
-  input:focus, select:focus { outline: none; border-color: var(--green); }
-
-  .range-row { display: flex; align-items: center; gap: 10px; }
-  input[type=range] { flex: 1; accent-color: var(--green); }
-
-  /* LUT table */
-  .lut-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  .lut-table th { text-align: left; color: var(--muted); padding: 4px 8px; border-bottom: 1px solid var(--border); }
-  .lut-table td { padding: 3px 8px; border-bottom: 1px solid #1e1e3a; }
-  .lut-table tr.calibrated td { color: var(--green); }
-  .lut-table tr:not(.calibrated) td { color: var(--muted); }
-  .lut-table input[type=number] { padding: 2px 6px; width: 80px; }
-
-  .note-select { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
-
-  .ws-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--orange);
-    display: inline-block;
-    margin-right: 4px;
-  }
-  .ws-dot.connected { background: var(--green); }
-
-  .toast {
-    position: fixed; bottom: 20px; right: 20px;
-    background: var(--accent); border: 1px solid var(--green);
-    padding: 10px 16px; border-radius: 8px;
-    font-size: 13px; opacity: 0; transition: opacity .3s;
-    pointer-events: none; z-index: 999;
-  }
-  .toast.show { opacity: 1; }
-</style>
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
 
-<header>
-  <h1>🎵 Slide Whistle Controller</h1>
-  <span id="sysBadge" class="badge badge-init">INIT</span>
-  <span style="margin-left:auto;font-size:12px;color:var(--muted)">
-    <span class="ws-dot" id="wsDot"></span><span id="wsLabel">déconnecté</span>
+<a href="#main-content" class="skip-link">Aller au contenu</a>
+
+<div id="splash" role="status" aria-label="Chargement de l'application">
+  <div class="logo" aria-hidden="true">🎼</div>
+  <div class="title">Slide Whistle Controller</div>
+  <div class="subtitle">v3 · multi-flute · pression</div>
+  <div class="progress" aria-hidden="true"><div class="progress-bar"></div></div>
+</div>
+
+<div id="toasts" role="region" aria-live="polite" aria-label="Notifications"></div>
+<div id="loading-overlay" role="status" aria-label="Chargement"><div class="spinner" aria-hidden="true"></div></div>
+<div id="modalRoot" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal">
+    <h4 id="modalTitle">Confirmer</h4>
+    <p id="modalMsg"></p>
+    <div class="modal-actions">
+      <button class="btn" id="modalCancel">Annuler</button>
+      <button class="btn btn-primary" id="modalOk">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- Command palette (Ctrl+K) -->
+<div id="cmdRoot" role="dialog" aria-modal="true" aria-label="Palette de recherche">
+  <div class="cmd-box">
+    <input id="cmdInput" type="text" placeholder="Rechercher un réglage, une page, une action..." autocomplete="off" aria-label="Rechercher">
+    <div id="cmdResults" class="cmd-results" role="listbox" aria-label="Résultats"></div>
+  </div>
+</div>
+
+<!-- Shortcuts overlay -->
+<div id="shortcutsModal" class="modal-backdrop">
+  <div class="modal" style="min-width:380px">
+    <h4>⌨ Raccourcis clavier</h4>
+    <div class="shortcuts-grid">
+      <kbd>H</kbd>          <span>Homing global</span>
+      <kbd>P</kbd>          <span>Panic (coupure d'urgence)</span>
+      <kbd>M</kbd>          <span>Mute toutes les flûtes</span>
+      <kbd>U</kbd>          <span>Unmute toutes</span>
+      <kbd>T</kbd>          <span>Bascule thème (sombre/clair/auto)</span>
+      <kbd>S</kbd>          <span>Bascule preview audio (synth navigateur)</span>
+      <kbd>?</kbd>          <span>Afficher cet aide-mémoire</span>
+      <kbd>Ctrl+K</kbd>     <span>Palette de recherche</span>
+      <kbd>Ctrl+S</kbd>     <span>Sauvegarder la config (page Réglages)</span>
+      <kbd>Esc</kbd>        <span>Annuler MIDI Learn / fermer modal</span>
+    </div>
+    <p class="small">Sur la page <strong>Jouer</strong>, le clavier devient un piano :</p>
+    <p class="small" style="font-family:ui-monospace;color:var(--text)">A W S E D F T G Y H U J K O L P → C4 C#4 D4 D#4 E4 F4 F#4 G4 G#4 A4 A#4 B4 C5 C#5 D5 D#5</p>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="document.getElementById('shortcutsModal').classList.remove('show')">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Macro editor modal -->
+<div id="macroEditor" class="modal-backdrop">
+  <div class="modal" style="min-width:420px;max-width:560px">
+    <h4>Macros personnalisables</h4>
+    <p>Chaque macro est une suite d'étapes. Format YAML simplifié, une étape par ligne :</p>
+    <pre class="small" style="background:var(--bg);padding:8px;border-radius:4px;color:var(--muted);margin:6px 0">homing
+sleep 1500
+pressure_start
+demo 0 loop
+panic</pre>
+    <div id="macroList"></div>
+    <div class="btn-row" style="margin-top:8px">
+      <button class="btn" onclick="addMacro()">➕ Ajouter</button>
+      <button class="btn" onclick="resetMacros()">↺ Réinitialiser défauts</button>
+      <button class="btn btn-primary" style="margin-left:auto" onclick="document.getElementById('macroEditor').classList.remove('show')">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Quick edit popover (réinjecté dans le DOM par JS) -->
+<div id="quickPopover" class="quick-popover" style="display:none"></div>
+
+<!-- Bulk edit modal -->
+<div id="bulkModal" class="modal-backdrop">
+  <div class="modal" style="min-width: 360px">
+    <h4>Édition groupée</h4>
+    <p>Applique le même réglage à toutes les flûtes activées.</p>
+    <label>Réglage</label>
+    <select id="bulkField">
+      <option value="speed_mm_s">Vitesse (mm/s)</option>
+      <option value="accel_mm_s2">Accélération (mm/s²)</option>
+      <option value="pwm_full">PWM full</option>
+      <option value="pwm_hold">PWM hold</option>
+      <option value="wait_delay_ms">Wait delay (ms)</option>
+      <option value="legato_ms">Legato (ms)</option>
+      <option value="velocity_curve">Courbe vélocité (0/1/2)</option>
+      <option value="cc_breath">CC Breath</option>
+      <option value="cc_expression">CC Expression</option>
+      <option value="cc_volume">CC Volume</option>
+      <option value="cc_vibrato">CC Vibrato</option>
+      <option value="transpose">Transpose (demi-tons)</option>
+    </select>
+    <label>Valeur</label>
+    <input id="bulkValue" type="number">
+    <div class="modal-actions" style="margin-top:12px">
+      <button class="btn" onclick="document.getElementById('bulkModal').classList.remove('show')">Annuler</button>
+      <button class="btn btn-primary" onclick="applyBulk()">Appliquer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Onboarding tour -->
+<div id="tourRoot">
+  <div id="tourMask"></div>
+  <div id="tourPopover" class="tour-popover">
+    <h4 id="tourTitle"></h4>
+    <p id="tourMsg"></p>
+    <div class="tour-actions">
+      <span class="tour-step" id="tourStepLabel"></span>
+      <span>
+        <button class="btn" onclick="endTour()">Passer</button>
+        <button class="btn btn-primary" id="tourNext" onclick="tourNext()">Suivant</button>
+      </span>
+    </div>
+  </div>
+</div>
+
+<header role="banner">
+  <h1><span aria-hidden="true">🎼</span> Slide Whistle Controller</h1>
+  <span title="Connexion WebSocket" aria-live="polite">
+    <span id="connDot" aria-hidden="true"></span>
+    <span id="connLabel" class="small">déconnecté</span>
   </span>
+  <span id="sysBadge" class="badge b-init" aria-live="polite" aria-label="État système">INIT</span>
+  <span id="fluteCount" class="pill" aria-label="Nombre de flûtes">0 flûtes</span>
+  <span id="pressBadge" class="pill" style="display:none" aria-label="État pression">PRESSION</span>
+  <span id="demoBadge" class="pill" style="display:none" aria-label="Démo en cours">▶ démo</span>
+  <span id="learnBadge" class="pill" style="display:none; background:var(--orange); color:#fff" aria-live="assertive">🎯 MIDI Learn — envoie un CC</span>
+  <span style="margin-left:auto" class="small" aria-label="Version">v3 · multi-flute</span>
+  <button class="theme-btn" id="compactToggle" onclick="toggleCompact()" aria-label="Vue compacte" title="Vue compacte"><span aria-hidden="true">📋</span></button>
+  <button class="theme-btn" id="synthToggleBtn" onclick="toggleSynth()" aria-label="Activer ou désactiver la preview audio (raccourci S)" title="Preview audio (S)"><span aria-hidden="true">🔊</span></button>
+  <button class="theme-btn" onclick="toggleTheme()" aria-label="Basculer thème clair / sombre / auto (raccourci T)" title="Thème (T)"><span aria-hidden="true">🌓</span></button>
+  <button class="theme-btn" onclick="openCmdPalette()" aria-label="Ouvrir la palette de recherche (raccourci Ctrl+K)" title="Recherche (Ctrl+K)"><span aria-hidden="true">🔍</span></button>
+  <button class="theme-btn" onclick="showShortcuts()" aria-label="Afficher les raccourcis clavier (raccourci ?)" title="Raccourcis (?)"><span aria-hidden="true">⌨</span></button>
 </header>
 
-<nav>
-  <button class="active" onclick="showPage('dashboard',this)">Tableau de bord</button>
-  <button onclick="showPage('play',this)">Jeu</button>
-  <button onclick="showPage('calibration',this)">Calibration</button>
-  <button onclick="showPage('config',this)">Configuration</button>
-  <button onclick="showPage('wifi',this)">WiFi</button>
+<nav role="navigation" aria-label="Pages principales">
+  <button class="active" data-page="dashboard" aria-current="page">Dashboard</button>
+  <button data-page="flutes">Flûtes</button>
+  <button data-page="play">Jouer</button>
+  <button data-page="pressure">Pression</button>
+  <button data-page="midi">MIDI</button>
+  <button data-page="config">Réglages</button>
+  <button data-page="presets">Presets</button>
+  <button data-page="diag">Diag</button>
+  <button data-page="wifi">WiFi</button>
+  <button data-page="help">Aide</button>
 </nav>
 
-<!-- ============================================================ DASHBOARD -->
+<main id="main-content">
+
+<!-- ============================================================ -->
+<!-- DASHBOARD -->
+<!-- ============================================================ -->
 <div id="page-dashboard" class="page active">
   <div class="grid">
     <div class="card">
-      <h3>Position coulisse</h3>
-      <div class="stat">
-        <span class="stat-label">Position</span>
-        <span class="stat-value" id="stPos">—</span>
+      <h3>Système <span class="small" style="margin-left:auto">(H = homing, P = panic)</span></h3>
+      <div class="stat"><span class="stat-label">État</span>
+        <span id="dashState" class="stat-value">—</span></div>
+      <div class="stat"><span class="stat-label">Uptime</span>
+        <span id="dashUptime" class="stat-value">—</span></div>
+      <div class="stat"><span class="stat-label">Messages MIDI</span>
+        <span id="dashMidiCount" class="stat-value">0</span></div>
+      <div class="btn-row">
+        <button class="btn btn-warn" onclick="postNoBody('/api/homing')" title="Re-calibrer toutes les flûtes (H)">⌂ Homing global</button>
+        <button class="btn btn-danger" onclick="postNoBody('/api/panic')" title="Couper l'air immédiatement (P)">⏹ Panic</button>
       </div>
-      <div class="progress-bar">
-        <div class="progress-fill" id="stBar" style="width:0%"></div>
+      <div class="btn-row" style="margin-top:6px">
+        <button class="btn" onclick="postJson('/api/flutes/all',{action:'muteAll'})" title="Mute toutes les flûtes (M)">Mute all</button>
+        <button class="btn" onclick="postJson('/api/flutes/all',{action:'unmuteAll'})" title="Unmute toutes (U)">Unmute all</button>
+        <button class="btn" onclick="postJson('/api/flutes/all',{action:'enableAll'})">Activer toutes</button>
       </div>
-      <div class="stat">
-        <span class="stat-label">État</span>
-        <span id="stMoving" class="badge badge-init">—</span>
+      <div class="small" style="margin-top:10px;display:flex;align-items:center">
+        <strong>Macros</strong> <span class="help" title="Chaînes d'actions personnalisables">?</span>
+        <button class="btn" style="margin-left:auto;padding:2px 8px;font-size:11px" onclick="openMacroEditor()">✎ Éditer</button>
       </div>
-      <div class="stat" style="margin-top:8px">
-        <span class="stat-label">Homed</span>
-        <span id="stHomed">—</span>
-      </div>
+      <div id="macroBar" class="macro-row"></div>
     </div>
 
     <div class="card">
-      <h3>Air</h3>
-      <div class="stat">
-        <span class="stat-label">Solénoïde</span>
-        <span class="stat-value" id="airState">—</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Vélocité</span>
-        <span id="airVel">—</span>
-      </div>
+      <h3>Santé</h3>
+      <div id="dashHealth" class="small">Évaluation...</div>
     </div>
 
     <div class="card">
-      <h3>MIDI</h3>
-      <div class="stat">
-        <span class="stat-label">Dernière note</span>
-        <span class="stat-value" id="midiNote">—</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Active</span>
-        <span id="midiActive">—</span>
-      </div>
-      <div class="stat">
-        <span class="stat-label">Pitch bend</span>
-        <span id="midiPB">0</span>
+      <h3>Activité récente <span class="small" style="margin-left:auto">temps-réel</span></h3>
+      <div id="activityFeed" class="activity-feed small">
+        <div class="empty-state" style="padding:14px"><div class="ico">📋</div><div class="msg">Aucune activité encore.</div></div>
       </div>
     </div>
-
     <div class="card">
-      <h3>Actions rapides</h3>
-      <div style="display:flex; flex-direction:column; gap:8px; margin-top:4px">
-        <button class="btn btn-blue" onclick="doHoming()">⌂ Homing</button>
-        <button class="btn btn-gray" onclick="apiPost('/api/test/air')">Test air</button>
-        <button class="btn btn-red btn-sm" onclick="apiPost('/api/note',{note:60,velocity:0,on:false})">Stop air</button>
+      <h3>Pression</h3>
+      <div id="dashPressure">
+        <div class="stat-value muted">module désactivé</div>
       </div>
+      <canvas id="pressSpark" class="spark" width="300" height="60" style="margin-top:8px" role="img" aria-label="Graphique d'historique de la pression sur les 60 dernières secondes"></canvas>
     </div>
   </div>
+
+  <h3 style="margin: 18px 0 8px; color: var(--muted); font-size: 12px; text-transform: uppercase;">Activité MIDI par canal</h3>
+  <div id="midiChStrip" class="ch-strip"></div>
+
+  <h3 style="margin: 18px 0 8px; color: var(--muted); font-size: 12px; text-transform: uppercase;">Flûtes</h3>
+  <div id="dashFlutes" class="grid"></div>
 </div>
 
-<!-- ============================================================ JEU -->
+<!-- ============================================================ -->
+<!-- FLÛTES (gestion détaillée par instrument) -->
+<!-- ============================================================ -->
+<div id="page-flutes" class="page">
+  <div class="chips" id="fluteFilters">
+    <button class="chip active" data-filter="all">Toutes</button>
+    <button class="chip" data-filter="active">Actives</button>
+    <button class="chip" data-filter="muted">Mute</button>
+    <button class="chip" data-filter="disabled">Désactivées</button>
+    <button class="chip" data-filter="not_homed">Non homées</button>
+    <button class="chip" data-filter="playing">En jeu</button>
+    <span style="flex:1"></span>
+    <button class="chip" onclick="document.getElementById('bulkModal').classList.add('show')" style="background:var(--accent)">⚙ Édition groupée</button>
+  </div>
+  <div id="flutesList" class="grid"></div>
+</div>
+
+<!-- ============================================================ -->
+<!-- JOUER -->
+<!-- ============================================================ -->
 <div id="page-play" class="page">
-  <div class="card" style="margin-bottom:12px">
-    <h3>Clavier MIDI</h3>
-    <p style="color:var(--muted);font-size:12px;margin-bottom:8px">Cliquer pour jouer — C3 (48) à C6 (84)</p>
-    <div class="piano" id="piano"></div>
-  </div>
   <div class="card">
-    <h3>Contrôles manuels</h3>
-    <div class="jog-row">
-      <span style="color:var(--muted);font-size:12px">Jog moteur :</span>
-      <button class="btn btn-gray btn-sm" onclick="jog(-10)">−10mm</button>
-      <button class="btn btn-gray btn-sm" onclick="jog(-1)">−1mm</button>
-      <button class="btn btn-gray btn-sm" onclick="jog(-0.5)">−0.5mm</button>
-      <button class="btn btn-gray btn-sm" onclick="jog(0.5)">+0.5mm</button>
-      <button class="btn btn-gray btn-sm" onclick="jog(1)">+1mm</button>
-      <button class="btn btn-gray btn-sm" onclick="jog(10)">+10mm</button>
+    <h3>Test note
+      <select id="playFluteSel" style="width: auto"></select>
+    </h3>
+    <label>Note MIDI : <span id="playNoteLabel">60 (C4)</span></label>
+    <input type="range" id="playNote" min="48" max="84" value="60" style="width:100%">
+    <label>Vélocité : <span id="playVelLabel">100</span></label>
+    <input type="range" id="playVel" min="0" max="127" value="100" style="width:100%">
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="playStart()">▶ Note ON</button>
+      <button class="btn" onclick="playStop()">■ Note OFF</button>
+      <button class="btn btn-danger" onclick="postNoBody('/api/panic')">⏹ Panic</button>
     </div>
-    <label>Position absolue (mm)</label>
-    <div class="range-row">
-      <input type="range" id="jogSlider" min="0" max="300" step="0.5" value="150"
-             oninput="document.getElementById('jogSliderVal').textContent=this.value+'mm'">
-      <span id="jogSliderVal" style="width:60px;text-align:right">150mm</span>
-      <button class="btn btn-blue btn-sm" onclick="jogAbsolute()">Aller</button>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h3>Clavier</h3>
+    <div id="piano" class="piano"></div>
+  </div>
+
+  <div class="card midi-input-card" style="margin-top:12px">
+    <h3>Web MIDI <span class="small" style="margin-left:auto">contrôleur USB connecté au navigateur</span></h3>
+    <div class="small" id="webMidiStatus">Vérification du support Web MIDI…</div>
+    <div class="device-list" id="webMidiDevices"></div>
+    <div class="btn-row" style="margin-top:6px">
+      <button class="btn btn-primary" onclick="enableWebMidi()" id="webMidiBtn">🎹 Activer Web MIDI</button>
+      <label style="margin-left:8px"><input type="checkbox" id="webMidiForward" checked> router vers ESP32</label>
     </div>
-    <label style="margin-top:12px">Pitch bend (demi-tons)</label>
-    <div class="range-row">
-      <input type="range" id="pbRange" min="-2" max="2" step="0.01" value="0"
-             oninput="sendPitchBend(this.value)">
-      <span id="pbVal" style="width:50px;text-align:right">0</span>
-      <button class="btn btn-gray btn-sm" onclick="document.getElementById('pbRange').value=0;sendPitchBend(0)">Reset</button>
+    <div class="small" style="margin-top:6px">
+      Branche un clavier USB MIDI sur ton ordinateur. Les Note On/Off et CC seront relayés à l'ESP32 via /api/flute/note.
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h3>Mélodies de démo
+      <span id="demoState" class="pill">arrêté</span>
+    </h3>
+    <div class="small" style="margin-bottom:8px">
+      Joue une séquence pré-enregistrée à travers tout le pipeline (MIDI log, Orchestra, flûtes).
+      Pratique pour tester le hardware sans clavier MIDI.
+    </div>
+    <label>Mélodie</label>
+    <select id="demoMelodySel"></select>
+    <div style="margin:8px 0">
+      <label><input type="checkbox" id="demoLoop"> Boucler</label>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="demoPlay()">▶ Jouer</button>
+      <button class="btn" onclick="demoStop()">■ Arrêter</button>
     </div>
   </div>
 </div>
 
-<!-- ============================================================ CALIBRATION -->
-<div id="page-calibration" class="page">
-  <div class="card" style="margin-bottom:12px">
-    <h3>Calibration assistée</h3>
-    <div class="note-select">
-      <label style="margin:0">Note courante :</label>
-      <select id="calNote" style="width:120px" onchange="calNoteChanged()"></select>
-      <button class="btn btn-gray btn-sm" onclick="calPrevNote()">◀ Grave</button>
-      <button class="btn btn-gray btn-sm" onclick="calNextNote()">Aigu ▶</button>
-    </div>
-    <div class="jog-row">
-      <span style="color:var(--muted);font-size:12px">Ajust. position :</span>
-      <button class="btn btn-gray btn-sm" onclick="jog(-5)">−5mm</button>
-      <button class="btn btn-gray btn-sm" onclick="jog(-1)">−1mm</button>
-      <button class="btn btn-gray btn-sm" onclick="jog(-0.2)">−0.2</button>
-      <button class="btn btn-gray btn-sm" onclick="jog(0.2)">+0.2</button>
-      <button class="btn btn-gray btn-sm" onclick="jog(1)">+1mm</button>
-      <button class="btn btn-gray btn-sm" onclick="jog(5)">+5mm</button>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-      <button class="btn btn-green" onclick="calTestNote()">▶ Tester note (1s)</button>
-      <button class="btn btn-blue" onclick="calSavePoint()">💾 Sauvegarder position</button>
-      <button class="btn btn-gray btn-sm" onclick="doHoming()">⌂ Re-homing</button>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3>Table LUT <span id="calProgress" style="color:var(--green);margin-left:8px"></span></h3>
-    <div style="display:flex;gap:8px;margin-bottom:10px">
-      <button class="btn btn-blue btn-sm" onclick="loadLUT()">Recharger</button>
-      <button class="btn btn-red btn-sm" onclick="resetLUT()">Réinitialiser (linéaire)</button>
-    </div>
-    <div style="max-height:400px;overflow-y:auto">
-      <table class="lut-table">
-        <thead><tr><th>Note</th><th>Nom</th><th>Position (mm)</th><th></th></tr></thead>
-        <tbody id="lutBody"></tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
-<!-- ============================================================ CONFIG -->
-<div id="page-config" class="page">
+<!-- ============================================================ -->
+<!-- PRESSION -->
+<!-- ============================================================ -->
+<div id="page-pressure" class="page">
   <div class="grid">
     <div class="card">
-      <h3>Moteur</h3>
-      <label>Vitesse max (mm/s)</label>
-      <input type="number" id="cfgSpeed" min="5" max="300" step="1">
-      <label>Accélération (mm/s²)</label>
-      <input type="number" id="cfgAccel" min="100" max="5000" step="50">
+      <h3>État pompe / réservoir</h3>
+      <div class="stat"><span class="stat-label">État FSM</span>
+        <span id="pState" class="stat-value">—</span></div>
+      <div class="stat"><span class="stat-label">Pression</span>
+        <span id="pVal" class="stat-value">—</span></div>
+      <div class="progress-bar"><div id="pBar" class="progress-fill" style="width:0%"></div></div>
+      <div class="stat"><span class="stat-label">Pompe</span>
+        <span id="pPump" class="stat-value">—</span></div>
+      <div class="stat"><span class="stat-label">Réservoir</span>
+        <span id="pReservoir" class="stat-value">—</span></div>
+      <div class="stat"><span class="stat-label">Défaut</span>
+        <span id="pFault" class="stat-value muted">—</span></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="postNoBody('/api/pressure/start')">▶ Démarrer</button>
+        <button class="btn" onclick="postNoBody('/api/pressure/stop')">■ Arrêter</button>
+        <button class="btn btn-warn" onclick="postNoBody('/api/pressure/reset')">⟲ Reset</button>
+      </div>
     </div>
-    <div class="card">
-      <h3>Air / Solénoïde</h3>
-      <label>Délai attente position (ms)</label>
-      <input type="number" id="cfgWait" min="50" max="500" step="10">
-      <label>Legato seuil (ms)</label>
-      <input type="number" id="cfgLegato" min="100" max="1000" step="10">
-      <label>PWM ouverture (0-255)</label>
-      <input type="number" id="cfgPwmFull" min="0" max="255">
-      <label>PWM maintien (0-255)</label>
-      <input type="number" id="cfgPwmHold" min="0" max="255">
-    </div>
-    <div class="card">
-      <h3>MIDI</h3>
-      <label>Canal (1-16, 0=tous)</label>
-      <input type="number" id="cfgMidiCh" min="0" max="16">
-      <label>Note min (MIDI)</label>
-      <input type="number" id="cfgNoteMin" min="0" max="127">
-      <label>Note max (MIDI)</label>
-      <input type="number" id="cfgNoteMax" min="0" max="127">
-      <label style="margin-top:12px">
-        <input type="checkbox" id="cfgUseLUT" style="width:auto;margin-right:6px">
-        Utiliser LUT calibrée
-      </label>
-    </div>
-  </div>
-  <div style="margin-top:12px;display:flex;gap:8px">
-    <button class="btn btn-green" onclick="saveConfig()">💾 Sauvegarder</button>
-    <button class="btn btn-gray" onclick="loadConfig()">↺ Recharger</button>
-  </div>
-</div>
 
-<!-- ============================================================ WIFI -->
-<div id="page-wifi" class="page">
-  <div class="grid">
     <div class="card">
-      <h3>État WiFi</h3>
-      <div id="wifiStatus" style="font-size:13px;line-height:1.8"></div>
-      <button class="btn btn-gray btn-sm" style="margin-top:10px" onclick="loadWifiStatus()">Actualiser</button>
-    </div>
-    <div class="card">
-      <h3>Connexion réseau externe (STA)</h3>
-      <label>SSID</label>
-      <input type="text" id="staSsid" placeholder="Mon réseau WiFi">
-      <label>Mot de passe</label>
-      <input type="password" id="staPass" placeholder="••••••••">
-      <div style="display:flex;gap:8px;margin-top:12px">
-        <button class="btn btn-blue" onclick="saveWifi()">Connecter</button>
-        <button class="btn btn-red btn-sm" onclick="forgetWifi()">Oublier</button>
+      <h3>Seuils (kPa)</h3>
+      <div class="row2">
+        <div><label>Cible</label><input id="pCfgTarget" type="number" step="1"></div>
+        <div><label>Min (re-pump)</label><input id="pCfgMin" type="number" step="1"></div>
+        <div><label>Max (stop pump)</label><input id="pCfgMax" type="number" step="1"></div>
+        <div><label>Sécurité (cutoff)</label><input id="pCfgSafety" type="number" step="1"></div>
+        <div><label>Timeout fill (ms)</label><input id="pCfgFill" type="number" step="100"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="savePressureCfg()">💾 Sauvegarder</button>
+      </div>
+      <div class="small" style="margin-top:10px">
+        Schéma : pompe → réservoir → distributeur → solénoïdes (par flûte).
+        En mode "sans capteur", la pompe est régulée par alternance temporelle.
       </div>
     </div>
   </div>
 </div>
 
-<div class="toast" id="toast"></div>
+<!-- ============================================================ -->
+<!-- CONFIG (par flûte sélectionnée) -->
+<!-- ============================================================ -->
+<div id="page-config" class="page">
+  <div class="card">
+    <h3>Flûte
+      <select id="cfgFluteSel" style="width: auto" onchange="loadFluteCfg()" aria-label="Choisir la flûte à éditer"></select>
+      <span class="small" style="margin-left:auto;display:flex;gap:14px">
+        <label><input type="checkbox" id="cfgAutoSave"> auto-save</label>
+        <label><input type="checkbox" id="cfgAdvanced"> mode avancé</label>
+      </span>
+    </h3>
 
-<script>
-// ============================================================ WebSocket
-let ws, wsRetry = 0;
-const state = {};
+    <!-- ========== Identité (toujours visible) ========== -->
+    <fieldset class="cfg-section">
+      <legend>Identité</legend>
+      <label for="cfgCustomName">Nom personnalisé <span class="help" title="Vide = utilise le nom par défaut">?</span></label>
+      <input id="cfgCustomName" type="text" maxlength="22" placeholder="laisser vide pour défaut">
+      <label>Couleur (UI uniquement, sauvée dans le navigateur)</label>
+      <div id="cfgColorSwatches" role="radiogroup" aria-label="Couleur de la flûte"></div>
+    </fieldset>
 
-function connectWS() {
-  ws = new WebSocket('ws://' + location.host + '/ws');
-  ws.onopen = () => {
-    wsRetry = 0;
-    document.getElementById('wsDot').className   = 'ws-dot connected';
-    document.getElementById('wsLabel').textContent = 'connecté';
-  };
-  ws.onmessage = e => { try { updateDashboard(JSON.parse(e.data)); } catch(_){} };
-  ws.onclose = () => {
-    document.getElementById('wsDot').className   = 'ws-dot';
-    document.getElementById('wsLabel').textContent = 'reconnexion...';
-    setTimeout(connectWS, Math.min(500 * ++wsRetry, 5000));
-  };
-}
-connectWS();
+    <!-- ========== Plage MIDI (toujours visible) ========== -->
+    <fieldset class="cfg-section">
+      <legend>Plage MIDI</legend>
+      <div class="row3">
+        <div><label for="cfgChan">Canal <span class="help" title="0=OMNI (tous canaux), 1-16=canal spécifique">?</span></label>
+          <input id="cfgChan" type="number" min="0" max="16"></div>
+        <div><label for="cfgNmin">Note min</label><input id="cfgNmin" type="number" min="0" max="127"></div>
+        <div><label for="cfgNmax">Note max</label><input id="cfgNmax" type="number" min="0" max="127"></div>
+      </div>
+      <label>Plage (drag) <span id="rangeLabel" class="small"></span></label>
+      <div class="range-editor">
+        <div class="track" aria-hidden="true"></div>
+        <div id="rangeSel" class="selected" aria-hidden="true"></div>
+        <input id="rangeMin" type="range" min="0" max="127" step="1" aria-label="Note minimum">
+        <input id="rangeMax" type="range" min="0" max="127" step="1" aria-label="Note maximum">
+        <div class="range-labels" aria-hidden="true"><span id="rngLblMin"></span><span id="rngLblMax"></span></div>
+      </div>
+    </fieldset>
 
-// ============================================================ Dashboard update
-const noteNames = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-function midiName(n) {
-  return noteNames[n%12] + (Math.floor(n/12)-1);
-}
+    <!-- ========== Comportement (toujours visible) ========== -->
+    <fieldset class="cfg-section">
+      <legend>Comportement</legend>
+      <div class="row2">
+        <div>
+          <label for="cfgVelCurve">Courbe de vélocité <span class="help" title="Mapping vélocité MIDI (0-127) vers angle servo. Quadratique = plus naturel pour une flûte.">?</span></label>
+          <select id="cfgVelCurve" onchange="drawVelCurve()">
+            <option value="0">Linéaire</option>
+            <option value="1">Quadratique (musical)</option>
+            <option value="2">Cubique (très expressive)</option>
+          </select>
+          <canvas id="velCurveCanvas" width="200" height="100" style="margin-top:6px"
+                  role="img" aria-label="Aperçu de la courbe vélocité"></canvas>
+        </div>
+        <div>
+          <label><input id="cfgEnabled" type="checkbox"> Activée <span class="help" title="Désactivée : toutes les notes/CC sont ignorés">?</span></label>
+          <label style="margin-top:6px"><input id="cfgMuted" type="checkbox"> Mute <span class="help" title="Reçoit les events mais n'ouvre pas l'air. Utile pour solo.">?</span></label>
+          <label style="margin-top:6px"><input id="cfgUseLut" type="checkbox"> Utiliser la LUT <span class="help" title="LUT = table de calibration note→position. Sinon mapping linéaire (approximatif).">?</span></label>
+          <label style="margin-top:6px" class="adv-only" hidden>Transpose (±36 demi-tons) <span class="help" title="Décale les notes entrantes. Ex : +12 = octave plus haute.">?</span></label>
+          <input id="cfgTranspose" type="number" min="-36" max="36" value="0" class="adv-only" hidden>
+        </div>
+      </div>
+    </fieldset>
 
-function updateDashboard(d) {
-  Object.assign(state, d);
+    <!-- ========== Mapping CC (visible — collapse) ========== -->
+    <details class="cfg-collapse" open>
+      <summary>Mapping CC <span class="small">— routes les Control Changes vers les fonctions audio</span></summary>
+      <p class="small" style="margin: 4px 0 8px">0 = désactivé · 🎯 = MIDI Learn (cliquez puis envoyez un CC depuis votre contrôleur)</p>
+      <div class="row3">
+        <div><label for="cfgCcBreath">CC Breath <span class="help" title="Contrôle le débit d'air. Standard : 2.">?</span>
+          <button class="btn learn-btn" onclick="midiLearn('cfgCcBreath')" aria-label="MIDI Learn pour CC Breath">🎯 Learn</button></label>
+          <input id="cfgCcBreath" type="number" min="0" max="127"></div>
+        <div><label for="cfgCcExpr">CC Expression <span class="help" title="Standard : 11. Mappé sur débit air.">?</span>
+          <button class="btn learn-btn" onclick="midiLearn('cfgCcExpr')" aria-label="MIDI Learn pour CC Expression">🎯 Learn</button></label>
+          <input id="cfgCcExpr" type="number" min="0" max="127"></div>
+        <div><label for="cfgCcVolume">CC Volume <span class="help" title="Standard : 7. Mappé sur débit air.">?</span>
+          <button class="btn learn-btn" onclick="midiLearn('cfgCcVolume')" aria-label="MIDI Learn pour CC Volume">🎯 Learn</button></label>
+          <input id="cfgCcVolume" type="number" min="0" max="127"></div>
+        <div><label for="cfgCcVibrato">CC Vibrato <span class="help" title="Mod wheel = 1. Déclenche vibrato.">?</span>
+          <button class="btn learn-btn" onclick="midiLearn('cfgCcVibrato')" aria-label="MIDI Learn pour CC Vibrato">🎯 Learn</button></label>
+          <input id="cfgCcVibrato" type="number" min="0" max="127"></div>
+        <div><label for="cfgCcSustain">CC Sustain <span class="help" title="Pédale = 64. Tient les notes tant que la pédale est enfoncée.">?</span>
+          <button class="btn learn-btn" onclick="midiLearn('cfgCcSustain')" aria-label="MIDI Learn pour CC Sustain">🎯 Learn</button></label>
+          <input id="cfgCcSustain" type="number" min="0" max="127"></div>
+      </div>
+    </details>
 
-  // Position
-  if (d.position_mm !== undefined) {
-    const pct = Math.min(100, Math.max(0, d.position_mm / 300 * 100));
-    document.getElementById('stPos').textContent = d.position_mm.toFixed(1) + ' mm';
-    document.getElementById('stBar').style.width = pct + '%';
-  }
-  if (d.moving !== undefined) {
-    const el = document.getElementById('stMoving');
-    el.textContent = d.moving ? 'En mouvement' : 'Arrêté';
-    el.className   = 'badge ' + (d.moving ? 'badge-homing' : 'badge-ready');
-  }
-  if (d.homed !== undefined)
-    document.getElementById('stHomed').textContent = d.homed ? '✓ Oui' : '✗ Non';
+    <!-- ========== Moteur / Air (avancé — collapse) ========== -->
+    <details class="cfg-collapse">
+      <summary>Moteur & Air <span class="small">— paramètres techniques (mode avancé)</span></summary>
+      <div class="row2" style="margin-top:8px">
+        <div><label for="cfgSpeed">Vitesse (mm/s) <span class="help" title="Vitesse max du moteur. 45 = équilibre standard.">?</span></label>
+          <input id="cfgSpeed" type="number" step="1"></div>
+        <div><label for="cfgAccel">Accélération (mm/s²) <span class="help" title="Plus = plus réactif mais plus de bruit. 800 = standard.">?</span></label>
+          <input id="cfgAccel" type="number" step="10"></div>
+        <div><label for="cfgPwmFull">PWM full (0-255) <span class="help" title="Puissance pleine du solénoïde à l'ouverture.">?</span></label>
+          <input id="cfgPwmFull" type="number" min="0" max="255"></div>
+        <div><label for="cfgPwmHold">PWM hold (0-255) <span class="help" title="Puissance de maintien après ouverture. Économise l'énergie.">?</span></label>
+          <input id="cfgPwmHold" type="number" min="0" max="255"></div>
+        <div><label for="cfgWait">Wait delay (ms) <span class="help" title="Attente moteur en position avant d'ouvrir l'air.">?</span></label>
+          <input id="cfgWait" type="number"></div>
+        <div><label for="cfgLegato">Legato (ms) <span class="help" title="Seuil pour considérer notes consécutives comme legato (air maintenu).">?</span></label>
+          <input id="cfgLegato" type="number"></div>
+      </div>
+    </details>
 
-  // Air
-  if (d.air_state !== undefined) {
-    const el = document.getElementById('airState');
-    el.textContent = d.air_state;
-    el.className   = 'stat-value ' + (d.air_open ? '' : 'red');
-  }
-  if (d.velocity !== undefined)
-    document.getElementById('airVel').textContent = d.velocity;
+    <div class="btn-row" style="margin-top:14px">
+      <button class="btn btn-primary" onclick="saveFluteCfg()">💾 Sauvegarder</button>
+      <button class="btn btn-warn" onclick="testFluteAir()">🌬 Test air</button>
+    </div>
 
-  // MIDI
-  if (d.last_note !== undefined)
-    document.getElementById('midiNote').textContent = d.last_note + ' (' + midiName(d.last_note) + ')';
-  if (d.note_active !== undefined)
-    document.getElementById('midiActive').textContent = d.note_active ? '● Active' : '○ Non';
-  if (d.pitchbend !== undefined)
-    document.getElementById('midiPB').textContent = d.pitchbend;
+    <h3 style="margin-top: 16px">Calibration (LUT)
+      <span style="margin-left:auto; display:flex; gap:6px">
+        <select id="lutPresetSel" onchange="applyLutPreset()" style="width:auto;font-size:12px">
+          <option value="">Charger un preset...</option>
+          <option value="linear">Linéaire</option>
+          <option value="real">Slide whistle réelle (1/f)</option>
+          <option value="exp">Exponentielle</option>
+          <option value="reverse">Inversée</option>
+        </select>
+        <select id="cfgCopyFrom" onchange="copyConfigFrom()" style="width:auto;font-size:12px">
+          <option value="">Copier config depuis...</option>
+        </select>
+      </span>
+    </h3>
+    <div style="position:relative">
+      <canvas id="lutCanvas" width="600" height="220"
+              role="img" tabindex="0"
+              aria-label="Éditeur graphique de la table de calibration. Glissez les points verts pour ajuster la position de chaque note. Touche tactile : utilisez l'éditeur en table juste en-dessous."></canvas>
+      <div id="lutTooltip" class="lut-tooltip"></div>
+    </div>
+    <div class="small" style="margin: 4px 0 12px">
+      Vert = LUT calibrée · gris = mapping linéaire de référence. La courbe d'une slide whistle
+      réelle est non-linéaire (1/Longueur ∝ fréquence) donc la LUT doit s'incurver vers le bas.
+    </div>
+    <details>
+      <summary class="small" style="cursor:pointer">Édition par valeur (table complète)</summary>
+      <div id="lutBox" style="margin-top:8px"></div>
+    </details>
 
-  // Badge système
-  // (pas d'info sysState dans le JSON actuel — à étendre si besoin)
-}
+    <div id="cfgDirtyBar" class="sticky-save">
+      <span class="label">⚠ Modifications non sauvegardées</span>
+      <span>
+        <button class="btn" onclick="loadFluteCfg()">Annuler</button>
+        <button class="btn btn-primary" onclick="saveFluteCfg()">💾 Sauvegarder (Ctrl+S)</button>
+      </span>
+    </div>
+  </div>
+</div>
 
-// ============================================================ API helpers
-async function apiGet(path) {
-  const r = await fetch(path);
-  return r.json();
-}
+<!-- ============================================================ -->
+<!-- MIDI LOG -->
+<!-- ============================================================ -->
+<div id="page-midi" class="page">
+  <div class="card">
+    <h3>Activité MIDI
+      <span style="margin-left:auto; display:flex; gap:6px">
+        <button class="btn" onclick="loadMidiLog()">⟲ Rafraîchir</button>
+        <button class="btn" onclick="window.open('/api/midi/log.csv','_blank')">⬇ CSV</button>
+      </span>
+    </h3>
+    <div class="small" style="margin-bottom:8px">
+      Dernières 32 messages reçus (ring buffer ESP32). Les messages plus anciens sont écrasés.
+      <label style="margin-left:12px"><input type="checkbox" id="midiAutoRefresh" checked> auto-refresh</label>
+    </div>
+    <div class="row3" style="margin-bottom:8px">
+      <div><label>Filtre type</label>
+        <select id="midiFilterType">
+          <option value="">tous</option>
+          <option value="NoteOn">NoteOn</option>
+          <option value="NoteOff">NoteOff</option>
+          <option value="CC">CC</option>
+          <option value="PitchBend">PitchBend</option>
+          <option value="Aftertouch">Aftertouch</option>
+        </select></div>
+      <div><label>Filtre canal (1-16, 0=tous)</label>
+        <input type="number" id="midiFilterCh" min="0" max="16" value="0"></div>
+      <div><label>&nbsp;</label>
+        <button class="btn" onclick="loadMidiLog()" style="width:100%">Appliquer</button></div>
+    </div>
+    <div id="midiLog" class="log-box">Chargement...</div>
+  </div>
+</div>
 
-async function apiPost(path, body = {}) {
-  const r = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  return r.json();
-}
+<!-- ============================================================ -->
+<!-- PRESETS -->
+<!-- ============================================================ -->
+<div id="page-presets" class="page">
+  <div class="card">
+    <h3>Presets <span class="small" style="margin-left:auto">snapshot complet (toutes flûtes + pression)</span></h3>
+    <div class="row2">
+      <div>
+        <label>Nouveau preset (1-14 caractères)</label>
+        <input id="presetName" type="text" maxlength="14" placeholder="ex: concert_a">
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="savePreset()">💾 Enregistrer la config courante</button>
+        </div>
+      </div>
+      <div>
+        <label>Presets sauvegardés</label>
+        <div id="presetsList" class="small">Chargement...</div>
+      </div>
+    </div>
+  </div>
+</div>
 
-async function apiDelete(path) {
-  const r = await fetch(path, { method: 'DELETE' });
-  return r.json();
-}
+<!-- ============================================================ -->
+<!-- DIAG -->
+<!-- ============================================================ -->
+<div id="page-diag" class="page">
+  <div class="card">
+    <h3>Système <button class="btn" onclick="loadDiag()">⟲</button></h3>
+    <div id="diagSys" class="small">Chargement...</div>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn btn-warn" onclick="window.open('/api/backup','_blank')">⬇ Télécharger sauvegarde JSON</button>
+      <button class="btn" onclick="document.getElementById('restoreFile').click()">⬆ Restaurer depuis JSON</button>
+      <input type="file" id="restoreFile" accept="application/json" style="display:none" onchange="restoreFile(event)">
+      <button class="btn btn-danger" onclick="rebootSystem()">⟲ Redémarrer ESP32</button>
+    </div>
+  </div>
 
-function toast(msg) {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 2500);
-}
+  <div class="card" style="margin-top:12px">
+    <h3>Diagnostic flûtes (live)</h3>
+    <div id="diagFlutes" class="small">—</div>
+  </div>
 
-// ============================================================ Navigation
-function showPage(id, btn) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-  document.getElementById('page-' + id).classList.add('active');
-  btn.classList.add('active');
-  if (id === 'calibration') { buildCalNotes(); loadLUT(); }
-  if (id === 'config')      loadConfig();
-  if (id === 'wifi')        loadWifiStatus();
-}
+  <div class="card" style="margin-top:12px">
+    <h3>Diagnostic pression</h3>
+    <div id="diagPressure" class="small">—</div>
+  </div>
 
-// ============================================================ Actions rapides
-async function doHoming() {
-  await apiPost('/api/homing');
-  toast('Homing en cours…');
-}
+  <div class="card" style="margin-top:12px">
+    <h3>Stress test <span class="small">⚠ joue des notes aléatoires pour vérifier la stabilité mécanique/thermique</span></h3>
+    <div class="row3">
+      <div><label>Durée (s)</label><input id="stressDuration" type="number" min="1" max="600" value="30"></div>
+      <div><label>&nbsp;</label><button class="btn btn-warn" onclick="startStress()" style="width:100%">▶ Lancer</button></div>
+      <div><label>&nbsp;</label><button class="btn" onclick="stopStress()" style="width:100%">■ Arrêter</button></div>
+    </div>
+    <div class="small" style="margin-top:6px">
+      Désactive la flûte 0 ou mute les autres si tu veux cibler une seule. Le test ouvre/ferme l'air ~3-5 fois/s pendant la durée choisie.
+    </div>
+  </div>
 
-async function jog(mm) {
-  await apiPost('/api/jog', { mm });
-}
+  <div class="card" style="margin-top:12px">
+    <h3>Mise à jour OTA <span class="small">⚠ téléverser un .bin compilé du même sketch</span></h3>
+    <div class="small" style="margin-bottom:8px">
+      Sélectionnez le fichier <code>.bin</code> compilé (Sketch → Exporter binaire compilé).
+      Le système flashe la partition OTA inactive puis redémarre automatiquement.
+    </div>
+    <input type="file" id="otaFile" accept=".bin" style="margin-bottom:8px">
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="otaUpload()" id="otaBtn">⬆ Lancer la mise à jour</button>
+    </div>
+    <div id="otaProgress" class="small" style="margin-top:8px"></div>
+  </div>
+</div>
 
-async function jogAbsolute() {
-  const mm = parseFloat(document.getElementById('jogSlider').value);
-  const cur = state.position_mm || 0;
-  await jog(mm - cur);
-}
+<!-- ============================================================ -->
+<!-- HELP / DOCS -->
+<!-- ============================================================ -->
+<div id="page-help" class="page">
+  <div class="card docs">
+    <h3>Guide rapide
+      <span style="margin-left:auto; display:flex; gap:6px">
+        <button class="btn btn-primary" onclick="startTour()">🎓 Démarrer la visite guidée</button>
+        <button class="btn" onclick="window.print()">🖨 Imprimer</button>
+      </span>
+    </h3>
 
-async function sendPitchBend(val) {
-  document.getElementById('pbVal').textContent = parseFloat(val).toFixed(2);
-  // Approcher par CC pour ne pas bloquer : envoyer note fictive avec pitch bend
-  // Dans notre API, on peut directement modifier la position via un CC virtuel
-  // Pour l'instant on jog proportionnellement
-  // TODO: ajouter /api/pitchbend endpoint
-}
+    <h2>🚀 Premier démarrage</h2>
+    <ul>
+      <li>Connectez-vous au réseau WiFi <code>SlideWhistle</code> (mdp <code>midi1234</code>) ou via <code>http://slidewhistle.local</code> si STA configuré.</li>
+      <li>Sur le <strong>Dashboard</strong>, vérifiez que toutes les flûtes affichent l'état <span class="led green"></span> homed.</li>
+      <li>Sur <strong>Jouer</strong>, activez 🔊 (preview audio) puis cliquez sur le piano pour tester.</li>
+      <li>Si pas de matériel branché, lancez une <strong>Démo</strong> depuis la page Jouer.</li>
+    </ul>
 
-// ============================================================ Piano keyboard
-function buildPiano() {
-  const piano = document.getElementById('piano');
-  piano.innerHTML = '';
-  const blackKeys = new Set([1,3,6,8,10]); // offsets dans octave
-  let pressed = null;
+    <h2>🎛 Mapping CC standard</h2>
+    <p>Chaque flûte route les Control Changes selon ses propres mappings (modifiables dans Réglages) :</p>
+    <table>
+      <tr><th>CC #</th><th>Nom standard</th><th>Effet par défaut</th></tr>
+      <tr><td>1</td><td>Modulation Wheel</td><td>Vibrato (intensité ∝ valeur)</td></tr>
+      <tr><td>2</td><td>Breath</td><td>Débit air (servo)</td></tr>
+      <tr><td>7</td><td>Volume</td><td>Débit air</td></tr>
+      <tr><td>11</td><td>Expression</td><td>Débit air</td></tr>
+      <tr><td>64</td><td>Sustain Pedal</td><td>Réservé (futur maintien)</td></tr>
+      <tr><td>120</td><td>All Sound Off</td><td>Coupure d'urgence (panic)</td></tr>
+      <tr><td>123</td><td>All Notes Off</td><td>Coupure d'urgence (panic)</td></tr>
+    </table>
 
-  for (let n = 48; n <= 84; n++) {
-    const isBlack = blackKeys.has(n % 12);
-    const key = document.createElement('div');
-    key.className = 'key ' + (isBlack ? 'black' : 'white');
-    key.title = midiName(n) + ' (' + n + ')';
-    key.dataset.note = n;
+    <h2>⌨ Raccourcis clavier</h2>
+    <table>
+      <tr><th>Touche</th><th>Action</th></tr>
+      <tr><td><kbd>H</kbd></td><td>Homing global</td></tr>
+      <tr><td><kbd>P</kbd></td><td>Panic (coupure air toutes flûtes)</td></tr>
+      <tr><td><kbd>M</kbd> / <kbd>U</kbd></td><td>Mute / Unmute toutes</td></tr>
+      <tr><td><kbd>T</kbd></td><td>Bascule thème clair/sombre</td></tr>
+      <tr><td><kbd>S</kbd></td><td>Bascule preview audio (synth)</td></tr>
+      <tr><td><kbd>Ctrl+K</kbd></td><td>Palette de recherche</td></tr>
+      <tr><td><kbd>Ctrl+S</kbd></td><td>Sauvegarder la config (page Réglages)</td></tr>
+      <tr><td><kbd>?</kbd></td><td>Affiche les raccourcis</td></tr>
+      <tr><td colspan="2"><em>Page Jouer :</em> A,W,S,E,D,F,T,G,Y,H,U,J,K,O,L,P → C4..C5 chromatique</td></tr>
+    </table>
 
-    key.addEventListener('pointerdown', async e => {
-      e.preventDefault();
-      if (pressed !== null) {
-        await apiPost('/api/note', { note: pressed, velocity: 0, on: false });
-        document.querySelectorAll('.key').forEach(k => k.classList.remove('active'));
-      }
-      pressed = n;
-      key.classList.add('active');
-      await apiPost('/api/note', { note: n, velocity: 100, on: true });
-    });
+    <h2>🔧 Modules adaptatifs</h2>
+    <p>Les options visibles dépendent de la configuration matérielle compilée (<code>settings.h</code>) :</p>
+    <ul>
+      <li><strong>Multi-flûtes</strong> : activer N flûtes via <code>DEFAULT_FLUTE_COUNT</code> (1 à 4 par défaut). Chaque flûte a ses pins, son canal MIDI et sa plage propres.</li>
+      <li><strong>Module pression</strong> : <code>ENABLE_PRESSURE_CONTROL</code>. Si désactivé, la page Pression est masquée.</li>
+      <li><strong>Sources MIDI</strong> : <code>MIDI_SOURCE_SERIAL</code> (DIN-5/UART2) et/ou <code>MIDI_SOURCE_BLE</code> (BLE MIDI).</li>
+    </ul>
 
-    key.addEventListener('pointerup', async () => {
-      if (pressed === n) {
-        await apiPost('/api/note', { note: n, velocity: 0, on: false });
-        key.classList.remove('active');
-        pressed = null;
-      }
-    });
+    <h2>🔍 Dépannage</h2>
+    <ul>
+      <li><strong>Homing échoue</strong> : vérifiez que l'endstop est bien câblé avec pull-up externe (GPIO34-39 = input only). Voir <strong>Diag → Diagnostic flûtes</strong>.</li>
+      <li><strong>Pas de son</strong> : vérifier dans Diag → Pression que la pompe et le réservoir sont OK. Le module pression doit être en état <code>MAINTAIN</code>.</li>
+      <li><strong>Notes décalées</strong> : activer <em>Utiliser la LUT</em> dans Réglages et calibrer chaque note via l'éditeur graphique (drag des points).</li>
+      <li><strong>WS déconnecte</strong> : trop de clients connectés, ou alimentation faible. Surveiller <code>heap_min</code> dans Diag.</li>
+      <li><strong>Plusieurs flûtes silencieuses</strong> : vérifier que leurs canaux MIDI ne se chevauchent pas (sauf si voulu = unisson).</li>
+    </ul>
 
-    piano.appendChild(key);
-  }
-}
-buildPiano();
+    <h2>💾 Persistance</h2>
+    <ul>
+      <li>Toute config flûte sauvée dans NVS (namespaces <code>flute0</code>, <code>flute1</code>...).</li>
+      <li>Config pression : namespace <code>pressure</code>.</li>
+      <li><strong>Presets nommés</strong> : namespace <code>presets</code>.</li>
+      <li>Pour <strong>backup hors ESP32</strong> : Diag → Télécharger sauvegarde JSON.</li>
+    </ul>
 
-// ============================================================ Calibration
-let calCurrentNote = 84;
+    <h2>📡 API REST principale</h2>
+    <p>Tous les endpoints retournent JSON. Voir <code>esp32/README.md</code> pour la liste complète.</p>
+    <ul>
+      <li><code>GET /api/status</code> — état global temps-réel</li>
+      <li><code>POST /api/flute</code> — config + plage + CC mapping</li>
+      <li><code>POST /api/flute/note</code> — déclenche une note</li>
+      <li><code>POST /api/homing</code>, <code>/api/panic</code> — contrôles globaux</li>
+      <li><code>GET /api/system</code> — diagnostic complet</li>
+      <li><code>GET /api/midi/log[.csv]</code> — historique MIDI</li>
+    </ul>
+  </div>
+</div>
 
-function buildCalNotes() {
-  const sel = document.getElementById('calNote');
-  if (sel.options.length > 0) return;
-  for (let n = 84; n >= 48; n--) {
-    const opt = document.createElement('option');
-    opt.value = n;
-    opt.textContent = n + ' — ' + midiName(n);
-    sel.appendChild(opt);
-  }
-  sel.value = calCurrentNote;
-}
+<!-- ============================================================ -->
+<!-- WIFI -->
+<!-- ============================================================ -->
+<div id="page-wifi" class="page">
+  <div class="card">
+    <h3>État WiFi</h3>
+    <div id="wifiStatus" class="small">Chargement...</div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <h3>Connecter à un réseau
+      <button class="btn" onclick="scanWifi()" style="margin-left:auto">🔍 Scan</button>
+    </h3>
+    <div id="wifiScanList" class="scan-list" style="display:none"></div>
+    <label>SSID</label><input id="wSsid" type="text">
+    <label>Mot de passe</label><input id="wPass" type="text">
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="saveWifi()">💾 Connecter</button>
+      <button class="btn btn-danger" onclick="clearWifi()">🗑 Oublier</button>
+    </div>
+  </div>
+</div>
 
-function calNoteChanged() {
-  calCurrentNote = parseInt(document.getElementById('calNote').value);
-}
+</main>
 
-function calPrevNote() {
-  if (calCurrentNote > 48) {
-    calCurrentNote--;
-    document.getElementById('calNote').value = calCurrentNote;
-  }
-}
+<div id="status-bar" role="status" aria-label="Statut système">
+  <span class="sb-item"><span class="sb-label">WS</span><span id="sbConnDot" class="sb-value" aria-hidden="true"></span></span>
+  <span class="sb-item"><span class="sb-label">État</span><span id="sbState" class="sb-value">—</span></span>
+  <span class="sb-item"><span class="sb-label">Heap</span><span id="sbHeap" class="sb-value">—</span></span>
+  <span class="sb-item"><span class="sb-label">Uptime</span><span id="sbUptime" class="sb-value">—</span></span>
+  <span class="sb-item"><span class="sb-label">MIDI</span><span id="sbMidi" class="sb-value">0</span></span>
+  <span class="sb-item"><span class="sb-label">Latence</span><span id="sbLatency">—</span></span>
+  <span style="flex:1"></span>
+  <span class="sb-item"><span id="sbWebMidi" class="sb-label">no Web MIDI</span></span>
+  <span class="sb-item"><span class="sb-label">v3</span></span>
+</div>
 
-function calNextNote() {
-  if (calCurrentNote < 84) {
-    calCurrentNote++;
-    document.getElementById('calNote').value = calCurrentNote;
-  }
-}
+<script src="/app.js" defer></script>
 
-async function calTestNote() {
-  await apiPost('/api/note', { note: calCurrentNote, velocity: 100, on: true });
-  setTimeout(() => apiPost('/api/note', { note: calCurrentNote, velocity: 0, on: false }), 1000);
-}
-
-async function calSavePoint() {
-  const pos = state.position_mm;
-  if (pos === undefined) { toast('Position inconnue'); return; }
-  const r = await apiPost('/api/lut/point', { note: calCurrentNote, position_mm: pos });
-  if (r.ok) {
-    toast('Position ' + pos.toFixed(1) + 'mm → Note ' + midiName(calCurrentNote) + ' sauvegardée');
-    loadLUT();
-  }
-}
-
-async function loadLUT() {
-  const data = await apiGet('/api/lut');
-  const tbody = document.getElementById('lutBody');
-  tbody.innerHTML = '';
-  let calibrated = 0;
-
-  data.lut.forEach(pt => {
-    const isCalib = pt.position > 0.01;
-    if (isCalib) calibrated++;
-    const tr = document.createElement('tr');
-    tr.className = isCalib ? 'calibrated' : '';
-    tr.innerHTML = `
-      <td>${pt.note}</td>
-      <td>${midiName(pt.note)}</td>
-      <td><input type="number" value="${pt.position.toFixed(2)}" step="0.1"
-           min="0" max="300" data-note="${pt.note}"
-           onchange="updateLUTPoint(${pt.note},this.value)"></td>
-      <td><button class="btn btn-gray btn-sm" onclick="goToLUTPos(${pt.note})">→</button></td>`;
-    tbody.appendChild(tr);
-  });
-
-  document.getElementById('calProgress').textContent =
-    calibrated + '/37 calibrées';
-}
-
-async function updateLUTPoint(note, val) {
-  await apiPost('/api/lut/point', { note: parseInt(note), position_mm: parseFloat(val) });
-  toast('Point LUT mis à jour');
-}
-
-async function goToLUTPos(note) {
-  const row = document.querySelector(`input[data-note="${note}"]`);
-  if (!row) return;
-  const pos = parseFloat(row.value);
-  const cur = state.position_mm || 0;
-  await jog(pos - cur);
-  calCurrentNote = note;
-  document.getElementById('calNote').value = note;
-}
-
-async function resetLUT() {
-  const arr = [];
-  for (let i = 0; i < 37; i++) {
-    arr.push({ note: 48 + i, position: (i / 36) * 300 });
-  }
-  await apiPost('/api/lut', { lut: arr.map(p => ({ note: p.note, position: p.position })) });
-  toast('LUT réinitialisée (linéaire)');
-  loadLUT();
-}
-
-// ============================================================ Config
-async function loadConfig() {
-  const c = await apiGet('/api/config');
-  document.getElementById('cfgSpeed').value     = c.speed_mm_s;
-  document.getElementById('cfgAccel').value     = c.accel_mm_s2;
-  document.getElementById('cfgWait').value      = c.wait_delay_ms;
-  document.getElementById('cfgLegato').value    = c.legato_ms;
-  document.getElementById('cfgPwmFull').value   = c.pwm_full;
-  document.getElementById('cfgPwmHold').value   = c.pwm_hold;
-  document.getElementById('cfgMidiCh').value    = c.midi_channel;
-  document.getElementById('cfgNoteMin').value   = c.note_min;
-  document.getElementById('cfgNoteMax').value   = c.note_max;
-  document.getElementById('cfgUseLUT').checked  = c.use_lut;
-}
-
-async function saveConfig() {
-  const body = {
-    speed_mm_s:    parseFloat(document.getElementById('cfgSpeed').value),
-    accel_mm_s2:   parseFloat(document.getElementById('cfgAccel').value),
-    wait_delay_ms: parseInt(document.getElementById('cfgWait').value),
-    legato_ms:     parseInt(document.getElementById('cfgLegato').value),
-    pwm_full:      parseInt(document.getElementById('cfgPwmFull').value),
-    pwm_hold:      parseInt(document.getElementById('cfgPwmHold').value),
-    midi_channel:  parseInt(document.getElementById('cfgMidiCh').value),
-    note_min:      parseInt(document.getElementById('cfgNoteMin').value),
-    note_max:      parseInt(document.getElementById('cfgNoteMax').value),
-    use_lut:       document.getElementById('cfgUseLUT').checked
-  };
-  const r = await apiPost('/api/config', body);
-  toast(r.ok ? 'Configuration sauvegardée ✓' : 'Erreur sauvegarde');
-}
-
-// ============================================================ WiFi
-async function loadWifiStatus() {
-  const w = await apiGet('/api/wifi');
-  document.getElementById('wifiStatus').innerHTML = `
-    <b>Hotspot (AP)</b><br>
-    SSID : ${w.ap.ssid}<br>
-    IP   : ${w.ap.ip}<br>
-    Clients connectés : ${w.ap.clients}
-    <br><br>
-    <b>Réseau externe (STA)</b><br>
-    ${w.sta.connected
-      ? `Connecté à <b>${w.sta.ssid}</b><br>IP : ${w.sta.ip}`
-      : 'Non connecté'}
-  `;
-}
-
-async function saveWifi() {
-  const ssid = document.getElementById('staSsid').value;
-  const pass = document.getElementById('staPass').value;
-  const r = await apiPost('/api/wifi', { ssid, password: pass });
-  toast(r.ok ? 'Connexion en cours…' : 'Erreur');
-  setTimeout(loadWifiStatus, 5000);
-}
-
-async function forgetWifi() {
-  await apiDelete('/api/wifi');
-  toast('Credentials oubliés');
-  loadWifiStatus();
-}
-</script>
 </body>
 </html>

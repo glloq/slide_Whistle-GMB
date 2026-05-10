@@ -1,17 +1,13 @@
 /*
- * esp32_slide_whistle.ino — MIDI Slide Flute Controller (ESP32)
+ * esp32_slide_whistle.ino — MIDI Slide Flute Controller (ESP32) v3
  *
- * Corrections vs v1 :
- *   - portMUX_TYPE → SemaphoreHandle_t (mutex FreeRTOS)
- *     · portENTER_CRITICAL désactivait les interruptions Core 0 (WiFi!)
- *     · xSemaphoreTake/Give cède le CPU correctement entre tâches
- *   - Watchdog MIDI : si aucun message pendant WATCHDOG_TIMEOUT_MS, air coupé
- *   - CC2 / CC11 implémentés → débit air (air.setAirflow)
- *   - g_testAirRequested : test lancé depuis taskMotion (plus depuis Core 0)
- *   - stepper.setRuntimeLUT() appelé dans taskMotion après begin()
- *     (la LUT est chargée par taskWeb, mais le pointeur est valide dès le début)
- *   - Stack sizes augmentés : 16384 taskMotion, 12288 taskWeb
- *   - SystemState maintenant défini dans settings.h (partagé avec WebInterface)
+ * Architecture multi-flûtes + module pression :
+ *   - Orchestra  : N flûtes (chacune = stepper + air + config), routage MIDI
+ *   - Pressure   : pompe + capteur + FSM régulation
+ *   - MIDIHandler: source série/BLE → callbacks broadcast canal-aware
+ *   - WebInterface: API REST /api/flute(/lut|/note|/jog|/test|/panic) et /api/pressure
+ *
+ * Ports / canaux LEDC : voir settings.h DEFAULT_FLUTE_CONFIGS[]
  *
  * Bibliothèques requises :
  *   AccelStepper, ESP32Servo, ESPAsyncWebServer, AsyncTCP,
@@ -19,99 +15,96 @@
  */
 
 #include "settings.h"
-#include "StepperControl.h"
-#include "AirControl.h"
+#include "Orchestra.h"
+#include "PressureControl.h"
 #include "MIDIHandler.h"
 #include "WiFiManager.h"
+#include "DemoPlayer.h"
+#include "StressTester.h"
 #include "WebInterface.h"
 
 // ============================================================================
 // INSTANCES GLOBALES
 // ============================================================================
 
-StepperControl stepper;
-AirControl     air;
-MIDIHandler    midi;
-WiFiManager    wifiMgr;
-WebInterface   webIface;
+Orchestra        orchestra;
+PressureControl  pressure;
+MIDIHandler      midi;
+WiFiManager      wifiMgr;
+DemoPlayer       demoPlayer;
+StressTester     stressTester;
+WebInterface     webIface;
 
 // ============================================================================
-// ÉTAT PARTAGÉ
+// ÉTAT PARTAGÉ ENTRE TÂCHES
 // ============================================================================
 
 volatile SystemState sysState        = SYS_INIT;
 volatile bool g_homingRequested      = false;
-volatile bool g_testAirRequested     = false;
-volatile unsigned long lastMidiActMs = 0;  // watchdog MIDI
+volatile int  g_homingFluteId        = -1;     // -1 = aucun, sinon id flûte
+volatile int  g_testAirFluteId       = -1;
+volatile bool g_pressureStartRequested = false;
+volatile bool g_pressureStopRequested  = false;
+volatile bool g_pressureResetRequested = false;
+volatile int  g_demoMelodyId           = -1;   // -2=stop signal, -1=idle, >=0=play
+volatile bool g_demoLoop               = false;
+volatile int  g_sweepFluteId           = -1;   // -1 = aucun, sinon id flûte à sweep
+// Stress test : commande pendante.
+//   -1  = pas de commande
+//    0  = stop immédiat
+//   >0  = démarrer pour N secondes
+volatile int  g_stressDurationSec      = -1;
 
-// Mutex FreeRTOS — protège stepper/air contre accès concurrent inter-core.
-// Utilisé dans les callbacks MIDI (Core 1 Serial, Core 0 BLE) et taskMotion.
+// Mutex FreeRTOS — protège orchestre/pression contre accès concurrent inter-core.
 SemaphoreHandle_t motionMutex = nullptr;
 
 // ============================================================================
-// CALLBACKS MIDI
-// Appelés depuis Core 1 (MIDI Serial) ou Core 0 (BLE MIDI).
-// Le mutex garantit l'exclusion mutuelle avec taskMotion.
+// CALLBACKS MIDI — appelés depuis Core 1 (Serial) ou Core 0 (BLE)
 // ============================================================================
 
-void onMidiNoteOn(byte note, byte velocity) {
+void onMidiNoteOn(uint8_t ch, uint8_t note, uint8_t vel) {
   if (sysState != SYS_READY) return;
   xSemaphoreTake(motionMutex, portMAX_DELAY);
-  stepper.moveToMidiNote(note);
-  air.startAir(velocity);
+  orchestra.onNoteOn(ch, note, vel);
   xSemaphoreGive(motionMutex);
-  lastMidiActMs = millis();
 }
 
-void onMidiNoteOff(byte note) {
+void onMidiNoteOff(uint8_t ch, uint8_t note) {
   if (sysState != SYS_READY) return;
   xSemaphoreTake(motionMutex, portMAX_DELAY);
-  air.stopAir();
-  stepper.setVibrato(false, 0);
+  orchestra.onNoteOff(ch, note);
   xSemaphoreGive(motionMutex);
-  lastMidiActMs = millis();
 }
 
-void onMidiPitchBend(float semitones) {
+void onMidiPitchBend(uint8_t ch, float semitones) {
   if (sysState != SYS_READY) return;
   xSemaphoreTake(motionMutex, portMAX_DELAY);
-  stepper.setPitchBend(semitones);
+  orchestra.onPitchBend(ch, semitones);
   xSemaphoreGive(motionMutex);
-  lastMidiActMs = millis();
 }
 
-void onMidiAftertouch(bool active, byte pressure) {
+void onMidiAftertouch(uint8_t ch, bool active, uint8_t pressure_v) {
   if (sysState != SYS_READY) return;
   xSemaphoreTake(motionMutex, portMAX_DELAY);
-  stepper.setVibrato(active, pressure);
+  orchestra.onAftertouch(ch, active, pressure_v);
   xSemaphoreGive(motionMutex);
-  lastMidiActMs = millis();
 }
 
-// CC2 (Breath) / CC11 (Expression) → débit air
-// CC1 (Modulation) → vibrato (géré dans MIDIHandler.dispatchCC)
-void onMidiCC(byte cc, byte value) {
+void onMidiCC(uint8_t ch, uint8_t cc, uint8_t value) {
   if (sysState != SYS_READY) return;
-  if (cc == 2 || cc == 11) {
-    xSemaphoreTake(motionMutex, portMAX_DELAY);
-    air.setAirflow(value);
-    xSemaphoreGive(motionMutex);
-    lastMidiActMs = millis();
-  }
+  xSemaphoreTake(motionMutex, portMAX_DELAY);
+  orchestra.onCC(ch, cc, value);
+  xSemaphoreGive(motionMutex);
 }
 
 // ============================================================================
-// TÂCHE CORE 0 — WEB / WIFI (priorité basse)
+// TÂCHE CORE 0 — WEB / WIFI
 // ============================================================================
 
 void taskWeb(void* param) {
   (void)param;
   wifiMgr.begin();
-  webIface.begin(&stepper, &air, &midi, &wifiMgr);
-  // webIface.begin() appelle loadConfigFromNVS() + syncStepperLUT()
-  // → les valeurs de runtimeCfg.lutPositions sont mises à jour ;
-  //   stepper lit à travers le pointeur, donc il utilise la LUT correcte
-  //   dès que taskMotion émerge du homing.
+  webIface.begin(&orchestra, &pressure, &midi, &wifiMgr, &demoPlayer);
 
   for (;;) {
     webIface.update();
@@ -120,48 +113,65 @@ void taskWeb(void* param) {
 }
 
 // ============================================================================
-// TÂCHE CORE 1 — MIDI + MOTION (priorité haute, temps-réel)
+// TÂCHE CORE 1 — MIDI + MOTION + PRESSION (priorité haute, temps-réel)
 // ============================================================================
 
 void taskMotion(void* param) {
   (void)param;
 
-  stepper.begin();
-  air.begin();
+  // Les flûtes ont déjà été créées dans setup() — ici on initialise le matériel.
+  orchestra.beginAll();
+
+#if ENABLE_PRESSURE_CONTROL
+  pressure.begin(DEFAULT_PRESSURE_CONFIG);
+#endif
+
   midi.begin();
-
-  // Pointer vers la LUT runtime (runtimeCfg.lutPositions dans WebInterface.h).
-  // Les valeurs seront mises à jour par taskWeb/webIface.begin() via NVS.
-  // Le pointeur est stable pour toute la durée du programme.
-  stepper.setRuntimeLUT(runtimeCfg.lutPositions, runtimeCfg.useLUT);
-
   midi.setNoteOnCallback(onMidiNoteOn);
   midi.setNoteOffCallback(onMidiNoteOff);
   midi.setPitchBendCallback(onMidiPitchBend);
   midi.setAftertouchCallback(onMidiAftertouch);
   midi.setCCCallback(onMidiCC);
 
+  // DemoPlayer : ses callbacks passent par MIDIHandler::triggerNoteOn/Off
+  // → ils transitent par toute la chaîne (log MIDI + dispatch Orchestra)
+  demoPlayer.setCallbacks(
+    [](uint8_t ch, uint8_t note, uint8_t vel) { midi.triggerNoteOn(ch, note, vel); },
+    [](uint8_t ch, uint8_t note)              { midi.triggerNoteOff(ch, note); }
+  );
+
+  // StressTester partage le même chemin pour passer dans le routing/log
+  stressTester.begin(&orchestra, &midi);
+
 #if LED_ENABLED
   digitalWrite(STATUS_LED_PIN, HIGH);
 #endif
 
-  // Homing initial
+  // Homing initial — toutes flûtes (séquentiel)
   sysState = SYS_HOMING;
-  bool ok  = stepper.performHoming();
+  bool ok  = orchestra.homingAll();
 
   if (ok) {
     sysState = SYS_READY;
-    lastMidiActMs = millis();  // init watchdog
 #if DEBUG_MODE
-    Serial.println(F("[System] READY — en attente MIDI..."));
+    Serial.printf("[System] READY — %u flûte(s) opérationnelle(s)\n", orchestra.count());
 #endif
-    // Signal sonore bref
-    air.forceOpen(80);
-    vTaskDelay(pdMS_TO_TICKS(120));
-    air.forceClose();
+    // Bip de bienvenue sur la flûte 0
+    Flute* f0 = orchestra.get(0);
+    if (f0) {
+      f0->air().forceOpen(80);
+      vTaskDelay(pdMS_TO_TICKS(120));
+      f0->air().forceClose();
+    }
+
+#if ENABLE_PRESSURE_CONTROL
+    if (pressure.isEnabled()) {
+      pressure.start();   // démarrer le remplissage automatiquement
+    }
+#endif
   } else {
     sysState = SYS_ERROR;
-    Serial.println(F("[System] ERREUR homing! Vérifier endstop."));
+    Serial.println(F("[System] ERREUR homing — vérifier endstops"));
     for (;;) {
 #if LED_ENABLED
       digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
@@ -174,60 +184,141 @@ void taskMotion(void* param) {
   digitalWrite(STATUS_LED_PIN, LOW);
 #endif
 
-  // ---- Boucle principale temps-réel ----
+  // ---- Boucle temps-réel ----
   for (;;) {
 
-    // --- 1. Lire MIDI (appelle callbacks si message disponible) ---
+    // 1. MIDI
     midi.update();
 
-    // --- 2. Mettre à jour motion + air (sous mutex) ---
+    // 2. Motion + air (sous mutex)
     xSemaphoreTake(motionMutex, portMAX_DELAY);
-    stepper.update();
-    air.update();
+    orchestra.updateAll();
+#if ENABLE_PRESSURE_CONTROL
+    pressure.update();
+#endif
     xSemaphoreGive(motionMutex);
 
-    // --- 3. Watchdog MIDI ---
-    if (sysState == SYS_READY
-        && millis() - lastMidiActMs > WATCHDOG_TIMEOUT_MS
-        && air.isSolenoidOpen()) {
-      Serial.println(F("[WDG] Timeout MIDI — air coupé"));
+    // 3. Watchdog MIDI par flûte
+    if (sysState == SYS_READY) {
       xSemaphoreTake(motionMutex, portMAX_DELAY);
-      air.forceClose();
-      stepper.setVibrato(false, 0);
+      orchestra.watchdogTickAll(WATCHDOG_TIMEOUT_MS);
       xSemaphoreGive(motionMutex);
-      lastMidiActMs = millis();  // évite déclenchements répétés
     }
 
-    // --- 4. Homing demandé depuis l'interface web ---
+    // 4. Homing demandé depuis le web (global)
     if (g_homingRequested) {
       g_homingRequested = false;
       sysState = SYS_HOMING;
       xSemaphoreTake(motionMutex, portMAX_DELAY);
-      air.forceClose();
+      orchestra.panicAll();
       xSemaphoreGive(motionMutex);
-
-      bool rehome = stepper.performHoming();
+      bool rehome = orchestra.homingAll();
       sysState    = rehome ? SYS_READY : SYS_ERROR;
-      if (rehome) lastMidiActMs = millis();
     }
 
-    // --- 5. Test air demandé depuis l'interface web ---
-    if (g_testAirRequested) {
-      g_testAirRequested = false;
-      xSemaphoreTake(motionMutex, portMAX_DELAY);
-      air.runTestFromTask();   // vTaskDelay interne, libère le CPU
-      xSemaphoreGive(motionMutex);
+    // 4b. Homing demandé pour une flûte précise
+    if (g_homingFluteId >= 0) {
+      int id = g_homingFluteId;
+      g_homingFluteId = -1;
+      Flute* f = orchestra.get(id);
+      if (f) {
+        sysState = SYS_HOMING;
+        xSemaphoreTake(motionMutex, portMAX_DELAY);
+        f->panic();
+        xSemaphoreGive(motionMutex);
+        bool ok = orchestra.homingOne((uint8_t)id);
+        sysState = ok ? SYS_READY : SYS_ERROR;
+      }
+    }
+
+    // 5. Test air sur une flûte particulière
+    if (g_testAirFluteId >= 0) {
+      int id = g_testAirFluteId;
+      g_testAirFluteId = -1;
+      Flute* f = orchestra.get(id);
+      if (f) {
+        xSemaphoreTake(motionMutex, portMAX_DELAY);
+        f->air().runTestFromTask();
+        xSemaphoreGive(motionMutex);
+      }
+    }
+
+#if ENABLE_PRESSURE_CONTROL
+    // 6. Commandes pression
+    if (g_pressureStartRequested) { g_pressureStartRequested = false; pressure.start(); }
+    if (g_pressureStopRequested)  { g_pressureStopRequested  = false; pressure.stop();  }
+    if (g_pressureResetRequested) { g_pressureResetRequested = false; pressure.reset(); }
+#endif
+
+    // 7. DemoPlayer
+    if (g_demoMelodyId == -2) {
+      g_demoMelodyId = -1;
+      demoPlayer.stop();
+    } else if (g_demoMelodyId >= 0) {
+      int id = g_demoMelodyId;
+      g_demoMelodyId = -1;
+      demoPlayer.play((uint8_t)id, 0, g_demoLoop);
+    }
+    demoPlayer.update();
+
+    // 8b. Stress test (burn-in) — démarre/arrête via flag, tick non bloquant
+    if (g_stressDurationSec > 0) {
+      stressTester.start((uint16_t)g_stressDurationSec);
+      g_stressDurationSec = -1;
+    } else if (g_stressDurationSec == 0) {
+      stressTester.stop();
+      g_stressDurationSec = -1;
+    }
+    stressTester.update();
+
+    // 8. Sweep test sur une flûte (visualisation du déplacement complet)
+    if (g_sweepFluteId >= 0) {
+      int id = g_sweepFluteId;
+      g_sweepFluteId = -1;
+      Flute* f = orchestra.get(id);
+      if (f && f->stepper().isHomed()) {
+        xSemaphoreTake(motionMutex, portMAX_DELAY);
+        const float travel = f->config().sliderTravelMM;
+        f->stepper().moveToMM(travel);
+        xSemaphoreGive(motionMutex);
+        // Attendre l'arrivée
+        while (f->stepper().isMoving()) {
+          xSemaphoreTake(motionMutex, portMAX_DELAY);
+          f->stepper().update();
+          xSemaphoreGive(motionMutex);
+          vTaskDelay(pdMS_TO_TICKS(2));
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+        xSemaphoreTake(motionMutex, portMAX_DELAY);
+        f->stepper().moveToMM(0);
+        xSemaphoreGive(motionMutex);
+        while (f->stepper().isMoving()) {
+          xSemaphoreTake(motionMutex, portMAX_DELAY);
+          f->stepper().update();
+          xSemaphoreGive(motionMutex);
+          vTaskDelay(pdMS_TO_TICKS(2));
+        }
+      }
     }
 
 #if DEBUG_MODE
     static unsigned long lastDebug = 0;
     if (millis() - lastDebug > 5000) {
       lastDebug = millis();
-      Serial.printf("[Status] pos=%.1fmm  air=%s  note=%d  uptime=%lus\n",
-                    stepper.getCurrentPositionMM(),
-                    air.getStateName(),
-                    midi.getLastNote(),
-                    millis() / 1000UL);
+      Serial.printf("[Status] flutes=%u  uptime=%lus", orchestra.count(), millis()/1000UL);
+      for (uint8_t i = 0; i < orchestra.count(); ++i) {
+        Flute* f = orchestra.get(i);
+        if (!f) continue;
+        Serial.printf("  | F%u:%.1fmm/%s", i,
+                      f->stepper().getCurrentPositionMM(),
+                      f->air().getStateName());
+      }
+#if ENABLE_PRESSURE_CONTROL
+      if (pressure.isEnabled()) {
+        Serial.printf("  | P:%s %.1fkPa", pressure.getStateName(), pressure.getPressure());
+      }
+#endif
+      Serial.println();
     }
 #endif
 
@@ -244,7 +335,8 @@ void setup() {
   Serial.begin(SERIAL_BAUD_RATE);
   delay(500);
   Serial.println(F("\n========================================"));
-  Serial.println(F("   ESP32 MIDI Slide Whistle v2"));
+  Serial.println(F("  ESP32 MIDI Slide Whistle v3"));
+  Serial.println(F("  multi-flute + pressure control"));
   Serial.println(F("========================================"));
 #endif
 
@@ -253,17 +345,22 @@ void setup() {
   digitalWrite(STATUS_LED_PIN, LOW);
 #endif
 
-  // Créer le mutex avant de lancer les tâches
   motionMutex = xSemaphoreCreateMutex();
   configASSERT(motionMutex);
 
-  // Core 0 — web / WiFi  (stack 12 KB, priorité 1)
+  // Construire les flûtes ici (avant les tâches) pour éviter une course
+  // entre taskMotion (begin matériel) et taskWeb (loadFluteConfigNVS).
+  for (uint8_t i = 0; i < DEFAULT_FLUTE_COUNT && i < MAX_FLUTES; ++i) {
+    orchestra.addFlute(DEFAULT_FLUTE_CONFIGS[i]);
+  }
+
+  // Core 0 — web (stack 12 KB, prio 1)
   xTaskCreatePinnedToCore(taskWeb,    "Web",    12288, nullptr, 1, nullptr, 0);
 
-  // Core 1 — MIDI + motion (stack 16 KB, priorité 5)
+  // Core 1 — MIDI + motion (stack 16 KB, prio 5)
   xTaskCreatePinnedToCore(taskMotion, "Motion", 16384, nullptr, 5, nullptr, 1);
 }
 
 void loop() {
-  vTaskDelay(portMAX_DELAY);  // tout est dans les tâches FreeRTOS
+  vTaskDelay(portMAX_DELAY);
 }
