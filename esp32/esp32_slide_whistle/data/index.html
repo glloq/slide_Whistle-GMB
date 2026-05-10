@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f3460">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>Slide Whistle Controller</title>
 <style>
   :root {
@@ -569,6 +571,68 @@
     position: absolute; bottom: 0; left: 0; right: 0; height: 6px; opacity: .55;
   }
 
+  /* Footer status bar */
+  #status-bar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: var(--card); border-top: 1px solid var(--border);
+    padding: 4px 12px; font-size: 11px;
+    display: flex; gap: 14px; align-items: center;
+    color: var(--muted); font-family: ui-monospace, monospace;
+    z-index: 40;
+  }
+  #status-bar .sb-item { display: flex; align-items: center; gap: 4px; }
+  #status-bar .sb-label { color: var(--muted); }
+  #status-bar .sb-value { color: var(--text); font-weight: 600; }
+  body { padding-bottom: 26px; }       /* place pour la barre */
+
+  /* Ripple animation on piano keys */
+  .key { position: relative; overflow: hidden; }
+  .key .ripple {
+    position: absolute; left: 50%; bottom: 0;
+    width: 8px; height: 8px;
+    background: rgba(0,208,132,.6); border-radius: 50%;
+    transform: translateX(-50%); pointer-events: none;
+    animation: rippleAnim .6s ease-out forwards;
+  }
+  @keyframes rippleAnim {
+    from { transform: translate(-50%, 0) scale(1);  opacity: 1; }
+    to   { transform: translate(-50%, 0) scale(8);  opacity: 0; }
+  }
+
+  /* Macro chips */
+  .macro-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .macro-chip {
+    padding: 6px 12px; border-radius: 18px;
+    border: 1px solid var(--green); background: transparent;
+    color: var(--green); cursor: pointer; font-size: 12px;
+    transition: all .15s;
+  }
+  .macro-chip:hover { background: var(--green); color: #000; }
+
+  /* Web MIDI input panel */
+  .midi-input-card .device-list {
+    margin-top: 8px; max-height: 140px; overflow-y: auto;
+  }
+  .midi-input-card .device-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 8px; border-radius: 4px;
+    background: var(--bg); border: 1px solid var(--border);
+    margin-bottom: 4px; font-size: 12px;
+  }
+  .midi-input-card .device-item .led { margin-right: 0; }
+
+  /* Shortcuts overlay (proper modal) */
+  .shortcuts-grid {
+    display: grid; grid-template-columns: 80px 1fr; gap: 6px 12px;
+    margin: 12px 0; font-size: 13px;
+  }
+  .shortcuts-grid kbd {
+    background: var(--bg); padding: 2px 8px; border-radius: 4px;
+    font-family: ui-monospace, monospace; font-size: 12px;
+    border: 1px solid var(--border); display: inline-block;
+    min-width: 60px; text-align: center;
+  }
+
   @media print {
     nav, header, #toasts, #loading-overlay, #cmdRoot, #modalRoot,
     #bulkModal, #tourRoot, .theme-btn, .btn-row, .sticky-save { display: none !important; }
@@ -696,6 +760,30 @@
   </div>
 </div>
 
+<!-- Shortcuts overlay -->
+<div id="shortcutsModal" class="modal-backdrop">
+  <div class="modal" style="min-width:380px">
+    <h4>⌨ Raccourcis clavier</h4>
+    <div class="shortcuts-grid">
+      <kbd>H</kbd>          <span>Homing global</span>
+      <kbd>P</kbd>          <span>Panic (coupure d'urgence)</span>
+      <kbd>M</kbd>          <span>Mute toutes les flûtes</span>
+      <kbd>U</kbd>          <span>Unmute toutes</span>
+      <kbd>T</kbd>          <span>Bascule thème (sombre/clair/auto)</span>
+      <kbd>S</kbd>          <span>Bascule preview audio (synth navigateur)</span>
+      <kbd>?</kbd>          <span>Afficher cet aide-mémoire</span>
+      <kbd>Ctrl+K</kbd>     <span>Palette de recherche</span>
+      <kbd>Ctrl+S</kbd>     <span>Sauvegarder la config (page Réglages)</span>
+      <kbd>Esc</kbd>        <span>Annuler MIDI Learn / fermer modal</span>
+    </div>
+    <p class="small">Sur la page <strong>Jouer</strong>, le clavier devient un piano :</p>
+    <p class="small" style="font-family:ui-monospace;color:var(--text)">A W S E D F T G Y H U J K O L P → C4 C#4 D4 D#4 E4 F4 F#4 G4 G#4 A4 A#4 B4 C5 C#5 D5 D#5</p>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="document.getElementById('shortcutsModal').classList.remove('show')">Fermer</button>
+    </div>
+  </div>
+</div>
+
 <!-- Bulk edit modal -->
 <div id="bulkModal" class="modal-backdrop">
   <div class="modal" style="min-width: 360px">
@@ -791,6 +879,8 @@
         <button class="btn" onclick="postJson('/api/flutes/all',{action:'unmuteAll'})" title="Unmute toutes (U)">Unmute all</button>
         <button class="btn" onclick="postJson('/api/flutes/all',{action:'enableAll'})">Activer toutes</button>
       </div>
+      <div class="small" style="margin-top:10px"><strong>Macros</strong> <span class="help" title="Chaînes d'actions personnalisables (modifiable dans le code, futur : NVS)">?</span></div>
+      <div id="macroBar" class="macro-row"></div>
     </div>
 
     <div class="card">
@@ -859,6 +949,19 @@
   <div class="card" style="margin-top:12px">
     <h3>Clavier</h3>
     <div id="piano" class="piano"></div>
+  </div>
+
+  <div class="card midi-input-card" style="margin-top:12px">
+    <h3>Web MIDI <span class="small" style="margin-left:auto">contrôleur USB connecté au navigateur</span></h3>
+    <div class="small" id="webMidiStatus">Vérification du support Web MIDI…</div>
+    <div class="device-list" id="webMidiDevices"></div>
+    <div class="btn-row" style="margin-top:6px">
+      <button class="btn btn-primary" onclick="enableWebMidi()" id="webMidiBtn">🎹 Activer Web MIDI</button>
+      <label style="margin-left:8px"><input type="checkbox" id="webMidiForward" checked> router vers ESP32</label>
+    </div>
+    <div class="small" style="margin-top:6px">
+      Branche un clavier USB MIDI sur ton ordinateur. Les Note On/Off et CC seront relayés à l'ESP32 via /api/flute/note.
+    </div>
   </div>
 
   <div class="card" style="margin-top:12px">
@@ -1248,12 +1351,176 @@
   </div>
 </div>
 
+<div id="status-bar">
+  <span class="sb-item"><span class="sb-label">WS</span><span id="sbConnDot" class="sb-value"></span></span>
+  <span class="sb-item"><span class="sb-label">État</span><span id="sbState" class="sb-value">—</span></span>
+  <span class="sb-item"><span class="sb-label">Heap</span><span id="sbHeap" class="sb-value">—</span></span>
+  <span class="sb-item"><span class="sb-label">Uptime</span><span id="sbUptime" class="sb-value">—</span></span>
+  <span class="sb-item"><span class="sb-label">MIDI</span><span id="sbMidi" class="sb-value">0</span></span>
+  <span style="flex:1"></span>
+  <span class="sb-item"><span id="sbWebMidi" class="sb-label">no Web MIDI</span></span>
+  <span class="sb-item"><span class="sb-label">v3</span></span>
+</div>
+
 <script>
 // ============================================================================
 // State
 // ============================================================================
 let state = { sys_state: 'INIT', flutes: [], pressure: null };
 let ws = null;
+
+// ============================================================================
+// PWA service worker
+// ============================================================================
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+// ============================================================================
+// Macros (chaînes d'actions, personnalisables localement)
+// ============================================================================
+const DEFAULT_MACROS = [
+  {label: '🎬 Démarrage spectacle', desc: 'Homing + air ON + démo arpèges',
+    actions: [
+      ['POST', '/api/homing'],
+      ['SLEEP', 1500],
+      ['POST', '/api/pressure/start'],
+      ['SLEEP', 500],
+      ['POST', '/api/demo/play', {id: 2, loop: false}]
+    ]},
+  {label: '😴 Mode veille', desc: 'Panic + pompe stop + mute all',
+    actions: [
+      ['POST', '/api/panic'],
+      ['POST', '/api/flutes/all', {action: 'muteAll'}],
+      ['POST', '/api/pressure/stop']
+    ]},
+  {label: '🎯 Test complet', desc: 'Test air sur chaque flûte',
+    actions: 'TEST_ALL'},
+];
+async function runMacro(macro) {
+  toast(`Macro : ${macro.label}`, 'success');
+  if (macro.actions === 'TEST_ALL') {
+    for (const f of (state.flutes || [])) {
+      if (!f.enabled) continue;
+      await postJson('/api/flute/test', {id: f.id});
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    return;
+  }
+  for (const a of macro.actions) {
+    if (a[0] === 'SLEEP') { await new Promise(r => setTimeout(r, a[1])); continue; }
+    if (a[0] === 'POST') {
+      if (a[2]) await postJson(a[1], a[2]);
+      else      await postNoBody(a[1]);
+    }
+  }
+}
+function renderMacros() {
+  const bar = document.getElementById('macroBar');
+  if (!bar) return;
+  bar.innerHTML = DEFAULT_MACROS.map((m, i) =>
+    `<button class="macro-chip" onclick="runMacro(DEFAULT_MACROS[${i}])" title="${m.desc}">${m.label}</button>`
+  ).join('');
+}
+window.DEFAULT_MACROS = DEFAULT_MACROS;
+
+// ============================================================================
+// Web MIDI API (browser ↔ external USB controller → ESP32)
+// ============================================================================
+let _webMidi = null;
+let _webMidiEnabled = false;
+async function enableWebMidi() {
+  if (!navigator.requestMIDIAccess) {
+    toast('Web MIDI non supporté par ce navigateur', 'warn');
+    return;
+  }
+  try {
+    _webMidi = await navigator.requestMIDIAccess({sysex: false});
+    _webMidiEnabled = true;
+    document.getElementById('sbWebMidi').textContent = 'Web MIDI ✓';
+    bindWebMidiInputs();
+    _webMidi.onstatechange = bindWebMidiInputs;
+    toast('Web MIDI activé');
+  } catch (e) {
+    toast('Permission Web MIDI refusée', 'error');
+  }
+}
+function bindWebMidiInputs() {
+  if (!_webMidi) return;
+  const list = document.getElementById('webMidiDevices');
+  const status = document.getElementById('webMidiStatus');
+  const inputs = Array.from(_webMidi.inputs.values());
+  if (!inputs.length) {
+    list.innerHTML = '<div class="device-item"><span>Aucun contrôleur connecté</span><span class="led off"></span></div>';
+    if (status) status.textContent = 'Branche un clavier USB MIDI puis clique Activer.';
+    return;
+  }
+  list.innerHTML = inputs.map(inp =>
+    `<div class="device-item">
+       <span><strong>${inp.name}</strong> <span class="small">— ${inp.manufacturer || 'inconnu'}</span></span>
+       <span class="led ${inp.state === 'connected' ? 'green' : 'red'}"></span>
+     </div>`
+  ).join('');
+  inputs.forEach(inp => { inp.onmidimessage = onWebMidiMessage; });
+  if (status) status.textContent = `${inputs.length} contrôleur(s) bindé(s).`;
+}
+function onWebMidiMessage(e) {
+  const [status, d1, d2] = e.data;
+  const cmd = status & 0xF0, ch = (status & 0x0F) + 1;
+  // Synth navigateur immédiat (latence quasi-nulle)
+  if (cmd === 0x90 && d2 > 0) synthNoteOn(d1);
+  else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) synthNoteOff(d1);
+  // Relais ESP32 si activé
+  if (!document.getElementById('webMidiForward').checked) return;
+  // Choix flûte cible : la première qui accepte ce canal
+  const target = (state.flutes || []).find(f =>
+    f.enabled && (f.midi_channel === 0 || f.midi_channel === ch));
+  if (!target) return;
+  if (cmd === 0x90 && d2 > 0) {
+    postJson('/api/flute/note', {id: target.id, note: d1, velocity: d2, on: true});
+  } else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) {
+    postJson('/api/flute/note', {id: target.id, note: d1, on: false});
+  }
+  // CC, PB, AT : pour l'instant on laisse l'ESP32 les recevoir directement
+  // via Serial/BLE MIDI si raccordé. Pour étendre, ajouter ici les endpoints.
+}
+
+// ============================================================================
+// Status bar (footer)
+// ============================================================================
+function updateStatusBar() {
+  document.getElementById('sbState').textContent = state.sys_state || '—';
+  setAnimCounter(document.getElementById('sbMidi'), state.midi_count || 0);
+  document.getElementById('sbUptime').textContent = fmtUptime(state.uptime_ms || 0);
+  if (refreshHealth._heapFree) {
+    document.getElementById('sbHeap').textContent = (refreshHealth._heapFree / 1024).toFixed(0) + 'KB';
+  }
+  // Reflète l'état WS du connDot dans la barre
+  const dot = document.getElementById('sbConnDot');
+  if (dot) {
+    dot.textContent = _wsConnected ? '●' : '○';
+    dot.style.color = _wsConnected ? 'var(--green)' : 'var(--orange)';
+  }
+}
+setInterval(updateStatusBar, 1000);
+
+// ============================================================================
+// Quick mute par canal (click droit sur cellule du strip)
+// ============================================================================
+function setupChannelStripContextMenu() {
+  document.addEventListener('contextmenu', e => {
+    const cell = e.target.closest('.ch-cell');
+    if (!cell) return;
+    e.preventDefault();
+    const ch = +cell.querySelector('.ch-num')?.textContent;
+    if (!ch) return;
+    const f = (state.flutes || []).find(x => x.midi_channel === ch);
+    if (!f) { toast(`Aucune flûte n'écoute le canal ${ch}`, 'warn'); return; }
+    const newMuted = !f.muted;
+    postJson('/api/flute', {id: f.id, muted: newMuted});
+    toast(`${f.name} : ${newMuted ? 'mutée' : 'unmutée'}`);
+  });
+}
 
 // ============================================================================
 // Navigation
@@ -1391,10 +1658,14 @@ setInterval(pollForLearn, 600);
 
 // Échap = annuler le learn
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && _learnTarget) {
-    _learnTarget.classList.remove('learning');
-    _learnTarget = null;
-    toast('MIDI Learn annulé');
+  if (e.key === 'Escape') {
+    if (_learnTarget) {
+      _learnTarget.classList.remove('learning');
+      _learnTarget = null;
+      toast('MIDI Learn annulé');
+    }
+    document.getElementById('shortcutsModal')?.classList.remove('show');
+    document.getElementById('bulkModal')?.classList.remove('show');
   }
 });
 
@@ -2231,9 +2502,18 @@ function buildPiano() {
 }
 const _activeKeys = new Set();
 async function keyPress(note, on) {
-  // Visuel local immédiat
+  // Visuel local immédiat + ripple à la frappe
   const k = document.querySelector(`#piano .key[data-note="${note}"]`);
-  if (k) k.classList.toggle('active', on);
+  if (k) {
+    k.classList.toggle('active', on);
+    if (on) {
+      const r = document.createElement('span');
+      r.className = 'ripple';
+      r.style.background = `rgba(0,208,132,.7)`;
+      k.appendChild(r);
+      setTimeout(() => r.remove(), 700);
+    }
+  }
   // Eviter de spam si pas de changement
   if (on && _activeKeys.has(note)) return;
   if (!on && !_activeKeys.has(note)) return;
@@ -3169,7 +3449,7 @@ setInterval(refreshHealth, 1500);
 // Keyboard shortcuts
 // ============================================================================
 function showShortcuts() {
-  toast('Raccourcis (hors page Jouer) : H=homing, P=panic, M=mute all, T=thème, S=synth, ?=aide. Sur Jouer : A,W,S,E,D,F,T,G,Y,H,U,J,K… = notes (C4→)', 'success', 8000);
+  document.getElementById('shortcutsModal').classList.add('show');
 }
 document.addEventListener('keydown', e => {
   // Ctrl+S = sauvegarder la config si page Réglages ouverte et dirty
@@ -3199,6 +3479,9 @@ document.addEventListener('keydown', e => {
 buildPiano();
 setupRangeEditor();
 setupDirtyTracking();
+setupChannelStripContextMenu();
+renderMacros();
+bindWebMidiInputs();   // si Web MIDI n'est pas activé, juste un message d'invite
 connectWs();
 setTimeout(updateTabIndicator, 50);
 // premier fetch immédiat
