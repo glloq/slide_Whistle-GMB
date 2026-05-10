@@ -1770,27 +1770,37 @@ function drawLutCanvas() {
   }
 }
 
-// Drag sur le canvas pour modifier les points + crosshair info
+// Drag sur le canvas LUT pour modifier les points (souris + tactile).
+// Sauvegarde au mouseup/touchend, tooltip crosshair au survol souris.
 (function setupLutDrag() {
   const c = document.getElementById('lutCanvas');
   if (!c) return;
   let dragIdx = -1;
 
-  // Hover : afficher tooltip avec note + position
-  c.addEventListener('mousemove', e => {
-    const rect = c.getBoundingClientRect();
-    const xRel = e.clientX - rect.left;
-    if (!_currentLut.length) return;
+  // Helpers : coordonnées d'un évènement, recherche du point le plus proche
+  function eventXY(e) {
+    const t = e.touches?.[0] || e.changedTouches?.[0] || e;
+    return { x: t.clientX, y: t.clientY };
+  }
+  function findNearestPoint(xRel) {
     const padL = 32, padR = 8;
     const plotW = c.clientWidth - padL - padR;
     const n = _currentLut.length;
     let best = 0, bestD = 1e9;
     for (let i = 0; i < n; i++) {
-      const xx = padL + (i / (n-1)) * plotW;
+      const xx = padL + (i / (n - 1)) * plotW;
       const d = Math.abs(xx - xRel);
       if (d < bestD) { bestD = d; best = i; }
     }
-    const p = _currentLut[best];
+    return best;
+  }
+
+  // Hover : afficher tooltip (souris seulement)
+  c.addEventListener('mousemove', e => {
+    if (!_currentLut.length) return;
+    const rect = c.getBoundingClientRect();
+    const xRel = e.clientX - rect.left;
+    const p = _currentLut[findNearestPoint(xRel)];
     const tip = document.getElementById('lutTooltip');
     if (tip) {
       tip.style.display = 'block';
@@ -1803,45 +1813,48 @@ function drawLutCanvas() {
     const tip = document.getElementById('lutTooltip');
     if (tip) tip.style.display = 'none';
   });
-  c.addEventListener('mousedown', e => {
+
+  // Drag start (souris ou touch)
+  function startDrag(e) {
     if (!_currentLut.length) return;
     const rect = c.getBoundingClientRect();
-    const xRel = e.clientX - rect.left;
-    // Trouver le point le plus proche en x
-    const padL = 32, padR = 8;
-    const plotW = c.clientWidth - padL - padR;
-    const n = _currentLut.length;
-    let best = 0, bestD = 1e9;
-    for (let i = 0; i < n; i++) {
-      const xx = padL + (i / (n-1)) * plotW;
-      const d = Math.abs(xx - xRel);
-      if (d < bestD) { bestD = d; best = i; }
-    }
-    dragIdx = best;
-  });
-  const move = e => {
+    const { x } = eventXY(e);
+    dragIdx = findNearestPoint(x - rect.left);
+    e.preventDefault();
+  }
+  // Drag move : ajuste position et redessine
+  function moveDrag(e) {
     if (dragIdx < 0) return;
     const rect = c.getBoundingClientRect();
     const padT = 12, padB = 22;
     const plotH = c.clientHeight - padT - padB;
-    const yRel = e.clientY - rect.top - padT;
+    const { y } = eventXY(e);
+    const yRel = y - rect.top - padT;
     const ratio = Math.max(0, Math.min(1, 1 - yRel / plotH));
     _currentLut[dragIdx].position = ratio * _currentTravel;
     drawLutCanvas();
-  };
-  c.addEventListener('mousemove', move);
-  document.addEventListener('mouseup', async () => {
+    e.preventDefault();
+  }
+  // Drag end : POST + toast
+  async function endDrag() {
     if (dragIdx < 0) return;
     const note = _currentLut[dragIdx].note;
     const pos  = _currentLut[dragIdx].position;
     const id = +document.getElementById('cfgFluteSel').value;
-    await postJson('/api/flute/lut_point', {id, note, position_mm: pos});
-    // Mettre à jour le champ texte aussi
+    await postJson('/api/flute/lut_point', { id, note, position_mm: pos });
     const inp = document.getElementById('lut_' + note);
     if (inp) inp.value = pos.toFixed(2);
     toast(`Note ${noteName(note)} → ${pos.toFixed(1)} mm`);
     dragIdx = -1;
-  });
+  }
+
+  c.addEventListener('mousedown',  startDrag);
+  c.addEventListener('touchstart', startDrag, { passive: false });
+  c.addEventListener('mousemove',  moveDrag);
+  c.addEventListener('touchmove',  moveDrag,  { passive: false });
+  document.addEventListener('mouseup', endDrag);
+  c.addEventListener('touchend',  endDrag);
+  c.addEventListener('touchcancel', () => { dragIdx = -1; });
 })();
 window.addEventListener('resize', drawLutCanvas);
 

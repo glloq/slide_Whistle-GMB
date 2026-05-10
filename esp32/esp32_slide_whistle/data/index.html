@@ -10,16 +10,18 @@
 </head>
 <body>
 
-<div id="splash">
-  <div class="logo">🎼</div>
+<a href="#main-content" class="skip-link">Aller au contenu</a>
+
+<div id="splash" role="status" aria-label="Chargement de l'application">
+  <div class="logo" aria-hidden="true">🎼</div>
   <div class="title">Slide Whistle Controller</div>
   <div class="subtitle">v3 · multi-flute · pression</div>
-  <div class="progress"><div class="progress-bar"></div></div>
+  <div class="progress" aria-hidden="true"><div class="progress-bar"></div></div>
 </div>
 
-<div id="toasts"></div>
-<div id="loading-overlay"><div class="spinner"></div></div>
-<div id="modalRoot" class="modal-backdrop">
+<div id="toasts" role="region" aria-live="polite" aria-label="Notifications"></div>
+<div id="loading-overlay" role="status" aria-label="Chargement"><div class="spinner" aria-hidden="true"></div></div>
+<div id="modalRoot" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
   <div class="modal">
     <h4 id="modalTitle">Confirmer</h4>
     <p id="modalMsg"></p>
@@ -31,10 +33,10 @@
 </div>
 
 <!-- Command palette (Ctrl+K) -->
-<div id="cmdRoot">
+<div id="cmdRoot" role="dialog" aria-modal="true" aria-label="Palette de recherche">
   <div class="cmd-box">
-    <input id="cmdInput" type="text" placeholder="Rechercher un réglage, une page, une action..." autocomplete="off">
-    <div id="cmdResults" class="cmd-results"></div>
+    <input id="cmdInput" type="text" placeholder="Rechercher un réglage, une page, une action..." autocomplete="off" aria-label="Rechercher">
+    <div id="cmdResults" class="cmd-results" role="listbox" aria-label="Résultats"></div>
   </div>
 </div>
 
@@ -129,23 +131,26 @@ panic</pre>
   </div>
 </div>
 
-<header>
-  <h1>🎼 Slide Whistle Controller</h1>
-  <span title="Connexion WebSocket"><span id="connDot"></span><span id="connLabel" class="small">déconnecté</span></span>
-  <span id="sysBadge" class="badge b-init">INIT</span>
-  <span id="fluteCount" class="pill">0 flûtes</span>
-  <span id="pressBadge" class="pill" style="display:none">PRESSION</span>
-  <span id="demoBadge" class="pill" style="display:none">▶ démo</span>
-  <span style="margin-left:auto" class="small">v3 · multi-flute</span>
-  <button class="theme-btn" id="compactToggle" onclick="toggleCompact()" title="Vue compacte">📋</button>
-  <button class="theme-btn" id="synthToggleBtn" onclick="toggleSynth()" title="Active/désactive la preview audio dans le navigateur (S)">🔊</button>
-  <button class="theme-btn" onclick="toggleTheme()" title="Basculer thème (T)">🌓</button>
-  <button class="theme-btn" onclick="openCmdPalette()" title="Recherche (Ctrl+K)">🔍</button>
-  <button class="theme-btn" onclick="showShortcuts()" title="Raccourcis clavier (?)">⌨</button>
+<header role="banner">
+  <h1><span aria-hidden="true">🎼</span> Slide Whistle Controller</h1>
+  <span title="Connexion WebSocket" aria-live="polite">
+    <span id="connDot" aria-hidden="true"></span>
+    <span id="connLabel" class="small">déconnecté</span>
+  </span>
+  <span id="sysBadge" class="badge b-init" aria-live="polite" aria-label="État système">INIT</span>
+  <span id="fluteCount" class="pill" aria-label="Nombre de flûtes">0 flûtes</span>
+  <span id="pressBadge" class="pill" style="display:none" aria-label="État pression">PRESSION</span>
+  <span id="demoBadge" class="pill" style="display:none" aria-label="Démo en cours">▶ démo</span>
+  <span style="margin-left:auto" class="small" aria-label="Version">v3 · multi-flute</span>
+  <button class="theme-btn" id="compactToggle" onclick="toggleCompact()" aria-label="Vue compacte" title="Vue compacte"><span aria-hidden="true">📋</span></button>
+  <button class="theme-btn" id="synthToggleBtn" onclick="toggleSynth()" aria-label="Activer ou désactiver la preview audio (raccourci S)" title="Preview audio (S)"><span aria-hidden="true">🔊</span></button>
+  <button class="theme-btn" onclick="toggleTheme()" aria-label="Basculer thème clair / sombre / auto (raccourci T)" title="Thème (T)"><span aria-hidden="true">🌓</span></button>
+  <button class="theme-btn" onclick="openCmdPalette()" aria-label="Ouvrir la palette de recherche (raccourci Ctrl+K)" title="Recherche (Ctrl+K)"><span aria-hidden="true">🔍</span></button>
+  <button class="theme-btn" onclick="showShortcuts()" aria-label="Afficher les raccourcis clavier (raccourci ?)" title="Raccourcis (?)"><span aria-hidden="true">⌨</span></button>
 </header>
 
-<nav>
-  <button class="active" data-page="dashboard">Dashboard</button>
+<nav role="navigation" aria-label="Pages principales">
+  <button class="active" data-page="dashboard" aria-current="page">Dashboard</button>
   <button data-page="flutes">Flûtes</button>
   <button data-page="play">Jouer</button>
   <button data-page="pressure">Pression</button>
@@ -156,6 +161,8 @@ panic</pre>
   <button data-page="wifi">WiFi</button>
   <button data-page="help">Aide</button>
 </nav>
+
+<main id="main-content">
 
 <!-- ============================================================ -->
 <!-- DASHBOARD -->
@@ -202,7 +209,7 @@ panic</pre>
       <div id="dashPressure">
         <div class="stat-value muted">module désactivé</div>
       </div>
-      <canvas id="pressSpark" class="spark" width="300" height="60" style="margin-top:8px"></canvas>
+      <canvas id="pressSpark" class="spark" width="300" height="60" style="margin-top:8px" role="img" aria-label="Graphique d'historique de la pression sur les 60 dernières secondes"></canvas>
     </div>
   </div>
 
@@ -431,7 +438,9 @@ panic</pre>
       </span>
     </h3>
     <div style="position:relative">
-      <canvas id="lutCanvas" width="600" height="220"></canvas>
+      <canvas id="lutCanvas" width="600" height="220"
+              role="img" tabindex="0"
+              aria-label="Éditeur graphique de la table de calibration. Glissez les points verts pour ajuster la position de chaque note. Touche tactile : utilisez l'éditeur en table juste en-dessous."></canvas>
       <div id="lutTooltip" class="lut-tooltip"></div>
     </div>
     <div class="small" style="margin: 4px 0 12px">
@@ -667,8 +676,10 @@ panic</pre>
   </div>
 </div>
 
-<div id="status-bar">
-  <span class="sb-item"><span class="sb-label">WS</span><span id="sbConnDot" class="sb-value"></span></span>
+</main>
+
+<div id="status-bar" role="status" aria-label="Statut système">
+  <span class="sb-item"><span class="sb-label">WS</span><span id="sbConnDot" class="sb-value" aria-hidden="true"></span></span>
   <span class="sb-item"><span class="sb-label">État</span><span id="sbState" class="sb-value">—</span></span>
   <span class="sb-item"><span class="sb-label">Heap</span><span id="sbHeap" class="sb-value">—</span></span>
   <span class="sb-item"><span class="sb-label">Uptime</span><span id="sbUptime" class="sb-value">—</span></span>
