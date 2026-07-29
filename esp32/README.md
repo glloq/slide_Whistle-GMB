@@ -6,6 +6,14 @@ capteur de pression** intégré, et une interface web complète.
 
 > ⚠️ Cette version remplace l'API v2 (single-flûte). Voir [Migration](#migration-depuis-v2) ci-dessous.
 
+> 🚧 **Refonte en cours — contrôleur universel.** Un cœur de contrôle modulaire,
+> portable et testé unitairement (moteur pas-à-pas / 1 servo / 2 servos / air
+> composable / séquenceur monophonique / validateur de GPIO) est en cours
+> d'intégration sous [`esp32_slide_whistle/core/`](esp32_slide_whistle/core/).
+> Voir **[ARCHITECTURE.md](ARCHITECTURE.md)** et l'état réel, fonction par
+> fonction, dans **[HARDWARE_MATRIX.md](HARDWARE_MATRIX.md)**. Tests natifs :
+> `make -C tests`.
+
 ---
 
 ## 🏗 Architecture
