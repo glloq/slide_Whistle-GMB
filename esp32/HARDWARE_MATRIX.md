@@ -45,6 +45,7 @@ Markers:
 | API envelope (`ApiResponse`) | IMPLEMENTED · TESTED IN SOFTWARE | ok/error{code,message,field}, validator→envelope |
 | `AuthManager` | IMPLEMENTED · TESTED IN SOFTWARE | generated admin token, sessions+expiry, criticality gate, Origin allow-list, rate limiter, connection cap, AP password |
 | `ApiRouter` (/api/v1 dispatch) | IMPLEMENTED · TESTED IN SOFTWARE | auth/origin/rate gate, size/content-type, transactional apply, restart_required, enqueue-only control |
+| `InstrumentRuntime` (config→objects) | IMPLEMENTED · TESTED IN SOFTWARE | selects actuator+air from config, rebuild switches mechanism, safe state |
 
 ## Firmware / web integration (next phases)
 
@@ -58,8 +59,11 @@ Markers:
 | LittleFS `/config.json` atomic save + migration from v3 | IMPLEMENTED (logic tested; LittleFS backend needs hardware) |
 | Auth/session/rate-limit logic — Section 15 | IMPLEMENTED · TESTED IN SOFTWARE |
 | `/api/v1` dispatch logic (auth, transactional apply, restart) — Section 14 | IMPLEMENTED · TESTED IN SOFTWARE |
-| Wire ApiRouter into the async web server (route callbacks, WS handshake) | BLOCKED / TODO |
-| WebSocket keyboard + differential status push — Section 13 | BLOCKED / TODO |
+| Config→objects builder (`InstrumentRuntime`) | IMPLEMENTED · TESTED IN SOFTWARE |
+| Firmware orchestration (`MainApp`, 2 tasks, boot-safe) | IMPLEMENTED (structure) · EXPERIMENTAL · NOT TESTED — REQUIRES HARDWARE |
+| Async web-server adapter (`WebServerAdapter`) + universal sketch | IMPLEMENTED (structure) · EXPERIMENTAL · NOT TESTED — REQUIRES HARDWARE — CI build is informational |
+| WebSocket keyboard + differential status push — Section 13 | PARTIAL (WS command path scaffolded) · TODO diff push |
+| forceSafeOutputs pin map, BLE/rtpMIDI bring-up, lock-free status snapshot | TODO |
 | First-boot wizard + expert mode UI — Section 13 | BLOCKED / TODO |
 | OTA safe-state + rollback — Section 15 | BLOCKED / TODO |
 | Calibration assistant + INMP441 auto-cal — Section 4 | BLOCKED / TODO |

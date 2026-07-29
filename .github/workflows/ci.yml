@@ -102,7 +102,10 @@ jobs:
         with: { python-version: "3.x" }
       - name: Install PlatformIO
         run: pip install platformio
-      - name: Build ESP32-WROOM firmware
+      - name: Build ESP32-WROOM firmware (legacy v3 — gate)
         run: pio run -e esp32dev
       - name: Report firmware size
         run: pio run -e esp32dev -t size || true
+      - name: Build universal firmware (EXPERIMENTAL — informational)
+        continue-on-error: true
+        run: pio run -e esp32-universal
