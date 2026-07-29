@@ -47,7 +47,7 @@ TEST(notemap_interpolation_and_pitchbend) {
     m.setTravelMm(100);
     m.setPoint(60, 20.0f);
     m.setPoint(72, 80.0f);   // one octave, non-linear real world but linear here
-    float p;
+    float p = 0;
     CHECK(m.positionForNote(60, p)); CHECK_NEAR(p, 20.0f, 1e-3);
     CHECK(m.positionForNote(72, p)); CHECK_NEAR(p, 80.0f, 1e-3);
     // fractional note interpolates between calibrated neighbours (not fixed mm/semi)
@@ -66,7 +66,7 @@ TEST(notemap_nonlinear_neighbours) {
     m.setPoint(60, 10.0f);
     m.setPoint(64, 30.0f);
     m.setPoint(72, 90.0f);
-    float p;
+    float p = 0;
     CHECK(m.positionForNote(62, p)); CHECK_NEAR(p, 20.0f, 1e-3);   // between 60..64
     CHECK(m.positionForNote(68, p)); CHECK_NEAR(p, 60.0f, 1e-3);   // between 64..72
     CHECK(m.isMonotonic());

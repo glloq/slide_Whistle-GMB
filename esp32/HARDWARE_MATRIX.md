@@ -38,6 +38,10 @@ Markers:
 | `RealtimeEngine` | IMPLEMENTED · TESTED IN SOFTWARE | queue drain, routing, per-flute test scope |
 | `PwmOutput` LEDC wrapper | IMPLEMENTED · TESTED IN SOFTWARE (math/polarity) · NOT TESTED — REQUIRES HARDWARE (LEDC) | 2.x + 3.x API isolated, both syntax-checked in CI |
 | `EspMotionSink` / `EspAirSink` | IMPLEMENTED (structure) · EXPERIMENTAL · NOT TESTED — REQUIRES HARDWARE | Arduino-guarded; both LEDC branches syntax-checked in CI; not yet wired into the sketch |
+| Portable JSON (`Json.h`) | IMPLEMENTED · TESTED IN SOFTWARE | parser+writer, escaping, UTF-8, FNV-1a checksum |
+| `ConfigCodec` + v3 migration | IMPLEMENTED · TESTED IN SOFTWARE | round-trip, structural validation, legacy NVS-key mapping |
+| `ConfigStore` (atomic/backup/recovery) | IMPLEMENTED · TESTED IN SOFTWARE (logic) | transactional import, factory reset |
+| LittleFS backend | IMPLEMENTED (structure) · NOT TESTED — REQUIRES HARDWARE | Arduino-guarded |
 
 ## Firmware / web integration (next phases)
 
@@ -48,7 +52,7 @@ Markers:
 | Platform `IMotionSink` / `IAirSink` | IMPLEMENTED (skeleton) · EXPERIMENTAL — PCA9685 servo backend + RMT stepping TODO |
 | Deterministic RT task (`vTaskDelayUntil`) — correction #3 | BLOCKED / TODO |
 | Web handlers → CommandQueue only — correction #6 | BLOCKED / TODO |
-| LittleFS `/config.json` atomic save + migration from v3 NVS | BLOCKED / TODO |
+| LittleFS `/config.json` atomic save + migration from v3 | IMPLEMENTED (logic tested; LittleFS backend needs hardware) |
 | REST `/api/v1` + auth + WebSocket keyboard — Sections 14/15 | BLOCKED / TODO |
 | First-boot wizard + expert mode UI — Section 13 | BLOCKED / TODO |
 | OTA safe-state + rollback — Section 15 | BLOCKED / TODO |
