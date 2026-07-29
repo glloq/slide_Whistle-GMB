@@ -16,6 +16,35 @@ jobs:
       # The suite fails CI if the default config has a GPIO collision, if any
       # preset is missing/invalid, or if a safety invariant regresses
       # (Sections 18 & 19).
+      - name: Syntax-check the Arduino platform branch (both LEDC API versions)
+        run: |
+          mkdir -p /tmp/ardstub
+          cat > /tmp/ardstub/Arduino.h <<'EOF'
+          #pragma once
+          #include <cstdint>
+          #include <cmath>
+          #define OUTPUT 1
+          #define INPUT 0
+          #define INPUT_PULLUP 2
+          #define HIGH 1
+          #define LOW 0
+          inline void pinMode(int,int){}
+          inline void digitalWrite(int,int){}
+          inline int  digitalRead(int){return 0;}
+          inline void delayMicroseconds(unsigned){}
+          inline int  analogRead(int){return 0;}
+          inline bool ledcAttach(uint8_t,uint32_t,uint8_t){return true;}
+          inline void ledcSetup(uint8_t,uint32_t,uint8_t){}
+          inline void ledcAttachPin(uint8_t,uint8_t){}
+          inline void ledcWrite(uint8_t,uint32_t){}
+          inline void ledcDetach(uint8_t){}
+          inline void ledcDetachPin(uint8_t){}
+          EOF
+          H=esp32/esp32_slide_whistle/core/platform/EspSinks.h
+          echo "== Arduino-ESP32 3.x =="
+          g++ -std=c++17 -Wall -Wextra -DARDUINO=300 -DESP_ARDUINO_VERSION_MAJOR=3 -I/tmp/ardstub -fsyntax-only "$H"
+          echo "== Arduino-ESP32 2.x =="
+          g++ -std=c++17 -Wall -Wextra -DARDUINO=200 -I/tmp/ardstub -fsyntax-only "$H"
 
   json-validation:
     name: JSON assets valid

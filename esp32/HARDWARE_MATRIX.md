@@ -33,14 +33,19 @@ Markers:
 | `HardwareResourceValidator` | IMPLEMENTED · TESTED IN SOFTWARE | GPIO/ADC/LEDC/PCA/range, WROOM + S3 profiles |
 | `RuntimeConfig` + defaults | IMPLEMENTED · TESTED IN SOFTWARE | versioned, collision-free default |
 | 11 presets | IMPLEMENTED · TESTED IN SOFTWARE | each validates clean |
+| `Instrument` aggregate | IMPLEMENTED · TESTED IN SOFTWARE | CC map, live range change |
+| `MidiRouter` | IMPLEMENTED · TESTED IN SOFTWARE | single entry point, transpose |
+| `RealtimeEngine` | IMPLEMENTED · TESTED IN SOFTWARE | queue drain, routing, per-flute test scope |
+| `PwmOutput` LEDC wrapper | IMPLEMENTED · TESTED IN SOFTWARE (math/polarity) · NOT TESTED — REQUIRES HARDWARE (LEDC) | 2.x + 3.x API isolated, both syntax-checked in CI |
+| `EspMotionSink` / `EspAirSink` | IMPLEMENTED (structure) · EXPERIMENTAL · NOT TESTED — REQUIRES HARDWARE | Arduino-guarded; both LEDC branches syntax-checked in CI; not yet wired into the sketch |
 
 ## Firmware / web integration (next phases)
 
 | Item | Status |
 |------|--------|
 | Wire core into `esp32_slide_whistle.ino` (RT task owns `Instrument`) | BLOCKED / TODO |
-| `PwmOutput` LEDC wrapper (old/new Arduino-ESP32 API) | BLOCKED / TODO |
-| Platform `IMotionSink` / `IAirSink` (AccelStepper, ESP32Servo, PCA9685) | BLOCKED / TODO |
+| `PwmOutput` LEDC wrapper (old/new Arduino-ESP32 API) | IMPLEMENTED (see core table) |
+| Platform `IMotionSink` / `IAirSink` | IMPLEMENTED (skeleton) · EXPERIMENTAL — PCA9685 servo backend + RMT stepping TODO |
 | Deterministic RT task (`vTaskDelayUntil`) — correction #3 | BLOCKED / TODO |
 | Web handlers → CommandQueue only — correction #6 | BLOCKED / TODO |
 | LittleFS `/config.json` atomic save + migration from v3 NVS | BLOCKED / TODO |

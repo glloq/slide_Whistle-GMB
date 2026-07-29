@@ -7,8 +7,20 @@
 #include "test_framework.h"
 #include "../esp32/esp32_slide_whistle/core/RuntimeConfig.h"
 #include "../esp32/esp32_slide_whistle/core/Presets.h"
+#include "../esp32/esp32_slide_whistle/core/PwmOutput.h"
 
 using namespace swc;
+
+TEST(pwm_output_normalized_and_polarity) {
+    PwmOutput p; PwmConfig c; c.pin = 26; c.resolution = 12; c.activeHigh = true;
+    CHECK(p.attach(c));
+    CHECK_EQ(p.maxDuty(), 4095u);
+    p.writeNormalized(0.5f);   CHECK_NEAR(p.lastDuty(), 2048, 2);
+    p.writeNormalized(2.0f);   CHECK_EQ(p.lastDuty(), 4095u);   // clamped
+    // active-low inverts the duty
+    PwmOutput q; PwmConfig d = c; d.activeHigh = false; q.attach(d);
+    q.writeNormalized(0.0f);   CHECK_EQ(q.lastDuty(), 4095u);   // 0% → full raw when active-low
+}
 
 static bool hasCode(const std::vector<ValidationIssue>& v, const char* code) {
     for (const auto& i : v) if (i.code == code) return true;
