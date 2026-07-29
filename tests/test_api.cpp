@@ -1,0 +1,191 @@
+/*
+ * tests/test_api.cpp — portable ApiRouter request dispatch.
+ * Covers Section 18 "Web/API": HTTP errors, max size, content-type, auth,
+ * forbidden commands, transactional import, restart_required, enqueue-only.
+ */
+#include "test_framework.h"
+#include "../esp32/esp32_slide_whistle/core/ApiRouter.h"
+#include <map>
+
+using namespace swc;
+
+struct FakeFs2 : IConfigFs {
+    std::map<std::string, std::string> files;
+    bool read(const char* p, std::string& out) override { auto it=files.find(p); if(it==files.end())return false; out=it->second; return true; }
+    bool write(const char* p, const std::string& d) override { files[p]=d; return true; }
+    bool remove(const char* p) override { files.erase(p); return true; }
+    bool exists(const char* p) override { return files.count(p)>0; }
+    bool rename(const char* a, const char* b) override { auto it=files.find(a); if(it==files.end())return false; files[b]=it->second; files.erase(it); return true; }
+};
+struct CountEntropy : IEntropy { uint32_t n=1000; uint32_t next() override { return ++n; } };
+struct StatusStub : IStatusSource { JsonValue statusJson() override { JsonValue v=JsonValue::makeObj(); v.set("state","ready"); return v; } };
+struct RecSink : ICommandSink { std::vector<Command> cmds; bool full=false;
+    bool push(const Command& c) override { if(full) return false; cmds.push_back(c); return true; } };
+
+struct Rig {
+    AuthManager auth; ConfigStore store; FakeFs2 fs; RuntimeConfig live;
+    CountEntropy ent; StatusStub st; RecSink sink; ApiRouter api;
+    std::string adminTok;
+    void begin() {
+        auth.begin(); uint32_t e[4]={1,2,3,4}; auth.regenerateAdminToken(e); adminTok=auth.adminToken();
+        store.begin(&fs);
+        live = defaultConfig(); store.save(live);
+        api.begin(&auth, &store, &live, &sink, &ent, &st);
+    }
+    ApiReply req(const std::string& m, const std::string& p, const std::string& body="",
+                 const std::string& tok="", const std::string& ct="application/json", const std::string& origin="") {
+        ApiRequest r; r.method=m; r.path=p; r.body=body; r.token=tok; r.contentType=ct; r.origin=origin;
+        return api.handle(r, now_++);
+    }
+    uint32_t now_ = 0;
+    static JsonValue parse(const std::string& s){ JsonValue v; jsonParse(s,v,nullptr); return v; }
+};
+
+TEST(api_status_public) {
+    Rig g; g.begin();
+    ApiReply r = g.req("GET", "/api/v1/status");
+    CHECK_EQ(r.status, 200);
+    CHECK(Rig::parse(r.body).bool_or("ok", false));
+}
+
+TEST(api_protected_requires_auth) {
+    Rig g; g.begin();
+    ApiReply r = g.req("GET", "/api/v1/config");     // no token
+    CHECK_EQ(r.status, 401);
+    CHECK(Rig::parse(r.body).find("error")->str_or("code","") == "UNAUTHORIZED");
+}
+
+TEST(api_login_then_access) {
+    Rig g; g.begin();
+    std::string loginBody = std::string("{\"token\":\"") + g.adminTok + "\"}";
+    ApiReply r = g.req("POST", "/api/v1/session", loginBody, "", "application/json", "");
+    CHECK_EQ(r.status, 200);
+    std::string session = Rig::parse(r.body).find("data")->str_or("session","");
+    CHECK(!session.empty());
+    ApiReply c = g.req("GET", "/api/v1/config", "", session);
+    CHECK_EQ(c.status, 200);
+}
+
+TEST(api_login_bad_token) {
+    Rig g; g.begin();
+    ApiReply r = g.req("POST", "/api/v1/session", "{\"token\":\"wrong\"}");
+    CHECK_EQ(r.status, 401);
+}
+
+TEST(api_body_too_large) {
+    Rig g; g.begin(); g.api.setMaxBodyBytes(64);
+    std::string big(200, 'x');
+    ApiReply r = g.req("POST", "/api/v1/config", big, g.adminTok);
+    CHECK_EQ(r.status, 413);
+}
+
+TEST(api_bad_content_type) {
+    Rig g; g.begin();
+    ApiReply r = g.req("POST", "/api/v1/config", "{}", g.adminTok, "text/plain");
+    CHECK_EQ(r.status, 415);
+}
+
+TEST(api_origin_enforced) {
+    Rig g; g.begin();
+    g.auth.setAllowedOrigin("http://slide.local");
+    ApiReply bad = g.req("POST", "/api/v1/command", "{\"type\":\"panic\"}", "", "application/json", "http://evil");
+    CHECK_EQ(bad.status, 403);
+    ApiReply ok = g.req("POST", "/api/v1/command", "{\"type\":\"panic\"}", "", "application/json", "http://slide.local");
+    CHECK_EQ(ok.status, 202);
+}
+
+TEST(api_command_panic_public_enqueues) {
+    Rig g; g.begin();
+    ApiReply r = g.req("POST", "/api/v1/command", "{\"type\":\"panic\"}");   // no token
+    CHECK_EQ(r.status, 202);
+    CHECK_EQ((long)g.sink.cmds.size(), 1);
+    CHECK(g.sink.cmds[0].type == CommandType::Panic);
+}
+
+TEST(api_command_protected_needs_auth) {
+    Rig g; g.begin();
+    ApiReply r = g.req("POST", "/api/v1/command", "{\"type\":\"home\",\"instrument\":0}");
+    CHECK_EQ(r.status, 401);
+    CHECK_EQ((long)g.sink.cmds.size(), 0);            // never enqueued without auth
+    ApiReply ok = g.req("POST", "/api/v1/command", "{\"type\":\"home\",\"instrument\":0}", g.adminTok);
+    CHECK_EQ(ok.status, 202);
+    CHECK(g.sink.cmds.back().type == CommandType::Home);
+}
+
+TEST(api_command_noteon_enqueues_only) {
+    Rig g; g.begin();
+    ApiReply r = g.req("POST", "/api/v1/command",
+                       "{\"type\":\"noteOn\",\"channel\":1,\"note\":60,\"velocity\":100}", g.adminTok);
+    CHECK_EQ(r.status, 202);
+    CHECK(g.sink.cmds.back().type == CommandType::NoteOn);
+    CHECK_EQ(g.sink.cmds.back().a, 60);
+    CHECK_EQ(g.sink.cmds.back().b, 100);
+}
+
+TEST(api_config_invalid_rejected) {
+    Rig g; g.begin();
+    ApiReply r = g.req("POST", "/api/v1/config", "{ not json", g.adminTok);
+    CHECK_EQ(r.status, 400);
+    CHECK(Rig::parse(r.body).find("error")->str_or("code","") == "CONFIG_INVALID");
+}
+
+TEST(api_config_gpio_conflict_rejected) {
+    Rig g; g.begin();
+    // build a config where two enabled instruments share a preset (same pins)
+    RuntimeConfig c = defaultConfig(); c.instrumentCount = 2;
+    c.instruments[0].enabled = true; applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+    c.instruments[1].enabled = true; applyPreset(c.instruments[1], PresetId::StepperSolenoidOnly);
+    std::string json = g.store.exportJson(c);
+    ApiReply r = g.req("POST", "/api/v1/config", json, g.adminTok);
+    CHECK_EQ(r.status, 400);
+    CHECK(Rig::parse(r.body).find("error")->str_or("code","") == "GPIO_CONFLICT");
+}
+
+TEST(api_config_restart_required_flag) {
+    Rig g; g.begin();
+    // dynamic-only change (speed) → applied live, no restart
+    RuntimeConfig dyn = g.live; dyn.instruments[0].motion.maxSpeedMmS += 10;
+    ApiReply r1 = g.req("POST", "/api/v1/config", g.store.exportJson(dyn), g.adminTok);
+    CHECK_EQ(r1.status, 200);
+    CHECK(!Rig::parse(r1.body).find("data")->bool_or("restart_required", true));
+    CHECK(!g.api.restartRequired());
+    // hardware change (enable a stepper instrument + pins) → restart_required
+    RuntimeConfig hw = g.live; hw.instruments[0].enabled = true;
+    applyPreset(hw.instruments[0], PresetId::StepperSolenoidOnly);
+    ApiReply r2 = g.req("POST", "/api/v1/config", g.store.exportJson(hw), g.adminTok);
+    CHECK_EQ(r2.status, 200);
+    CHECK(Rig::parse(r2.body).find("data")->bool_or("restart_required", false));
+    CHECK(g.api.restartRequired());
+}
+
+TEST(api_preset_applies_and_persists) {
+    Rig g; g.begin();
+    ApiReply r = g.req("POST", "/api/v1/preset", "{\"index\":2,\"instrument\":0}", g.adminTok);
+    CHECK_EQ(r.status, 200);
+    // persisted config reloads with the stepper preset
+    RuntimeConfig chk; g.store.load(chk);
+    CHECK(chk.instruments[0].enabled);
+    CHECK(chk.instruments[0].motion.type == SlideDriveType::StepDir);
+}
+
+TEST(api_factory_reset) {
+    Rig g; g.begin();
+    g.req("POST", "/api/v1/preset", "{\"index\":2,\"instrument\":0}", g.adminTok);
+    ApiReply r = g.req("POST", "/api/v1/factory-reset", "{}", g.adminTok);
+    CHECK_EQ(r.status, 200);
+    CHECK(!g.live.instruments[0].enabled);   // back to safe default
+}
+
+TEST(api_restart_flag) {
+    Rig g; g.begin();
+    CHECK(!g.api.restartRequested());
+    ApiReply r = g.req("POST", "/api/v1/restart", "{}", g.adminTok);
+    CHECK_EQ(r.status, 200);
+    CHECK(g.api.restartRequested());
+}
+
+TEST(api_unknown_route_404) {
+    Rig g; g.begin();
+    ApiReply r = g.req("GET", "/api/v1/nope");
+    CHECK_EQ(r.status, 404);
+}

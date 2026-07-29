@@ -44,6 +44,7 @@ Markers:
 | LittleFS backend | IMPLEMENTED (structure) · NOT TESTED — REQUIRES HARDWARE | Arduino-guarded |
 | API envelope (`ApiResponse`) | IMPLEMENTED · TESTED IN SOFTWARE | ok/error{code,message,field}, validator→envelope |
 | `AuthManager` | IMPLEMENTED · TESTED IN SOFTWARE | generated admin token, sessions+expiry, criticality gate, Origin allow-list, rate limiter, connection cap, AP password |
+| `ApiRouter` (/api/v1 dispatch) | IMPLEMENTED · TESTED IN SOFTWARE | auth/origin/rate gate, size/content-type, transactional apply, restart_required, enqueue-only control |
 
 ## Firmware / web integration (next phases)
 
@@ -56,8 +57,9 @@ Markers:
 | Web handlers → CommandQueue only — correction #6 | BLOCKED / TODO |
 | LittleFS `/config.json` atomic save + migration from v3 | IMPLEMENTED (logic tested; LittleFS backend needs hardware) |
 | Auth/session/rate-limit logic — Section 15 | IMPLEMENTED · TESTED IN SOFTWARE |
-| Wire auth+envelope into the async web server (routes, WS handshake) | BLOCKED / TODO |
-| REST `/api/v1` + WebSocket keyboard endpoints — Section 14 | BLOCKED / TODO |
+| `/api/v1` dispatch logic (auth, transactional apply, restart) — Section 14 | IMPLEMENTED · TESTED IN SOFTWARE |
+| Wire ApiRouter into the async web server (route callbacks, WS handshake) | BLOCKED / TODO |
+| WebSocket keyboard + differential status push — Section 13 | BLOCKED / TODO |
 | First-boot wizard + expert mode UI — Section 13 | BLOCKED / TODO |
 | OTA safe-state + rollback — Section 15 | BLOCKED / TODO |
 | Calibration assistant + INMP441 auto-cal — Section 4 | BLOCKED / TODO |
