@@ -1,0 +1,10 @@
+# ESP32 4 MB partition layout with dual OTA + LittleFS (Section 16).
+# Firmware fits twice (app0/app1) for OTA rollback; the remaining space is a
+# LittleFS volume holding /config.json, presets and the web UI assets.
+# Name,   Type, SubType,  Offset,   Size,     Flags
+nvs,      data, nvs,      0x9000,   0x5000,
+otadata,  data, ota,      0xe000,   0x2000,
+app0,     app,  ota_0,    0x10000,  0x180000,
+app1,     app,  ota_1,    0x190000, 0x180000,
+littlefs, data, spiffs,   0x310000, 0xE0000,
+coredump, data, coredump, 0x3F0000, 0x10000,

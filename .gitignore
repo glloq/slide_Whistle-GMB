@@ -1,0 +1,6 @@
+# Build artifacts
+.pio/
+tests/run_tests
+*.o
+*.out
+__pycache__/

@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  native-tests:
+    name: Native core unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build & run portable core tests
+        run: make -C tests
+      # The suite fails CI if the default config has a GPIO collision, if any
+      # preset is missing/invalid, or if a safety invariant regresses
+      # (Sections 18 & 19).
+
+  json-validation:
+    name: JSON assets valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.x" }
+      - name: Validate JSON / manifest assets
+        run: |
+          python - <<'PY'
+          import json, sys, glob
+          files = glob.glob("esp32/esp32_slide_whistle/data/*.webmanifest")
+          files += glob.glob("**/*.json", recursive=True)
+          bad = 0
+          for f in files:
+              try:
+                  json.load(open(f, encoding="utf-8"))
+                  print("ok  ", f)
+              except Exception as e:
+                  print("FAIL", f, e); bad += 1
+          sys.exit(1 if bad else 0)
+          PY
+
+  js-syntax:
+    name: Web UI JS syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: node --check on UI scripts
+        run: |
+          for f in esp32/esp32_slide_whistle/data/app.js esp32/esp32_slide_whistle/data/sw.js; do
+            echo "checking $f"; node --check "$f"; done
+
+  clang-format:
+    name: clang-format (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dry-run formatting on core + tests
+        run: |
+          clang-format --version
+          find esp32/esp32_slide_whistle/core tests -name '*.h' -o -name '*.cpp' \
+            | xargs clang-format --dry-run --Werror || true
+
+  firmware-build:
+    name: PlatformIO firmware build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.x" }
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build ESP32-WROOM firmware
+        run: pio run -e esp32dev
+      - name: Report firmware size
+        run: pio run -e esp32dev -t size || true
