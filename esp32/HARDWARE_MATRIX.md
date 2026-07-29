@@ -64,6 +64,20 @@ Markers:
 | Async web-server adapter (`WebServerAdapter`) + universal sketch | IMPLEMENTED (structure) · EXPERIMENTAL · NOT TESTED — REQUIRES HARDWARE — CI build is informational |
 | WebSocket keyboard + differential status push — Section 13 | PARTIAL (WS command path scaffolded) · TODO diff push |
 | forceSafeOutputs pin map, BLE/rtpMIDI bring-up, lock-free status snapshot | TODO |
+
+## Universal web UI (`esp32/webui/`)
+
+| Item | Status |
+|------|--------|
+| `api.js` (throws on 4xx/5xx & ok:false — #23) | IMPLEMENTED · TESTED IN SOFTWARE |
+| `dom.js` (no innerHTML #25, diff helpers #26) | IMPLEMENTED · TESTED IN SOFTWARE |
+| `notes.js` (flush stuck NoteOff #27) | IMPLEMENTED · TESTED IN SOFTWARE |
+| `ws.js` (one socket, NoteOff/panic priority #28) | IMPLEMENTED · TESTED IN SOFTWARE |
+| `macros.js` (stop on error #24) | IMPLEMENTED · TESTED IN SOFTWARE |
+| `config.js` (restart mirror, unsaved tracker) | IMPLEMENTED · TESTED IN SOFTWARE |
+| `wizard.js` (first-boot step gating) | IMPLEMENTED · TESTED IN SOFTWARE |
+| Visual shell (index.html/app.css/app.js glue) | IMPLEMENTED · NOT TESTED — REQUIRES BROWSER+FIRMWARE |
+| Full wizard screens / expert-mode blocks / calibration UI | PARTIAL · TODO |
 | First-boot wizard + expert mode UI — Section 13 | BLOCKED / TODO |
 | OTA safe-state + rollback — Section 15 | BLOCKED / TODO |
 | Calibration assistant + INMP441 auto-cal — Section 4 | BLOCKED / TODO |

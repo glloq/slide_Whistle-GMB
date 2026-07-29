@@ -78,8 +78,11 @@ jobs:
         with: { node-version: "20" }
       - name: node --check on UI scripts
         run: |
-          for f in esp32/esp32_slide_whistle/data/app.js esp32/esp32_slide_whistle/data/sw.js; do
+          for f in esp32/esp32_slide_whistle/data/app.js esp32/esp32_slide_whistle/data/sw.js \
+                   esp32/webui/app.js esp32/webui/js/*.js; do
             echo "checking $f"; node --check "$f"; done
+      - name: Universal UI logic tests (node --test)
+        run: node --test tests/js/ui.test.mjs
 
   clang-format:
     name: clang-format (informational)
