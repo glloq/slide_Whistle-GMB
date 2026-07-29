@@ -1,0 +1,201 @@
+/*
+ * app.js — universal controller UI entry point.
+ *
+ * Wires the tested logic modules (api / notes / ws / dom / config) into a
+ * responsive, XSS-safe interface. All hardware actions go through /api/v1 or
+ * the WebSocket — the page never assumes success and always shows firmware
+ * errors. The PANIC button is always visible; browser note events are flushed
+ * on blur / disconnect.
+ */
+import { makeApi, ApiError } from "./js/api.js";
+import { NoteRegistry, bindLifecycleFlush } from "./js/notes.js";
+import { MidiSocket } from "./js/ws.js";
+import { h, clear, patchText } from "./js/dom.js";
+import { presetCatalog } from "./js/presets-meta.js";
+
+const state = {
+  token: sessionStorage.getItem("token") || "",
+  config: null,
+  tab: "play",
+};
+const api = makeApi({ getToken: () => state.token });
+const socket = new MidiSocket(wsUrl(), { token: state.token }).connect();
+const notes = new NoteRegistry((kind, m) =>
+  socket.send({ type: kind, channel: m.channel, note: m.note, velocity: m.velocity ?? 100 }));
+bindLifecycleFlush(notes);
+socket.onStatus = (s) => { setConn(s === "open"); if (s !== "open") notes.allOff(); };
+
+const $ = (id) => document.getElementById(id);
+
+// ---- error / toast helpers ------------------------------------------------
+function toast(message, kind = "ok") {
+  const box = $("toasts");
+  const t = h("div", { class: `toast ${kind}`, text: message });
+  box.appendChild(t);
+  setTimeout(() => t.remove(), 4200);
+}
+async function guard(fn, okMsg) {
+  try { const r = await fn(); if (okMsg) toast(okMsg, "ok"); return r; }
+  catch (e) {
+    if (e instanceof ApiError) toast(`${e.code || e.status}: ${e.message}${e.field ? " (" + e.field + ")" : ""}`, "err");
+    else toast(String(e.message || e), "err");
+    throw e;   // stop any macro/caller (#24)
+  }
+}
+
+// ---- top bar --------------------------------------------------------------
+function setConn(on) {
+  const el = $("conn");
+  el.dataset.state = on ? "on" : "off";
+  el.className = "pill " + (on ? "pill-on" : "pill-off");
+  el.textContent = on ? "online" : "offline";
+}
+$("panic").addEventListener("click", () => {
+  notes.allOff();
+  socket.send({ type: "panic" });
+  guard(() => api.command({ type: "panic" }), "Panic sent").catch(() => {});
+});
+
+// ---- tabs -----------------------------------------------------------------
+const TABS = [
+  ["play", "Play"], ["setup", "Setup"], ["expert", "Expert"], ["diag", "Diagnostics"],
+];
+function renderTabs() {
+  const nav = $("tabs"); clear(nav);
+  for (const [id, label] of TABS) {
+    nav.appendChild(h("button", {
+      class: "btn", text: label, "aria-selected": String(state.tab === id),
+      onclick: () => { state.tab = id; render(); },
+    }));
+  }
+}
+
+// ---- views ----------------------------------------------------------------
+function render() {
+  renderTabs();
+  const view = $("view"); clear(view);
+  ({ play: viewPlay, setup: viewSetup, expert: viewExpert, diag: viewDiag }[state.tab] || viewPlay)(view);
+}
+
+function viewPlay(root) {
+  root.appendChild(h("div", { class: "card" }, [
+    h("h2", { text: "Web keyboard" }),
+    h("p", { class: "muted", text: "Notes are sent over WebSocket and released automatically if the tab loses focus." }),
+    buildKeyboard(60, 17),
+  ]));
+}
+
+function buildKeyboard(start, count) {
+  const kbd = h("div", { class: "kbd" });
+  const blackSet = new Set([1, 3, 6, 8, 10]);
+  for (let i = 0; i < count; i++) {
+    const note = start + i;
+    const isBlack = blackSet.has(note % 12);
+    const key = h("button", { class: "key" + (isBlack ? " black" : ""), "data-note": note, "aria-label": "note " + note });
+    const on = (ev) => { ev.preventDefault(); key.classList.add("down"); notes.noteOn(1, note, 100); };
+    const off = () => { key.classList.remove("down"); notes.noteOff(1, note); };
+    key.addEventListener("pointerdown", on);
+    key.addEventListener("pointerup", off);
+    key.addEventListener("pointerleave", off);
+    key.addEventListener("pointercancel", off);
+    kbd.appendChild(key);
+  }
+  return kbd;
+}
+
+function viewSetup(root) {
+  root.appendChild(h("div", { class: "card" }, [
+    h("h2", { text: "Air mounting presets" }),
+    h("p", { class: "muted", text: "Pick a mounting; it fills sane defaults you can still edit in Expert mode." }),
+    (() => {
+      const grid = h("div", { class: "grid" });
+      presetCatalog.forEach((p) => grid.appendChild(h("button", { class: "btn preset", onclick: () => applyPreset(p.index) }, [
+        h("strong", { text: p.name }),
+        h("small", { text: p.hint }),
+      ])));
+      return grid;
+    })(),
+  ]));
+}
+
+async function applyPreset(index) {
+  await guard(async () => {
+    const r = await api.applyPreset(index, 0);
+    if (r.restart_required) showRestart(true);
+    await refreshConfig();
+  }, "Preset applied");
+}
+
+function viewExpert(root) {
+  const card = h("div", { class: "card" });
+  card.appendChild(h("h2", { text: "Configuration (JSON)" }));
+  const ta = h("textarea", { class: "mono", rows: "16", style: "width:100%" });
+  ta.value = state.config ? JSON.stringify(state.config, null, 2) : "{}";
+  card.appendChild(ta);
+  card.appendChild(h("div", { class: "row" }, [
+    h("button", { class: "btn btn-primary", text: "Validate & save", onclick: () => saveExpert(ta.value) }),
+    h("button", { class: "btn", text: "Reload", onclick: () => refreshConfig().then(render) }),
+  ]));
+  root.appendChild(card);
+}
+
+async function saveExpert(text) {
+  let obj;
+  try { obj = JSON.parse(text); } catch (e) { toast("Invalid JSON: " + e.message, "err"); return; }
+  await guard(async () => {
+    const r = await api.putConfig(obj);
+    if (r.restart_required) showRestart(true);
+    await refreshConfig();
+  }, "Configuration saved");
+}
+
+function viewDiag(root) {
+  const card = h("div", { class: "card" }, [h("h2", { text: "Live status" })]);
+  const list = h("div", { class: "mono", id: "statusList" });
+  card.appendChild(list);
+  card.appendChild(h("div", { class: "row" }, [
+    h("button", { class: "btn", text: "Home instrument 0", onclick: () => guard(() => api.command({ type: "home", instrument: 0 }), "Homing…") }),
+    h("button", { class: "btn", text: "Factory reset", onclick: () => confirm("Reset to defaults?") && guard(() => api.factoryReset(), "Reset done").then(refreshConfig) }),
+  ]));
+  root.appendChild(card);
+}
+
+function showRestart(on) { $("restart").hidden = !on; }
+
+// ---- status polling with differential text updates (#26) ------------------
+let statusNodes = {};
+async function pollStatus() {
+  try {
+    const s = await api.status();
+    setConn(true);
+    if (s.restart_required) showRestart(true);
+    const list = $("statusList");
+    if (list && Array.isArray(s.instruments)) {
+      s.instruments.forEach((inst, i) => {
+        let node = statusNodes[i];
+        if (!node || !node.isConnected) {
+          node = h("div"); statusNodes[i] = node; list.appendChild(node);
+        }
+        patchText(node, `#${i}  pos=${(inst.pos_mm ?? 0).toFixed(1)}mm  homed=${inst.homed}  note=${inst.note}`);
+      });
+    }
+  } catch { setConn(false); }
+}
+
+async function refreshConfig() {
+  const wrap = await guard(() => api.getConfig());
+  state.config = wrap.config ?? wrap;
+}
+
+function wsUrl() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${location.host}/ws`;
+}
+
+// ---- boot -----------------------------------------------------------------
+(async function boot() {
+  render();
+  await refreshConfig().catch(() => {});
+  render();
+  setInterval(pollStatus, 400);   // ~2.5 Hz general status
+})();

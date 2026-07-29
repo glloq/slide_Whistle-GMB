@@ -1,0 +1,198 @@
+/*
+ * ui.test.mjs — node --test suite for the web UI logic modules.
+ * Covers Section 18 "Web/API" frontend items: HTTP errors never read as
+ * success (#23), macros stop on error (#24), no innerHTML (#25), diff updates
+ * (#26), stuck-note flush (#27), WS MIDI priority (#28).
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import { makeApi, ApiError } from "../../esp32/webui/js/api.js";
+import { NoteRegistry, bindLifecycleFlush } from "../../esp32/webui/js/notes.js";
+import { MidiSocket } from "../../esp32/webui/js/ws.js";
+import { runMacro } from "../../esp32/webui/js/macros.js";
+import { h, clear, diffKeys, patchText } from "../../esp32/webui/js/dom.js";
+import { configNeedsRestart, UnsavedTracker } from "../../esp32/webui/js/config.js";
+import { Wizard } from "../../esp32/webui/js/wizard.js";
+
+// --- helpers ---------------------------------------------------------------
+function fakeRes(status, obj) {
+  return { ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(obj) };
+}
+
+// --- api.js ----------------------------------------------------------------
+test("api: ok response returns data", async () => {
+  const api = makeApi({ fetchImpl: async () => fakeRes(200, { ok: true, data: { x: 1 } }) });
+  assert.deepEqual(await api.status(), { x: 1 });
+});
+
+test("api: HTTP 400 throws ApiError with code/field (never success)", async () => {
+  const api = makeApi({ fetchImpl: async () =>
+    fakeRes(400, { ok: false, error: { code: "GPIO_CONFLICT", message: "dup", field: "a.b" } }) });
+  await assert.rejects(() => api.putConfig({}), (e) => {
+    assert.ok(e instanceof ApiError);
+    assert.equal(e.status, 400);
+    assert.equal(e.code, "GPIO_CONFLICT");
+    assert.equal(e.field, "a.b");
+    return true;
+  });
+});
+
+test("api: ok:false body on a 200 still throws", async () => {
+  const api = makeApi({ fetchImpl: async () => fakeRes(200, { ok: false, error: { code: "X" } }) });
+  await assert.rejects(() => api.status(), ApiError);
+});
+
+test("api: sends auth token header", async () => {
+  let seen = null;
+  const api = makeApi({ getToken: () => "tok123", fetchImpl: async (_u, o) => { seen = o.headers; return fakeRes(200, { ok: true, data: {} }); } });
+  await api.status();
+  assert.equal(seen["X-Auth-Token"], "tok123");
+});
+
+// --- notes.js --------------------------------------------------------------
+test("notes: registry tracks and flushes all NoteOff", () => {
+  const sent = [];
+  const reg = new NoteRegistry((kind, m) => sent.push([kind, m.channel, m.note]));
+  reg.noteOn(1, 60); reg.noteOn(1, 64);
+  assert.equal(reg.size(), 2);
+  reg.noteOff(1, 60);
+  assert.equal(reg.size(), 1);
+  reg.allOff();                       // flush the stuck note (64)
+  assert.equal(reg.size(), 0);
+  // one explicit noteOff (60) + one flushed (64) = 2
+  assert.equal(sent.filter((s) => s[0] === "noteOff").length, 2);
+});
+
+test("notes: lifecycle blur flushes stuck notes (#27)", () => {
+  const sent = [];
+  const reg = new NoteRegistry((kind) => sent.push(kind));
+  const listeners = {};
+  const win = { addEventListener: (e, f) => (listeners[e] = f) };
+  const doc = { addEventListener: () => {}, hidden: false };
+  bindLifecycleFlush(reg, { win, doc });
+  reg.noteOn(1, 60);
+  listeners.blur();                   // simulate window blur
+  assert.equal(reg.size(), 0);
+});
+
+// --- ws.js -----------------------------------------------------------------
+class FakeWS {
+  constructor() { this.sent = []; this.readyState = 0; }
+  send(s) { this.sent.push(s); }
+  close() { this.onclose && this.onclose(); }
+}
+test("ws: queues while closed, flushes NoteOff first on open (#27/#28)", () => {
+  let ws;
+  const sock = new MidiSocket("ws://x", { socketFactory: () => (ws = new FakeWS()) });
+  sock.connect();
+  // not open yet: enqueue a NoteOn then a NoteOff
+  sock.send({ type: "noteOn", channel: 1, note: 60, velocity: 100 });
+  sock.send({ type: "noteOff", channel: 1, note: 60 });
+  ws.onopen();                        // socket opens → flush
+  const kinds = ws.sent.map((s) => JSON.parse(s).type);
+  assert.deepEqual(kinds[0], "noteOff");   // priority frame first
+  assert.equal(ws.sent.length, 2);
+});
+
+test("ws: single socket, one frame per event (not HTTP)", () => {
+  let ws;
+  const sock = new MidiSocket("ws://x", { socketFactory: () => (ws = new FakeWS()) });
+  sock.connect(); ws.onopen();
+  sock.send({ type: "noteOn", channel: 1, note: 60 });
+  sock.send({ type: "cc", channel: 1, a: 11, b: 64 });
+  assert.equal(ws.sent.length, 2);
+});
+
+// --- macros.js -------------------------------------------------------------
+test("macros: stop at first failing step (#24)", async () => {
+  const ran = [];
+  const res = await runMacro([
+    { name: "a", run: async () => ran.push("a") },
+    { name: "b", run: async () => { ran.push("b"); throw new Error("boom"); } },
+    { name: "c", run: async () => ran.push("c") },
+  ]);
+  assert.equal(res.ok, false);
+  assert.equal(res.completed, 1);
+  assert.deepEqual(ran, ["a", "b"]);   // "c" never ran
+});
+
+// --- dom.js ----------------------------------------------------------------
+function fakeDoc() {
+  return {
+    createElement(tag) {
+      return {
+        tag, children: [], attrs: {}, listeners: {}, dataset: {}, _text: "",
+        className: "", set textContent(v) { this._text = v; }, get textContent() { return this._text; },
+        setAttribute(k, v) { this.attrs[k] = v; },
+        addEventListener(e, f) { this.listeners[e] = f; },
+        appendChild(c) { this.children.push(c); return c; },
+        removeChild(c) { this.children = this.children.filter((x) => x !== c); },
+        get firstChild() { return this.children[0]; },
+      };
+    },
+    createTextNode(t) { return { text: t }; },
+  };
+}
+test("dom: h() uses textContent, never innerHTML (#25)", () => {
+  const doc = fakeDoc();
+  const el = h("div", { text: '<img src=x onerror=alert(1)>', class: "n" },
+    [h("span", { text: "child" }, [], doc)], doc);
+  assert.equal(el._text, "<img src=x onerror=alert(1)>");   // stored as text, not HTML
+  assert.equal(el.className, "n");
+  assert.equal("innerHTML" in el, false);
+});
+test("dom: diffKeys computes add/remove/keep (#26)", () => {
+  const d = diffKeys(["a", "b", "c"], ["b", "c", "d"]);
+  assert.deepEqual(d.add, ["d"]);
+  assert.deepEqual(d.remove, ["a"]);
+  assert.deepEqual(d.keep, ["b", "c"]);
+});
+test("dom: patchText only writes on change", () => {
+  const node = { textContent: "1" };
+  assert.equal(patchText(node, "1"), false);
+  assert.equal(patchText(node, "2"), true);
+  assert.equal(node.textContent, "2");
+});
+
+// --- config.js -------------------------------------------------------------
+test("config: hardware change → restart, dynamic change → not", () => {
+  const base = { device: { board: 0 }, instrumentCount: 1, instruments: [
+    { motion: { type: 1, stepper: { stepPin: 32, dirPin: 33, enablePin: 25, endstopMin: { pin: 34 } },
+                servoA: {}, servoB: {} },
+      air: { source: { type: 0 }, gate: { type: 1, pin: 27 }, flow: {}, sensor: {} } }] };
+  const dyn = JSON.parse(JSON.stringify(base)); dyn.instruments[0].motion.travelMm = 120;
+  assert.equal(configNeedsRestart(base, dyn), false);
+  const hw = JSON.parse(JSON.stringify(base)); hw.instruments[0].motion.stepper.stepPin = 14;
+  assert.equal(configNeedsRestart(base, hw), true);
+});
+test("config: unsaved tracker", () => {
+  const t = new UnsavedTracker({ a: 1 });
+  assert.equal(t.isDirty({ a: 1 }), false);
+  assert.equal(t.isDirty({ a: 2 }), true);
+  t.markSaved({ a: 2 });
+  assert.equal(t.isDirty({ a: 2 }), false);
+});
+
+// --- wizard.js -------------------------------------------------------------
+test("wizard: cannot advance past an incomplete step", () => {
+  const w = new Wizard();
+  w.set({ name: "", channel: 1, noteMin: 48, noteMax: 84 });
+  assert.equal(w.canNext(), false);      // missing name
+  assert.equal(w.next(), false);
+  w.set({ name: "Sopranino" });
+  assert.equal(w.next(), true);
+  assert.equal(w.step(), "motion");
+});
+test("wizard: wiring rejects duplicate GPIO", () => {
+  const w = new Wizard({ name: "F", motionType: "stepper" });
+  w.index = 2;                            // wiring step
+  w.set({ wiring: { stepPin: 32, dirPin: 32, enablePin: 25 } });
+  assert.equal(w.canNext(), false);       // dup pin 32
+  w.set({ wiring: { stepPin: 32, dirPin: 33, enablePin: 25 } });
+  assert.equal(w.canNext(), true);
+});
+test("wizard: motion enum mapping", () => {
+  assert.equal(new Wizard({ motionType: "dual" }).motionEnum(), 3);
+  assert.equal(new Wizard({ motionType: "disabled" }).motionEnum(), 0);
+});
