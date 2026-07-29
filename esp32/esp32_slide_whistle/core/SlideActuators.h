@@ -156,7 +156,9 @@ public:
         homed_ = true; state_ = MotionState::Idle; return true;
     }
     void update(uint32_t) override {}
-    bool requestPositionMm(float) override { return true; }  // accepted, no-op
+    // No physical motion, but record the target so telemetry/tests can see the
+    // musically-computed position that *would* be commanded.
+    bool requestPositionMm(float mm) override { target_ = mm; pos_ = mm; return true; }
     bool requestHoming() override { homed_ = true; state_ = MotionState::Idle; return true; }
     bool isReadyForAir() const override { return state_ != MotionState::EStopped; }
 protected:
