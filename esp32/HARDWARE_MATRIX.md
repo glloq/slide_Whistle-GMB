@@ -42,6 +42,8 @@ Markers:
 | `ConfigCodec` + v3 migration | IMPLEMENTED · TESTED IN SOFTWARE | round-trip, structural validation, legacy NVS-key mapping |
 | `ConfigStore` (atomic/backup/recovery) | IMPLEMENTED · TESTED IN SOFTWARE (logic) | transactional import, factory reset |
 | LittleFS backend | IMPLEMENTED (structure) · NOT TESTED — REQUIRES HARDWARE | Arduino-guarded |
+| API envelope (`ApiResponse`) | IMPLEMENTED · TESTED IN SOFTWARE | ok/error{code,message,field}, validator→envelope |
+| `AuthManager` | IMPLEMENTED · TESTED IN SOFTWARE | generated admin token, sessions+expiry, criticality gate, Origin allow-list, rate limiter, connection cap, AP password |
 
 ## Firmware / web integration (next phases)
 
@@ -53,7 +55,9 @@ Markers:
 | Deterministic RT task (`vTaskDelayUntil`) — correction #3 | BLOCKED / TODO |
 | Web handlers → CommandQueue only — correction #6 | BLOCKED / TODO |
 | LittleFS `/config.json` atomic save + migration from v3 | IMPLEMENTED (logic tested; LittleFS backend needs hardware) |
-| REST `/api/v1` + auth + WebSocket keyboard — Sections 14/15 | BLOCKED / TODO |
+| Auth/session/rate-limit logic — Section 15 | IMPLEMENTED · TESTED IN SOFTWARE |
+| Wire auth+envelope into the async web server (routes, WS handshake) | BLOCKED / TODO |
+| REST `/api/v1` + WebSocket keyboard endpoints — Section 14 | BLOCKED / TODO |
 | First-boot wizard + expert mode UI — Section 13 | BLOCKED / TODO |
 | OTA safe-state + rollback — Section 15 | BLOCKED / TODO |
 | Calibration assistant + INMP441 auto-cal — Section 4 | BLOCKED / TODO |
