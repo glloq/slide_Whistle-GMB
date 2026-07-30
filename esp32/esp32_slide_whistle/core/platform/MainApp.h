@@ -298,6 +298,9 @@ private:
         s.systemState = uint8_t(state_);
         s.restartRequired = router_.restartRequired();
         s.instrumentCount = instCount_;
+        const ExecAck& ack = engine_.lastExec();
+        s.lastAckSeq = ack.seq;
+        s.lastAckResult = uint8_t(ack.result);
         for (uint8_t i = 0; i < instCount_ && i < MAX_INSTRUMENTS; ++i) {
             Instrument* in = instPtrs_[i];
             InstrumentStatus& is = s.instruments[i];
@@ -328,6 +331,12 @@ private:
             JsonValue v = JsonValue::makeObj();
             v.set("state", int(s.systemState));
             v.set("seq", (double)s.seq);
+            // Execution ack for the last direct command (#3 §7): a client that
+            // POSTed a command reads back its seq here with accepted/rejected.
+            JsonValue ack = JsonValue::makeObj();
+            ack.set("seq", (double)s.lastAckSeq);
+            ack.set("result", int(s.lastAckResult));   // 1 accepted, 2 rejected
+            v.set("lastAck", ack);
             v.set("firstBoot", app->firstBoot_);
             v.set("fsFormatted", app->fsFormatted_);
             JsonValue arr = JsonValue::makeArr();

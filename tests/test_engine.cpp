@@ -347,3 +347,22 @@ TEST(engine_jog_is_signed_relative) {
     eng.tick(1, 1000);
     CHECK_NEAR(a.act.currentPositionMm(), 38.0f, 1e-3);   // 50 + (-12)
 }
+
+// Review #3 §7: a direct command records an execution ack — Accepted when it
+// reaches its instrument, Rejected when the target id doesn't exist — so a
+// client can tell "queued" from "actually acted on / silently dropped".
+TEST(engine_exec_ack_accepted_and_rejected) {
+    InstRig a;
+    a.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&a.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    Command home{CommandType::Home}; home.instrument = 0; home.seq = 42; q.push(home);
+    eng.tick(0, 0);
+    CHECK_EQ(eng.lastExec().seq, 42u);
+    CHECK(eng.lastExec().result == ExecResult::Accepted);
+    // A command to a non-existent instrument id is rejected, not silently lost.
+    Command bad{CommandType::Home}; bad.instrument = 9; bad.seq = 43; q.push(bad);
+    eng.tick(1, 1000);
+    CHECK_EQ(eng.lastExec().seq, 43u);
+    CHECK(eng.lastExec().result == ExecResult::Rejected);
+}

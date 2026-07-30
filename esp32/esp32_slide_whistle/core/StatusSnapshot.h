@@ -31,6 +31,8 @@ struct StatusSnapshot {
     uint8_t  systemState = 0;
     uint8_t  instrumentCount = 0;
     bool     restartRequired = false;
+    uint32_t lastAckSeq = 0;    // seq of the last direct command the RT task acted on
+    uint8_t  lastAckResult = 0; // ExecResult: 0 none, 1 accepted, 2 rejected
     InstrumentStatus instruments[MAX_INSTRUMENTS];
 };
 
