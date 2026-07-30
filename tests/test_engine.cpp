@@ -249,3 +249,67 @@ TEST(engine_two_testair_sessions_independent) {
     for (uint32_t k = 45; k <= 60; ++k) eng.tick(k, k * 1000);
     CHECK(!r1.sink.gateOpen);               // #1 auto-closed
 }
+
+// Review #3 §2.2: a full queue must still admit safety commands. A NoteOff or
+// Panic evicts the newest queued non-priority command rather than being dropped.
+TEST(queue_panic_never_dropped_when_full) {
+    CommandQueue<4> q;
+    for (int i = 0; i < 4; ++i) {
+        Command on{CommandType::NoteOn}; on.a = uint8_t(60 + i); on.b = 100;
+        CHECK(q.push(on));
+    }
+    CHECK_EQ(q.size(), 4u);
+    // Full of non-priority: a Panic must still get in (evicting a NoteOn).
+    Command panic{CommandType::Panic};
+    CHECK(q.push(panic));
+    CHECK_EQ(q.size(), 4u);
+    CHECK_EQ(q.dropped(), 1u);       // one NoteOn evicted
+    // Panic jumped to the front — it pops first.
+    Command out;
+    CHECK(q.pop(out));
+    CHECK(out.type == CommandType::Panic);
+}
+
+// A full queue of ONLY non-priority commands admits a NoteOff by eviction; a
+// non-priority command on a full queue is dropped.
+TEST(queue_noteoff_evicts_but_noteon_dropped_when_full) {
+    CommandQueue<3> q;
+    for (int i = 0; i < 3; ++i) {
+        Command on{CommandType::NoteOn}; on.a = uint8_t(60 + i);
+        CHECK(q.push(on));
+    }
+    // Another NoteOn is rejected outright.
+    Command extra{CommandType::NoteOn}; extra.a = 72;
+    CHECK(!q.push(extra));
+    CHECK_EQ(q.dropped(), 1u);
+    // A NoteOff is admitted (evicting the newest NoteOn).
+    Command off{CommandType::NoteOff}; off.a = 60;
+    CHECK(q.push(off));
+    CHECK_EQ(q.dropped(), 2u);
+    CHECK_EQ(q.size(), 3u);
+    Command out;
+    CHECK(q.pop(out));
+    CHECK(out.type == CommandType::NoteOff);   // priority popped first
+}
+
+// A queue completely full of priority commands rejects a further priority
+// command (a redundant Panic behind a Panic is harmless), and pcount bookkeeping
+// stays consistent across pops so later non-priority pushes still fit.
+TEST(queue_priority_full_rejects_and_pcount_recovers) {
+    CommandQueue<2> q;
+    CHECK(q.push(Command{CommandType::Panic}));
+    CHECK(q.push(Command{CommandType::NoteOff}));
+    CHECK_EQ(q.size(), 2u);
+    // Full of priority — another priority command cannot be admitted.
+    CHECK(!q.push(Command{CommandType::Panic}));
+    CHECK_EQ(q.dropped(), 1u);
+    // Drain, then a normal NoteOn fits again (pcount decremented on pop).
+    Command out;
+    CHECK(q.pop(out)); CHECK(q.pop(out));
+    CHECK(q.empty());
+    Command on{CommandType::NoteOn}; on.a = 60;
+    CHECK(q.push(on));
+    // And a priority command still fits alongside it.
+    CHECK(q.push(Command{CommandType::NoteOff}));
+    CHECK_EQ(q.size(), 2u);
+}

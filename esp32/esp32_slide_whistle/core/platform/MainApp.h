@@ -270,7 +270,10 @@ private:
     struct StatusSrc : IStatusSource {
         MainApp* app = nullptr;
         JsonValue statusJson() override {
-            const StatusSnapshot& s = app->snap_.read();
+            // Consistent copy: the RT task may publish while we serialize, so
+            // read into a local (seqlock) rather than off the live buffer.
+            StatusSnapshot s;
+            app->snap_.readCopy(s);
             JsonValue v = JsonValue::makeObj();
             v.set("state", int(s.systemState));
             v.set("seq", (double)s.seq);
