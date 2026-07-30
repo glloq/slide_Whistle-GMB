@@ -146,6 +146,15 @@ public:
         state_ = AirState::Idle;
     }
 
+    void applyDynamic(const AirConfig& c) override {
+        // Live: flow shaping + safety timings. Source/gate hardware types stay
+        // restart-only (#6).
+        cfg_.flow = c.flow;
+        flow_impl_.applyDynamic(c.flow);
+        cfg_.valveOpenTimeoutMs = c.valveOpenTimeoutMs;
+        cfg_.minNoteMs = c.minNoteMs;
+    }
+
     bool isReady() const override {
         return !estopped_ && state_ != AirState::Fault && src_ && src_->ready();
     }

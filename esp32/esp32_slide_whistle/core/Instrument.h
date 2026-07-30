@@ -41,6 +41,8 @@ public:
         channel_ = cfg.midiChannel; cc_ = cfg.cc;
         seq_.setConfig(cfg.seq);
         if (map_) *map_ = cfg.map;                    // refresh note→position table
+        if (act_) act_->applyDynamic(cfg.motion);     // live speed/accel/limits (#6)
+        if (air_) air_->applyDynamic(cfg.air);        // live flow/expression params (#6)
         if (seq_.activeNoteOr(-1) >= 0) {
             int n = seq_.activeNoteOr(-1);
             if (n < noteMin_ || n > noteMax_) allNotesOff(lastNow_);

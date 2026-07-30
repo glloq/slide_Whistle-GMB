@@ -475,6 +475,7 @@ inline std::string configToJson(const RuntimeConfig& c) {
     n.set("apEnabled", c.network.apEnabled);
     n.set("requireAuth", c.network.requireAuth);
     n.set("disableApWhenConnected", c.network.disableApWhenConnected);
+    n.set("allowedOrigin", std::string(c.network.allowedOrigin));
     root.set("network", n);
     JsonValue mi = JsonValue::makeObj();
     mi.set("din", c.midi.din); mi.set("ble", c.midi.ble); mi.set("rtp", c.midi.rtp);
@@ -537,6 +538,8 @@ inline ConfigDecodeResult configFromJson(const std::string& text, RuntimeConfig&
             cfg.network.apEnabled = n->bool_or("apEnabled", cfg.network.apEnabled);
             cfg.network.requireAuth = n->bool_or("requireAuth", cfg.network.requireAuth);
             cfg.network.disableApWhenConnected = n->bool_or("disableApWhenConnected", cfg.network.disableApWhenConnected);
+            std::snprintf(cfg.network.allowedOrigin, sizeof(cfg.network.allowedOrigin), "%s",
+                          n->str_or("allowedOrigin", cfg.network.allowedOrigin).c_str());
         }
         if (auto* mi = root->find("midi")) {
             cfg.midi.din = mi->bool_or("din", cfg.midi.din);

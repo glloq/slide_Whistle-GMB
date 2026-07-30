@@ -113,6 +113,10 @@ public:
     // A homed actuator returns to Idle; an unhomed one is left needing homing.
     virtual void clearFault() = 0;
 
+    // Apply the DYNAMIC (no-restart) motion parameters — speed, accel, soft
+    // limits — live. Pins / driver type are hardware and stay restart-only.
+    virtual void applyDynamic(const SlideMotionConfig& cfg) = 0;
+
     virtual float currentPositionMm() const = 0;
     virtual float targetPositionMm() const = 0;
     virtual MotionState state() const = 0;

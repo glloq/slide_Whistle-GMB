@@ -412,6 +412,14 @@ public:
         tgt_ = shape(span);
     }
     void rest() override { tgt_ = c_.rest01; }
+    // Update the dynamic flow shaping params live, keeping the current output.
+    void applyDynamic(const FlowConfig& f) {
+        uint8_t mn = f.min, nm = f.nominal, mx = f.max;
+        if (nm < mn) nm = mn;
+        if (nm > mx) nm = mx;
+        c_.min = mn; c_.nominal = nm; c_.max = mx;
+        c_.curve = f.curve; c_.expo = f.expo; c_.maxSlewPerMs = f.maxSlewPerMs; c_.rest01 = f.rest01;
+    }
     void update(uint32_t nowMs) override {
         if (c_.type == FlowControlType::None) { cur_ = 0.0f; return; }
         float dt = 1.0f;

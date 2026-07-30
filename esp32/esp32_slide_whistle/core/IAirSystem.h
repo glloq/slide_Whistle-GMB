@@ -112,6 +112,7 @@ public:
 
     virtual void emergencyStop() = 0;
     virtual void rearm() = 0;              // recover from E-stop/fault, no rebuild
+    virtual void applyDynamic(const AirConfig& cfg) = 0;  // live flow/expression params (#6)
     virtual bool isReady() const = 0;
     virtual AirState state() const = 0;
     virtual FaultCode fault() const = 0;

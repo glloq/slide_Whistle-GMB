@@ -142,7 +142,7 @@ correct-by-construction but needs hardware to validate. TODO = not yet done
 | 3 | All LEDC on channel 0 | FIXED·TESTED (LedcAllocator) |
 | 4 | Stepper not position-servoed | TODO — RMT/timer + step-count feedback (hardware) |
 | 5 | liveConfig never connected; push ignored | FIXED·TESTED (setLiveConfig + truthful `applied`) |
-| 6 | applyDynamic incomplete (motor/air params) | PARTIAL — table/range/CC/seq applied; motor/air params still restart-only |
+| 6 | applyDynamic incomplete (motor/air params) | FIXED·TESTED — speed/accel/soft-limits + flow params now applied live; pins/type stay restart-only |
 | 7 | Presets lose musical table | FIXED·TESTED (enabled entries kept) |
 | 8 | Null deref for disabled-then-enabled | FIXED (status iterates compacted ptrs) |
 | 9 | Panic permanent, no rearm | FIXED·TESTED (Rearm command) |
@@ -168,12 +168,12 @@ correct-by-construction but needs hardware to validate. TODO = not yet done
 | 29 | Bad checksum imports accepted | FIXED·TESTED (rejected) |
 | 30 | LittleFS auto-format wipes data | FIXED (mount no-format first) |
 | 31 | Rate limiter global | FIXED·TESTED (per-client buckets) |
-| 32 | Origin off by default | PARTIAL — enforced when set; MainApp default TODO |
+| 32 | Origin off by default | FIXED — network.allowedOrigin config drives real enforcement |
 | 33 | requireAuth field not applied | FIXED (MainApp applies it) |
 | 34 | WS confirms auth without verifying | FIXED (verifySession on auth frame) |
 | 35 | WS fragmented frames unhandled | TODO (hardware/transport) |
 | 36 | HTTP body allocated before size check | TODO (transport) |
-| 37 | Status snapshot unsynchronized | TODO — double-buffer |
+| 37 | Status snapshot unsynchronized | FIXED·TESTED — lock-free double-buffer snapshot |
 | 38 | Wizard steps mostly empty | PARTIAL — instrument/motion/air real; others TODO |
 | 39 | finishWizard ignores most choices | FIXED·TESTED (buildConfigPatch) |
 | 40 | Play works w/o login, no WS errors shown | FIXED (onMessage → toast) |

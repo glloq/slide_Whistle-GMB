@@ -41,6 +41,7 @@ struct NetworkConfig {
     bool apPasswordGenerated = true;   // generated at first boot, never a fixed default
     bool requireAuth  = true;          // critical commands require the admin token
     bool disableApWhenConnected = false;
+    char allowedOrigin[48] = "";       // if set, only this Origin may POST (#32)
 };
 
 struct MidiConfig {

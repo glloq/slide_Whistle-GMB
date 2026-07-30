@@ -228,3 +228,17 @@ TEST(stepper_homing_distant_switch_and_offset) {
     CHECK(act.fault() == FaultCode::None);
     CHECK_NEAR(act.currentPositionMm(), 5.0f, 0.6);   // real move to offset, not a snap
 }
+
+// Review #6: applyDynamic changes speed/accel/soft-limits live (not pins/type).
+TEST(actuator_apply_dynamic_soft_limits) {
+    FakeSink sink; sink.endstopAtMm = 0.0f;
+    StepDirSlideActuator act(&sink);
+    auto c = stepperCfg(); c.softMaxMm = 50;
+    act.begin(c); act.requestHoming(); pump(act, 0, 3000);
+    CHECK(!act.requestPositionMm(80.0f));            // beyond old soft max
+    // widen the soft limit dynamically → same target now accepted
+    auto c2 = c; c2.softMaxMm = 100;
+    act.clearFault();                                 // clear the TargetOutOfRange fault
+    act.applyDynamic(c2);
+    CHECK(act.requestPositionMm(80.0f));
+}

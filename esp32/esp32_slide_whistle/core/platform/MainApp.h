@@ -30,6 +30,7 @@
 #include "../ApiRouter.h"
 #include "../RealtimeEngine.h"
 #include "../InstrumentRuntime.h"
+#include "../StatusSnapshot.h"
 #include "EspSinks.h"
 #include "EspEntropy.h"
 #include "WebServerAdapter.h"
@@ -60,6 +61,8 @@ public:
         //    shown; generated only on first boot, never a fixed default (#5/#22).
         auth_.begin();
         auth_.setRequireAuth(config_.network.requireAuth);   // honour the config field (review #33)
+        if (config_.network.allowedOrigin[0])                // enforce Origin only if set (#32)
+            auth_.setAllowedOrigin(config_.network.allowedOrigin);
         loadOrCreateAdminToken();
 
         // 3. validate the whole config before energising anything
@@ -225,6 +228,7 @@ private:
                 if (anyActuatorFault()) state_ = SysState::Fault;
                 else if (allHomed())    state_ = SysState::Ready;
             }
+            publishSnapshot();                        // lock-free telemetry (#37)
             vTaskDelayUntil(&last, period);            // deterministic cadence
         }
     }
@@ -237,26 +241,51 @@ private:
 
     static uint32_t millisNow() { return millis(); }
 
-    // Status snapshot for the web (TODO: lock-free double buffer).
+    // Fill + publish the telemetry snapshot from the RT task (single writer).
+    void publishSnapshot() {
+        StatusSnapshot& s = snap_.back();
+        s.systemState = uint8_t(state_);
+        s.restartRequired = router_.restartRequired();
+        s.instrumentCount = instCount_;
+        for (uint8_t i = 0; i < instCount_ && i < MAX_INSTRUMENTS; ++i) {
+            Instrument* in = instPtrs_[i];
+            InstrumentStatus& is = s.instruments[i];
+            if (!in) { is = InstrumentStatus{}; continue; }
+            auto* a = in->actuator();
+            is.id = in->id();
+            is.homed = a && a->isHomed();
+            is.moving = a && a->isMoving();
+            is.posMm = a ? a->currentPositionMm() : 0.0f;
+            is.targetMm = a ? a->targetPositionMm() : 0.0f;
+            is.motionState = a ? uint8_t(a->state()) : 0;
+            is.fault = a ? uint8_t(a->fault()) : 0;
+            is.airState = in->air() ? uint8_t(in->air()->state()) : 0;
+            is.activeNote = int16_t(in->sequencer().activeNoteOr(-1));
+        }
+        snap_.publish();
+    }
+
+    // Web reader: builds JSON from the PUBLISHED snapshot, never from live
+    // objects the RT task is mutating (review #37 — no torn reads / no lock).
     struct StatusSrc : IStatusSource {
         MainApp* app = nullptr;
         JsonValue statusJson() override {
+            const StatusSnapshot& s = app->snap_.read();
             JsonValue v = JsonValue::makeObj();
-            v.set("state", int(app->state_));
+            v.set("state", int(s.systemState));
+            v.set("seq", (double)s.seq);
             v.set("firstBoot", app->firstBoot_);
             v.set("fsFormatted", app->fsFormatted_);
             JsonValue arr = JsonValue::makeArr();
-            // Iterate the COMPACTED instrument pointers, never rt_[] by config
-            // index (a disabled slot leaves rt_[i]==nullptr → crash, review #8).
-            for (uint8_t i = 0; i < app->instCount_; ++i) {
-                Instrument* in = app->instPtrs_[i];
-                if (!in) continue;
+            for (uint8_t i = 0; i < s.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
+                const InstrumentStatus& is = s.instruments[i];
                 JsonValue o = JsonValue::makeObj();
-                auto* a = in->actuator();
-                o.set("id", (int)in->id());
-                o.set("pos_mm", a ? a->currentPositionMm() : 0.0);
-                o.set("homed", a ? a->isHomed() : false);
-                o.set("note", in->sequencer().activeNoteOr(-1));
+                o.set("id", (int)is.id);
+                o.set("pos_mm", (double)is.posMm);
+                o.set("homed", is.homed);
+                o.set("moving", is.moving);
+                o.set("note", (int)is.activeNote);
+                o.set("fault", (int)is.fault);
                 arr.arr.push_back(o);
             }
             v.set("instruments", arr);
@@ -275,6 +304,7 @@ private:
     RealtimeEngine<QUEUE_LEN> engine_;
     ApiRouter        router_;
     StatusSrc        status_{};
+    SnapshotPublisher snap_;
 
     EspMotionSink    motion_[MAX_INSTRUMENTS];
     EspAirSink       air_[MAX_INSTRUMENTS];
