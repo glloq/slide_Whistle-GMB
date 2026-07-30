@@ -12,7 +12,7 @@ import { NoteRegistry, bindLifecycleFlush } from "../../esp32/webui/js/notes.js"
 import { MidiSocket } from "../../esp32/webui/js/ws.js";
 import { runMacro } from "../../esp32/webui/js/macros.js";
 import { h, clear, diffKeys, patchText } from "../../esp32/webui/js/dom.js";
-import { configNeedsRestart, UnsavedTracker } from "../../esp32/webui/js/config.js";
+import { configNeedsRestart, UnsavedTracker, deepMerge, midiFlagsFor, applyWizardPatch } from "../../esp32/webui/js/config.js";
 import { Wizard } from "../../esp32/webui/js/wizard.js";
 
 // --- helpers ---------------------------------------------------------------
@@ -249,4 +249,47 @@ test("wizard: wiring rejects duplicate GPIO", () => {
 test("wizard: motion enum mapping", () => {
   assert.equal(new Wizard({ motionType: "dual" }).motionEnum(), 3);
   assert.equal(new Wizard({ motionType: "disabled" }).motionEnum(), 0);
+});
+
+test("config: deepMerge preserves sibling nested fields (#14.4)", () => {
+  const base = { motion: { type: 0, travelMm: 120, stepper: { stepPin: 1, dirPin: 2, microsteps: 16 } } };
+  const patch = { motion: { type: 1, stepper: { stepPin: 9 } } };
+  const out = deepMerge(base, patch);
+  assert.equal(out.motion.type, 1);              // overridden
+  assert.equal(out.motion.travelMm, 120);        // preserved
+  assert.equal(out.motion.stepper.stepPin, 9);   // overridden
+  assert.equal(out.motion.stepper.dirPin, 2);    // preserved (shallow merge would drop it)
+  assert.equal(out.motion.stepper.microsteps, 16);
+});
+
+test("config: midiFlagsFor maps the wizard source (#14.3)", () => {
+  assert.deepEqual(midiFlagsFor("din"), { din: true });
+  assert.deepEqual(midiFlagsFor("serial"), { din: true });
+  assert.deepEqual(midiFlagsFor("ble"), { ble: true });
+  assert.deepEqual(midiFlagsFor("webKeyboard"), { webKeyboard: true });
+  assert.deepEqual(midiFlagsFor("nope"), {});
+});
+
+test("config: applyWizardPatch carries motion deep-merge + midiSource (#14.3/#14.4)", () => {
+  const config = {
+    instrumentCount: 1,
+    midi: { din: false, ble: false },
+    instruments: [{ motion: { travelMm: 100, stepper: { stepPin: 1, dirPin: 2, microsteps: 32 } }, air: { source: { type: 3 } } }],
+  };
+  const patch = {
+    name: "Alto", channel: 4, noteMin: 50, noteMax: 80,
+    motion: { type: 1, stepper: { stepPin: 21 } },
+    airPreset: 0, midiSource: "ble",
+  };
+  const out = applyWizardPatch(config, patch);
+  assert.equal(out.instruments[0].name, "Alto");
+  assert.equal(out.instruments[0].enabled, true);
+  assert.equal(out.instruments[0].midiChannel, 4);
+  assert.equal(out.instruments[0].motion.type, 1);
+  assert.equal(out.instruments[0].motion.travelMm, 100);            // preset field kept
+  assert.equal(out.instruments[0].motion.stepper.stepPin, 21);      // wizard override
+  assert.equal(out.instruments[0].motion.stepper.dirPin, 2);        // preset field kept
+  assert.equal(out.instruments[0].motion.stepper.microsteps, 32);   // preset field kept
+  assert.equal(out.instruments[0].air.source.type, 3);              // untouched
+  assert.equal(out.midi.ble, true);                                 // MIDI source applied
 });
