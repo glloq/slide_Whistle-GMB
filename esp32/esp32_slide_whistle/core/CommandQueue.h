@@ -56,14 +56,30 @@ class CommandQueue {
 public:
     // Priority commands are pushed to the front; the queue is bounded and
     // reports overflow instead of allocating.
+    //
+    // Safety guarantee (review #3 §2.2): a priority command (NoteOff / Panic)
+    // is NEVER dropped just because the queue is full — as long as any
+    // non-priority command is queued, the newest one is evicted to make room.
+    // Losing a queued NoteOn/CC to guarantee a release or an e-stop is the
+    // correct trade. Only a queue that is full of priority commands can reject
+    // another priority command (a redundant Panic behind a Panic is harmless).
     bool push(const Command& c) {
         SWC_Q_ENTER;
-        bool ok = true;
-        if (count_ >= N) { ++dropped_; ok = false; }
-        else {
-            if (isPriority(c.type)) { head_ = dec(head_); buf_[head_] = c; }
-            else                    { buf_[tail_] = c; tail_ = inc(tail_); }
-            ++count_;
+        bool ok;
+        if (count_ < N) {
+            insertLocked(c);
+            ok = true;
+        } else if (isPriority(c.type) && pcount_ < N) {
+            // Full, but at least one non-priority command exists at the tail —
+            // evict the newest non-priority to admit this safety command.
+            tail_ = dec(tail_);
+            --count_;
+            ++dropped_;            // the evicted non-priority command is lost
+            insertLocked(c);
+            ok = true;
+        } else {
+            ++dropped_;
+            ok = false;
         }
         SWC_Q_EXIT;
         return ok;
@@ -72,24 +88,59 @@ public:
     bool pop(Command& out) {
         SWC_Q_ENTER;
         bool ok = (count_ != 0);
-        if (ok) { out = buf_[head_]; head_ = inc(head_); --count_; }
+        if (ok) {
+            out = buf_[head_];
+            if (isPriority(out.type) && pcount_ > 0) --pcount_;
+            head_ = inc(head_);
+            --count_;
+        }
         SWC_Q_EXIT;
         return ok;
     }
 
-    uint16_t size() const { return count_; }
-    bool empty() const { return count_ == 0; }
-    uint32_t dropped() const { return dropped_; }
-    void clear() { head_ = tail_ = count_ = 0; }
+    uint16_t size() const {
+        SWC_Q_ENTER;
+        uint16_t n = count_;
+        SWC_Q_EXIT;
+        return n;
+    }
+    bool empty() const { return size() == 0; }
+    uint32_t dropped() const {
+        SWC_Q_ENTER;
+        uint32_t d = dropped_;
+        SWC_Q_EXIT;
+        return d;
+    }
+    void clear() {
+        SWC_Q_ENTER;
+        head_ = tail_ = count_ = pcount_ = 0;
+        SWC_Q_EXIT;
+    }
 
 private:
+    // Caller holds the lock. Priority commands go to the head, others to the
+    // tail, keeping the priority block contiguous at the front so that the
+    // element just before tail_ is always the newest non-priority command.
+    void insertLocked(const Command& c) {
+        if (isPriority(c.type)) {
+            head_ = dec(head_);
+            buf_[head_] = c;
+            ++pcount_;
+        } else {
+            buf_[tail_] = c;
+            tail_ = inc(tail_);
+        }
+        ++count_;
+    }
+
     uint16_t inc(uint16_t i) const { return uint16_t((i + 1) % N); }
     uint16_t dec(uint16_t i) const { return uint16_t((i + N - 1) % N); }
     Command  buf_[N];
-    uint16_t head_ = 0, tail_ = 0, count_ = 0;
+    uint16_t head_ = 0, tail_ = 0, count_ = 0, pcount_ = 0;
     uint32_t dropped_ = 0;
 #if defined(ARDUINO)
-    portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
+    // mutable so the const observers (size/empty/dropped) can take the lock.
+    mutable portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
 #endif
 };
 

@@ -90,6 +90,56 @@ TEST(config_rejects_bad_ranges) {
     CHECK(!configFromJson(json, d).ok);
 }
 
+// Review #3 §11.3: an integer that would WRAP through narrowing into a valid
+// window must be rejected pre-narrow, not silently accepted. channel:256 → 0
+// (=OMNI) is the canonical case; it passes the post-narrow `>16` check.
+TEST(config_rejects_channel_overflow_prenarrow) {
+    RuntimeConfig c = defaultConfig();
+    c.instruments[0].enabled = true; c.instruments[0].midiChannel = 9;
+    std::string json = configToJson(c);
+    auto pos = json.find("\"channel\":9");
+    CHECK(pos != std::string::npos);
+    json.replace(pos, std::string("\"channel\":9").size(), "\"channel\":256");
+    RuntimeConfig d;
+    CHECK(!configFromJson(json, d).ok);       // must NOT wrap to OMNI and pass
+}
+
+// Review #3 §11.4: non-positive dynamics and inverted servo pulse windows are
+// rejected by validateStructural.
+TEST(config_rejects_nonpositive_dynamics) {
+    RuntimeConfig c = defaultConfig();
+    c.instruments[0].motion.type = SlideDriveType::StepDir;
+    c.instruments[0].motion.maxSpeedMmS = 0.0f;     // invalid for a driven axis
+    RuntimeConfig d;
+    CHECK(!configFromJson(configToJson(c), d).ok);
+}
+
+TEST(config_rejects_inverted_servo_pulse) {
+    RuntimeConfig c = defaultConfig();
+    c.instruments[0].motion.servoA.minUs = 2000;
+    c.instruments[0].motion.servoA.maxUs = 1000;     // min >= max
+    RuntimeConfig d;
+    CHECK(!configFromJson(configToJson(c), d).ok);
+}
+
+TEST(config_rejects_out_of_range_normalized) {
+    RuntimeConfig c = defaultConfig();
+    c.instruments[0].air.source.max01 = 1.5f;        // not in 0..1
+    RuntimeConfig d;
+    CHECK(!configFromJson(configToJson(c), d).ok);
+}
+
+TEST(config_rejects_transpose_overflow) {
+    RuntimeConfig c = defaultConfig();
+    std::string json = configToJson(c);
+    auto pos = json.find("\"transpose\":");
+    CHECK(pos != std::string::npos);
+    auto end = json.find_first_of(",}", pos);
+    json.replace(pos, end - pos, "\"transpose\":200");   // wraps int8_t otherwise
+    RuntimeConfig d;
+    CHECK(!configFromJson(json, d).ok);
+}
+
 TEST(migrate_legacy_v3) {
     // Legacy v3 export using NVSKeys field names.
     const char* legacy = R"({

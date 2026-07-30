@@ -221,17 +221,25 @@ private:
         c.channel    = (uint8_t)body.int_or("channel", 1);
         c.a          = (uint8_t)body.int_or("a", body.int_or("note", body.int_or("cc", 0)));
         c.b          = (uint8_t)body.int_or("b", body.int_or("velocity", body.int_or("value", 0)));
-        c.i16        = (int16_t)body.int_or("bend", 0);
         c.instrument = (uint8_t)body.int_or("instrument", 0);
+        // i16 is a typed payload whose meaning depends on the command: signed
+        // pitch-bend for pitch, signed jog delta (mm) for jog, and the auto-stop
+        // duration (ms) for testAir — each read from its own key (#3 §7.4).
+        if      (c.type == CommandType::Jog)     c.i16 = (int16_t)body.int_or("delta", body.int_or("deltaMm", 0));
+        else if (c.type == CommandType::TestAir) c.i16 = (int16_t)body.int_or("ms", body.int_or("durationMs", 3000));
+        else                                     c.i16 = (int16_t)body.int_or("bend", 0);
 
         // Safety commands (panic, Note Off, All Notes/Sound Off) always pass —
         // they need no token so a release/stop can never be blocked (#7).
         bool safe = (c.type == CommandType::Panic || c.type == CommandType::NoteOff ||
                      (c.type == CommandType::ControlChange && (c.a == 120 || c.a == 123)));
+        // Stamp a monotonic command id so a client can match the RT task's
+        // execution ack (returned in /status) to this request (#3 §7).
+        c.seq = ++cmdSeq_;
         Criticality crit = safe ? Criticality::Public : criticalityFor(c.type);
         if (!auth_ || auth_->authorize(crit, r.token, nowMs)) {
             if (!sink_ || !sink_->push(c)) return reply(503, apiErr("QUEUE_FULL", "command queue full"));
-            JsonValue d = JsonValue::makeObj(); d.set("queued", true);
+            JsonValue d = JsonValue::makeObj(); d.set("queued", true); d.set("seq", (double)c.seq);
             return reply(202, apiOk(d));   // accepted — executed by the RT task
         }
         return reply(401, apiErr("UNAUTHORIZED", "valid token required", "Authorization"));
@@ -281,6 +289,7 @@ private:
     size_t         maxBody_ = 16384;
     bool           restartRequired_ = false;
     bool           restartRequested_ = false;
+    uint32_t       cmdSeq_ = 0;     // monotonic id stamped on each enqueued command
 };
 
 } // namespace swc

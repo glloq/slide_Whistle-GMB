@@ -301,3 +301,54 @@ TEST(pump_tank_pid_targets_setpoint) {
     CHECK(driveFar > driveNear);               // PI uses the setpoint
     CHECK(driveNear > 0.0f);
 }
+
+// Review #3 §10.1: the PI integral accumulates per unit TIME, not per call. Two
+// runs with the SAME number of update() calls but different elapsed time must
+// build different integral terms (old per-call code gave identical results).
+TEST(pump_tank_pi_integral_is_time_scaled) {
+    auto run = [](uint32_t step) {
+        FakeAirSink s; AirConfig c;
+        c.source.type = AirSourceType::PumpsTank; c.source.requireSensor = true;
+        c.source.lowThresh = 65; c.source.highThresh = 80; c.source.safetyThresh = 200;
+        c.source.target = 70; c.source.tankPwm = true;
+        c.source.pidKp = 0.0f; c.source.pidKi = 0.1f;      // pure integral
+        c.source.min01 = 0.0f; c.source.max01 = 1.0f;
+        c.source.minOffMs = 0; c.source.refillTimeoutMs = 1000000;
+        c.sensor.type = AirSensorType::PressureAnalog;
+        c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
+        c.sensor.filterAlpha = 1.0f;
+        PumpTankSource p; p.begin(c, &s);
+        s.sensorRaw = 60;                                   // constant err = 70-60 = 10, keeps filling
+        uint32_t t = 100; p.update(t);                     // prime the dt clock (dt=0)
+        for (int k = 0; k < 10; ++k) { t += step; p.update(t); }
+        return s.src[0];
+    };
+    float driveFast = run(1);    // 10 calls, 1 ms apart  → 10 ms elapsed
+    float driveSlow = run(10);   // 10 calls, 10 ms apart → 100 ms elapsed
+    CHECK(driveSlow > driveFast * 3.0f);   // more time ⇒ more integral, per-call would tie
+    CHECK(driveFast > 0.0f);
+}
+
+// Review #3 §10.2: a multi-pump tank stages pumps in over cascadeDelayMs from
+// the fill start, rather than energising all motors at once.
+TEST(pump_tank_multi_pump_cascade) {
+    FakeAirSink s; AirConfig c;
+    c.source.type = AirSourceType::PumpsTank; c.source.requireSensor = true;
+    c.source.lowThresh = 65; c.source.highThresh = 90; c.source.safetyThresh = 200;
+    c.source.tankPwm = false;               // drive = max01 while filling
+    c.source.pumpCount = 3; c.source.cascadeDelayMs = 10;
+    c.source.minOffMs = 0; c.source.refillTimeoutMs = 1000000;
+    c.sensor.type = AirSensorType::PressureAnalog;
+    c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
+    c.sensor.filterAlpha = 1.0f;
+    PumpTankSource p; p.begin(c, &s);
+    s.sensorRaw = 60;                        // below low → fills, stays filling (<high)
+    p.update(1);                             // fill starts at t=1
+    for (uint32_t t = 2; t <= 6; ++t) p.update(t);
+    CHECK(s.src[0] > 0.0f);                  // pump 0 on immediately
+    CHECK_NEAR(s.src[1], 0.0f, 1e-3);        // pump 1 still staged out (<10 ms)
+    CHECK_NEAR(s.src[2], 0.0f, 1e-3);
+    for (uint32_t t = 7; t <= 30; ++t) p.update(t);
+    CHECK(s.src[1] > 0.0f);                  // pump 1 in after ~10 ms
+    CHECK(s.src[2] > 0.0f);                  // pump 2 in after ~20 ms
+}

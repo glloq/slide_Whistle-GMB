@@ -270,3 +270,20 @@ TEST(seq_prepare_timeout_never_opens_late) {
     CHECK(seq.phase() != SeqPhase::Playing);         // gave up
     CHECK_EQ(air.started_, 0);                        // air never opened late
 }
+
+// Review #3 §5.1: a note with no usable position mapping must never be played —
+// the sequencer must not enter Positioning/Playing or open air, and the note is
+// dropped from the stack rather than left dangling.
+TEST(seq_refuses_note_without_mapping) {
+    DisabledSlideActuator act; SlideMotionConfig mc; mc.type = SlideDriveType::Disabled; act.begin(mc);
+    AirSystem air; FakeAirSink2 sink; air.begin(simpleAir(), &sink);
+    NoteMap map;                                      // empty: positionForNote always false
+    NoteSequencer seq; seq.begin(&act, &air, &map, {});
+    uint32_t t = 0;
+    seq.noteOn(60, 100, t);
+    for (int k = 0; k < 5; ++k) { t++; act.update(t*1000); air.setNow(t); air.update(t); seq.update(t, t*1000); }
+    CHECK(seq.phase() != SeqPhase::Playing);          // never plays an unmapped note
+    CHECK(seq.phase() != SeqPhase::Positioning);      // and does not wait to open air
+    CHECK(!sink.gateOpen);                            // air never opened
+    CHECK_EQ(seq.heldCount(), 0);                     // unmapped note dropped from the stack
+}

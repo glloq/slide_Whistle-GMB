@@ -261,10 +261,19 @@ public:
     void idle(uint32_t nowMs) override { regulate(nowMs); }
     void update(uint32_t nowMs) override { if (!extSensor_) sensor_.update(nowMs); regulate(nowMs); }
     bool ready() const override { return regulatedReady_ && fault_ == FaultCode::None; }
-    void resetFault() override { fault_ = FaultCode::None; filling_ = false; regulatedReady_ = false; pidI_ = 0.0f; }
+    void resetFault() override { fault_ = FaultCode::None; filling_ = false; regulatedReady_ = false; pidI_ = 0.0f; havePidTime_ = false; }
 private:
     AirSensor* activeSensor() { return extSensor_ ? extSensor_ : &sensor_; }
     void regulate(uint32_t nowMs) {
+        // Time-step (seconds) since the previous regulate() so the PI integral
+        // accumulates per unit TIME, not per call — the tick rate no longer
+        // changes the effective integral gain (#3 §10.1). Clamped so a long gap
+        // (first call, or a stall) cannot wind the integral up in one step.
+        if (havePidTime_) {
+            dtS_ = float(elapsed_u32(nowMs, lastPidMs_)) / 1000.0f;
+            if (dtS_ > 0.5f) dtS_ = 0.5f;
+        } else { dtS_ = 0.0f; }
+        lastPidMs_ = nowMs; havePidTime_ = true;
         AirSensor* s = activeSensor();
         // never auto-start pumps without a working configured sensor
         if (c_.requireSensor && (!s->present())) {
@@ -289,27 +298,40 @@ private:
             if (elapsed_u32(nowMs, fillStartMs_) > c_.refillTimeoutMs) {   // rearmed EVERY cycle
                 fault_ = FaultCode::PumpTimeout; filling_ = false; safeState(); return;
             }
-            if (p >= c_.highThresh) { filling_ = false; lastOffMs_ = nowMs; pidI_ = 0.0f; if (sink_) setPumps(n, 0.0f); return; }
+            if (p >= c_.highThresh) { filling_ = false; lastOffMs_ = nowMs; pidI_ = 0.0f; setPumps(n, 0.0f, nowMs, false); return; }
             // PWM: regulate toward `target` with a PI law (uses target, review
             // #17). On/off: run at max within the low/high hysteresis band.
             float drive;
             if (c_.tankPwm) {
                 float err = c_.target - p;
-                pidI_ = clampv(pidI_ + err * c_.pidKi, -c_.max01, c_.max01);
+                pidI_ = clampv(pidI_ + err * c_.pidKi * dtS_, -c_.max01, c_.max01);
                 drive = clampv(c_.pidKp * err + pidI_, c_.min01, c_.max01);
             } else {
                 drive = c_.max01;
             }
-            setPumps(n, drive);
+            // Stagger the pumps in over cascadeDelayMs from the fill start so a
+            // multi-pump tank doesn't slam all motors on at once (#3 §10.2).
+            setPumps(n, drive, nowMs, true);
         } else if (sink_) {
-            setPumps(n, 0.0f);
+            setPumps(n, 0.0f, nowMs, false);
         }
     }
-    void setPumps(uint8_t n, float lvl) { if (sink_) for (uint8_t i=0;i<n;++i) sink_->setSourceLevel(i, lvl); }
+    // Drive n pumps to `lvl`. When cascade, pump i only turns on once i cascade
+    // delays have elapsed since the fill started; each pump advances on its own
+    // as regulate() is re-entered from update() every tick.
+    void setPumps(uint8_t n, float lvl, uint32_t nowMs, bool cascade) {
+        if (!sink_) return;
+        for (uint8_t i = 0; i < n; ++i) {
+            bool on = !cascade || lvl <= 0.0f ||
+                      elapsed_u32(nowMs, fillStartMs_) >= uint32_t(i) * c_.cascadeDelayMs;
+            sink_->setSourceLevel(i, on ? lvl : 0.0f);
+        }
+    }
     AirSensor sensor_; AirSensor* extSensor_ = nullptr;
     bool regulatedReady_ = false, filling_ = false;
     uint32_t fillStartMs_ = 0, lastOffMs_ = 0;
     float pidI_ = 0.0f;
+    uint32_t lastPidMs_ = 0; bool havePidTime_ = false; float dtS_ = 0.0f;
 };
 
 // ===========================================================================

@@ -32,6 +32,7 @@
 #define WEB_INTERFACE_H
 
 #include <ESPAsyncWebServer.h>
+#include <AsyncJson.h>          // AsyncCallbackJsonWebHandler (esphome fork)
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <Preferences.h>

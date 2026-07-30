@@ -249,3 +249,120 @@ TEST(engine_two_testair_sessions_independent) {
     for (uint32_t k = 45; k <= 60; ++k) eng.tick(k, k * 1000);
     CHECK(!r1.sink.gateOpen);               // #1 auto-closed
 }
+
+// Review #3 §2.2: a full queue must still admit safety commands. A NoteOff or
+// Panic evicts the newest queued non-priority command rather than being dropped.
+TEST(queue_panic_never_dropped_when_full) {
+    CommandQueue<4> q;
+    for (int i = 0; i < 4; ++i) {
+        Command on{CommandType::NoteOn}; on.a = uint8_t(60 + i); on.b = 100;
+        CHECK(q.push(on));
+    }
+    CHECK_EQ(q.size(), 4u);
+    // Full of non-priority: a Panic must still get in (evicting a NoteOn).
+    Command panic{CommandType::Panic};
+    CHECK(q.push(panic));
+    CHECK_EQ(q.size(), 4u);
+    CHECK_EQ(q.dropped(), 1u);       // one NoteOn evicted
+    // Panic jumped to the front — it pops first.
+    Command out;
+    CHECK(q.pop(out));
+    CHECK(out.type == CommandType::Panic);
+}
+
+// A full queue of ONLY non-priority commands admits a NoteOff by eviction; a
+// non-priority command on a full queue is dropped.
+TEST(queue_noteoff_evicts_but_noteon_dropped_when_full) {
+    CommandQueue<3> q;
+    for (int i = 0; i < 3; ++i) {
+        Command on{CommandType::NoteOn}; on.a = uint8_t(60 + i);
+        CHECK(q.push(on));
+    }
+    // Another NoteOn is rejected outright.
+    Command extra{CommandType::NoteOn}; extra.a = 72;
+    CHECK(!q.push(extra));
+    CHECK_EQ(q.dropped(), 1u);
+    // A NoteOff is admitted (evicting the newest NoteOn).
+    Command off{CommandType::NoteOff}; off.a = 60;
+    CHECK(q.push(off));
+    CHECK_EQ(q.dropped(), 2u);
+    CHECK_EQ(q.size(), 3u);
+    Command out;
+    CHECK(q.pop(out));
+    CHECK(out.type == CommandType::NoteOff);   // priority popped first
+}
+
+// A queue completely full of priority commands rejects a further priority
+// command (a redundant Panic behind a Panic is harmless), and pcount bookkeeping
+// stays consistent across pops so later non-priority pushes still fit.
+TEST(queue_priority_full_rejects_and_pcount_recovers) {
+    CommandQueue<2> q;
+    CHECK(q.push(Command{CommandType::Panic}));
+    CHECK(q.push(Command{CommandType::NoteOff}));
+    CHECK_EQ(q.size(), 2u);
+    // Full of priority — another priority command cannot be admitted.
+    CHECK(!q.push(Command{CommandType::Panic}));
+    CHECK_EQ(q.dropped(), 1u);
+    // Drain, then a normal NoteOn fits again (pcount decremented on pop).
+    Command out;
+    CHECK(q.pop(out)); CHECK(q.pop(out));
+    CHECK(q.empty());
+    Command on{CommandType::NoteOn}; on.a = 60;
+    CHECK(q.push(on));
+    // And a priority command still fits alongside it.
+    CHECK(q.push(Command{CommandType::NoteOff}));
+    CHECK_EQ(q.size(), 2u);
+}
+
+// Review #3 §6: direct commands (home/jog/test) address the instrument by its
+// STABLE id(), not the compact array position. Here id 3 lives at array index 0;
+// an index-based dispatch would treat instrument=3 as out of range (count=2) and
+// do nothing.
+TEST(engine_direct_command_routes_by_stable_id) {
+    InstRig a, b;
+    a.begin(3, icfg(1, 48, 84));            // stable id 3, array index 0
+    b.begin(1, icfg(2, 48, 84));            // stable id 1, array index 1
+    Instrument* insts[] = {&a.inst, &b.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q);
+    Command t{CommandType::TestAir}; t.instrument = 3; t.i16 = 50; q.push(t);
+    eng.tick(0, 0);
+    CHECK(a.sink.gateOpen);                 // routed to id 3 correctly
+    CHECK(!b.sink.gateOpen);
+    // And the auto-stop timer is keyed by id 3 too — it closes on timeout.
+    for (uint32_t k = 1; k <= 60; ++k) eng.tick(k, k * 1000);
+    CHECK(!a.sink.gateOpen);
+}
+
+// Review #3 §7.4: jog is a signed relative move carried in i16, applied to the
+// actuator's current position — a uint8_t absolute could not go negative.
+TEST(engine_jog_is_signed_relative) {
+    InstRig a;
+    a.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&a.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    Command pos{CommandType::TestActuator}; pos.instrument = 0; pos.a = 50; q.push(pos);
+    eng.tick(0, 0);
+    CHECK_NEAR(a.act.currentPositionMm(), 50.0f, 1e-3);
+    Command jog{CommandType::Jog}; jog.instrument = 0; jog.i16 = -12; q.push(jog);
+    eng.tick(1, 1000);
+    CHECK_NEAR(a.act.currentPositionMm(), 38.0f, 1e-3);   // 50 + (-12)
+}
+
+// Review #3 §7: a direct command records an execution ack — Accepted when it
+// reaches its instrument, Rejected when the target id doesn't exist — so a
+// client can tell "queued" from "actually acted on / silently dropped".
+TEST(engine_exec_ack_accepted_and_rejected) {
+    InstRig a;
+    a.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&a.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    Command home{CommandType::Home}; home.instrument = 0; home.seq = 42; q.push(home);
+    eng.tick(0, 0);
+    CHECK_EQ(eng.lastExec().seq, 42u);
+    CHECK(eng.lastExec().result == ExecResult::Accepted);
+    // A command to a non-existent instrument id is rejected, not silently lost.
+    Command bad{CommandType::Home}; bad.instrument = 9; bad.seq = 43; q.push(bad);
+    eng.tick(1, 1000);
+    CHECK_EQ(eng.lastExec().seq, 43u);
+    CHECK(eng.lastExec().result == ExecResult::Rejected);
+}

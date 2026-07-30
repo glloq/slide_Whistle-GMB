@@ -28,9 +28,25 @@ inline JsonValue endstopToJson(const EndstopConfig& e) {
     o.set("internalPullup", e.internalPullup);
     return o;
 }
-inline void endstopFromJson(const JsonValue& v, EndstopConfig& e) {
+// Reads an integer field and verifies it lies in [lo,hi] BEFORE it is narrowed
+// to a small integer type. Without this, e.g. channel:256 wraps to 0 (=OMNI)
+// and slips past the post-narrowing range check in validateStructural (review
+// #3 §11.3). Any out-of-range field clears `ok`, which aborts the decode.
+inline long checkedInt(const JsonValue& v, const char* key, long def,
+                       long lo, long hi, bool& ok) {
+    long r = v.int_or(key, def);
+    if (r < lo || r > hi) ok = false;
+    return r;
+}
+
+// Valid GPIO numbers on the supported ESP32 variants top out below this; -1
+// means "not wired". Pins outside this window are rejected pre-narrowing.
+static constexpr long PIN_LO = -1;
+static constexpr long PIN_HI = 48;
+
+inline void endstopFromJson(const JsonValue& v, EndstopConfig& e, bool& ok) {
     e.present = v.bool_or("present", e.present);
-    e.pin = (int8_t)v.int_or("pin", e.pin);
+    e.pin = (int8_t)checkedInt(v, "pin", e.pin, PIN_LO, PIN_HI, ok);
     e.normallyClosed = v.bool_or("normallyClosed", e.normallyClosed);
     e.activeHigh = v.bool_or("activeHigh", e.activeHigh);
     e.internalPullup = v.bool_or("internalPullup", e.internalPullup);
@@ -59,13 +75,13 @@ inline JsonValue servoToJson(const ServoMotionConfig& s) {
     v.set("cal", cal);
     return v;
 }
-inline void servoFromJson(const JsonValue& v, ServoMotionConfig& s) {
-    s.backend = (PwmBackend)v.int_or("backend", (int)s.backend);
-    s.pin = (int8_t)v.int_or("pin", s.pin);
-    s.pcaChannel = (uint8_t)v.int_or("pca", s.pcaChannel);
-    s.freqHz = (uint16_t)v.int_or("freqHz", s.freqHz);
-    s.minUs = (uint16_t)v.int_or("minUs", s.minUs);
-    s.maxUs = (uint16_t)v.int_or("maxUs", s.maxUs);
+inline void servoFromJson(const JsonValue& v, ServoMotionConfig& s, bool& ok) {
+    s.backend = (PwmBackend)checkedInt(v, "backend", (int)s.backend, 0, 1, ok);
+    s.pin = (int8_t)checkedInt(v, "pin", s.pin, PIN_LO, PIN_HI, ok);
+    s.pcaChannel = (uint8_t)checkedInt(v, "pca", s.pcaChannel, 0, 15, ok);
+    s.freqHz = (uint16_t)checkedInt(v, "freqHz", s.freqHz, 1, 400, ok);
+    s.minUs = (uint16_t)checkedInt(v, "minUs", s.minUs, 100, 3000, ok);
+    s.maxUs = (uint16_t)checkedInt(v, "maxUs", s.maxUs, 100, 3000, ok);
     s.invert = v.bool_or("invert", s.invert);
     s.restUs = (uint16_t)v.int_or("restUs", s.restUs);
     s.safeUs = (uint16_t)v.int_or("safeUs", s.safeUs);
@@ -230,13 +246,13 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     return v;
 }
 
-inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
+inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& ok) {
     in.enabled = v.bool_or("enabled", in.enabled);
     std::string nm = v.str_or("name", in.name);
     std::snprintf(in.name, sizeof(in.name), "%s", nm.c_str());
-    in.midiChannel = (uint8_t)v.int_or("channel", in.midiChannel);
-    in.noteMin = (uint8_t)v.int_or("noteMin", in.noteMin);
-    in.noteMax = (uint8_t)v.int_or("noteMax", in.noteMax);
+    in.midiChannel = (uint8_t)checkedInt(v, "channel", in.midiChannel, 0, 16, ok);
+    in.noteMin = (uint8_t)checkedInt(v, "noteMin", in.noteMin, 0, 127, ok);
+    in.noteMax = (uint8_t)checkedInt(v, "noteMax", in.noteMax, 0, 127, ok);
     in.watchdogMs = (uint32_t)v.num_or("watchdogMs", in.watchdogMs);
 
     if (auto* m = v.find("motion")) {
@@ -248,9 +264,9 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
         in.motion.softMaxMm = (float)m->num_or("softMaxMm", in.motion.softMaxMm);
         if (auto* st = m->find("stepper")) {
             auto& sp = in.motion.stepper;
-            sp.stepPin = (int8_t)st->int_or("stepPin", sp.stepPin);
-            sp.dirPin = (int8_t)st->int_or("dirPin", sp.dirPin);
-            sp.enablePin = (int8_t)st->int_or("enablePin", sp.enablePin);
+            sp.stepPin = (int8_t)checkedInt(*st, "stepPin", sp.stepPin, PIN_LO, PIN_HI, ok);
+            sp.dirPin = (int8_t)checkedInt(*st, "dirPin", sp.dirPin, PIN_LO, PIN_HI, ok);
+            sp.enablePin = (int8_t)checkedInt(*st, "enablePin", sp.enablePin, PIN_LO, PIN_HI, ok);
             sp.enableActiveHigh = st->bool_or("enableActiveHigh", sp.enableActiveHigh);
             sp.invertDir = st->bool_or("invertDir", sp.invertDir);
             sp.stepsPerRev = (uint16_t)st->int_or("stepsPerRev", sp.stepsPerRev);
@@ -264,12 +280,12 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
             sp.phaseTimeoutMs = (uint32_t)st->num_or("phaseTimeoutMs", sp.phaseTimeoutMs);
             sp.idleDisableMs = (uint32_t)st->num_or("idleDisableMs", sp.idleDisableMs);
             sp.alwaysHold = st->bool_or("alwaysHold", sp.alwaysHold);
-            if (auto* e = st->find("endstopMin")) endstopFromJson(*e, sp.endstopMin);
-            else if (st->has("endstopPin")) sp.endstopMin.pin = (int8_t)st->int_or("endstopPin", sp.endstopMin.pin);
-            if (auto* e = st->find("endstopMax")) endstopFromJson(*e, sp.endstopMax);
+            if (auto* e = st->find("endstopMin")) endstopFromJson(*e, sp.endstopMin, ok);
+            else if (st->has("endstopPin")) sp.endstopMin.pin = (int8_t)checkedInt(*st, "endstopPin", sp.endstopMin.pin, PIN_LO, PIN_HI, ok);
+            if (auto* e = st->find("endstopMax")) endstopFromJson(*e, sp.endstopMax, ok);
         }
-        if (auto* sa = m->find("servoA")) servoFromJson(*sa, in.motion.servoA);
-        if (auto* sb = m->find("servoB")) servoFromJson(*sb, in.motion.servoB);
+        if (auto* sa = m->find("servoA")) servoFromJson(*sa, in.motion.servoA, ok);
+        if (auto* sb = m->find("servoB")) servoFromJson(*sb, in.motion.servoB, ok);
         in.motion.servoBEnabled = m->bool_or("servoBEnabled", in.motion.servoBEnabled);
         in.motion.dualMode = (DualSyncMode)m->int_or("dualMode", (int)in.motion.dualMode);
     }
@@ -277,10 +293,13 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
         if (auto* src = a->find("source")) {
             auto& so = in.air.source;
             so.type = (AirSourceType)src->int_or("type", (int)so.type);
-            so.pumpCount = (uint8_t)src->int_or("pumpCount", so.pumpCount);
+            so.pumpCount = (uint8_t)checkedInt(*src, "pumpCount", so.pumpCount, 0, MAX_PUMPS, ok);
             if (auto* pins = src->find("pins"))
-                for (int p = 0; p < MAX_PUMPS && p < (int)pins->arr.size(); ++p)
-                    so.pin[p] = (int8_t)pins->arr[p].asInt(so.pin[p]);
+                for (int p = 0; p < MAX_PUMPS && p < (int)pins->arr.size(); ++p) {
+                    long pv = pins->arr[p].asInt(so.pin[p]);
+                    if (pv < PIN_LO || pv > PIN_HI) ok = false;
+                    so.pin[p] = (int8_t)pv;
+                }
             so.idle01 = (float)src->num_or("idle01", so.idle01);
             so.min01 = (float)src->num_or("min01", so.min01);
             so.max01 = (float)src->num_or("max01", so.max01);
@@ -303,9 +322,9 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
         if (auto* g = a->find("gate")) {
             auto& gc = in.air.gate;
             gc.type = (AirGateType)g->int_or("type", (int)gc.type);
-            gc.pin = (int8_t)g->int_or("pin", gc.pin);
-            gc.backend = (PwmBackend)g->int_or("backend", (int)gc.backend);
-            gc.pcaChannel = (uint8_t)g->int_or("pca", gc.pcaChannel);
+            gc.pin = (int8_t)checkedInt(*g, "pin", gc.pin, PIN_LO, PIN_HI, ok);
+            gc.backend = (PwmBackend)checkedInt(*g, "backend", (int)gc.backend, 0, 1, ok);
+            gc.pcaChannel = (uint8_t)checkedInt(*g, "pca", gc.pcaChannel, 0, 15, ok);
             gc.activeHigh = g->bool_or("activeHigh", gc.activeHigh);
             gc.openTimeoutMs = (uint32_t)g->num_or("openTimeoutMs", gc.openTimeoutMs);
             gc.peak01 = (float)g->num_or("peak01", gc.peak01);
@@ -321,12 +340,12 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
         if (auto* f = a->find("flow")) {
             auto& fc = in.air.flow;
             fc.type = (FlowControlType)f->int_or("type", (int)fc.type);
-            fc.pin = (int8_t)f->int_or("pin", fc.pin);
-            fc.backend = (PwmBackend)f->int_or("backend", (int)fc.backend);
-            fc.pcaChannel = (uint8_t)f->int_or("pca", fc.pcaChannel);
-            fc.min = (uint8_t)f->int_or("min", fc.min);
-            fc.nominal = (uint8_t)f->int_or("nominal", fc.nominal);
-            fc.max = (uint8_t)f->int_or("max", fc.max);
+            fc.pin = (int8_t)checkedInt(*f, "pin", fc.pin, PIN_LO, PIN_HI, ok);
+            fc.backend = (PwmBackend)checkedInt(*f, "backend", (int)fc.backend, 0, 1, ok);
+            fc.pcaChannel = (uint8_t)checkedInt(*f, "pca", fc.pcaChannel, 0, 15, ok);
+            fc.min = (uint8_t)checkedInt(*f, "min", fc.min, 0, 127, ok);
+            fc.nominal = (uint8_t)checkedInt(*f, "nominal", fc.nominal, 0, 127, ok);
+            fc.max = (uint8_t)checkedInt(*f, "max", fc.max, 0, 127, ok);
             fc.rest01 = (float)f->num_or("rest01", fc.rest01);
             fc.curve = (VelocityCurve)f->int_or("curve", (int)fc.curve);
             fc.expo = (float)f->num_or("expo", fc.expo);
@@ -337,9 +356,9 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
         if (auto* ang = a->find("angle")) {
             auto& ac = in.air.angle;
             ac.enabled = ang->bool_or("enabled", ac.enabled);
-            ac.pin = (int8_t)ang->int_or("pin", ac.pin);
-            ac.backend = (PwmBackend)ang->int_or("backend", (int)ac.backend);
-            ac.pcaChannel = (uint8_t)ang->int_or("pca", ac.pcaChannel);
+            ac.pin = (int8_t)checkedInt(*ang, "pin", ac.pin, PIN_LO, PIN_HI, ok);
+            ac.backend = (PwmBackend)checkedInt(*ang, "backend", (int)ac.backend, 0, 1, ok);
+            ac.pcaChannel = (uint8_t)checkedInt(*ang, "pca", ac.pcaChannel, 0, 15, ok);
             ac.rest01 = (float)ang->num_or("rest01", ac.rest01);
             ac.min01 = (float)ang->num_or("min01", ac.min01);
             ac.nominal01 = (float)ang->num_or("nominal01", ac.nominal01);
@@ -351,8 +370,8 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
         if (auto* se = a->find("sensor")) {
             auto& sc = in.air.sensor;
             sc.type = (AirSensorType)se->int_or("type", (int)sc.type);
-            sc.pin = (int8_t)se->int_or("pin", sc.pin);
-            sc.i2cAddr = (uint8_t)se->int_or("i2cAddr", sc.i2cAddr);
+            sc.pin = (int8_t)checkedInt(*se, "pin", sc.pin, PIN_LO, PIN_HI, ok);
+            sc.i2cAddr = (uint8_t)checkedInt(*se, "i2cAddr", sc.i2cAddr, 0, 127, ok);
             sc.rawMin = (float)se->num_or("rawMin", sc.rawMin);
             sc.rawMax = (float)se->num_or("rawMax", sc.rawMax);
             sc.physMin = (float)se->num_or("physMin", sc.physMin);
@@ -378,12 +397,12 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
         in.seq.vibratoRateHz = (float)sq->num_or("vibratoRateHz", in.seq.vibratoRateHz);
     }
     if (auto* cc = v.find("cc")) {
-        in.cc.breath = (uint8_t)cc->int_or("breath", in.cc.breath);
-        in.cc.expression = (uint8_t)cc->int_or("expression", in.cc.expression);
-        in.cc.volume = (uint8_t)cc->int_or("volume", in.cc.volume);
-        in.cc.vibrato = (uint8_t)cc->int_or("vibrato", in.cc.vibrato);
-        in.cc.sustain = (uint8_t)cc->int_or("sustain", in.cc.sustain);
-        in.cc.angle = (uint8_t)cc->int_or("angle", in.cc.angle);
+        in.cc.breath = (uint8_t)checkedInt(*cc, "breath", in.cc.breath, 0, 127, ok);
+        in.cc.expression = (uint8_t)checkedInt(*cc, "expression", in.cc.expression, 0, 127, ok);
+        in.cc.volume = (uint8_t)checkedInt(*cc, "volume", in.cc.volume, 0, 127, ok);
+        in.cc.vibrato = (uint8_t)checkedInt(*cc, "vibrato", in.cc.vibrato, 0, 127, ok);
+        in.cc.sustain = (uint8_t)checkedInt(*cc, "sustain", in.cc.sustain, 0, 127, ok);
+        in.cc.angle = (uint8_t)checkedInt(*cc, "angle", in.cc.angle, 0, 127, ok);
         in.cc.vibratoEnabled = cc->bool_or("vibratoEnabled", in.cc.vibratoEnabled);
     }
     if (auto* cal = v.find("calibration")) {
@@ -404,6 +423,7 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
 
 // --- validation --------------------------------------------------------------
 inline bool enumOk(int v, int hi) { return v >= 0 && v <= hi; }
+inline bool is01(float x) { return std::isfinite(x) && x >= 0.f && x <= 1.f; }
 
 // Full structural validation (review items #26/#27). Returns "" if valid, else
 // a short reason. Runs on the decoded struct before it is ever accepted.
@@ -455,6 +475,24 @@ inline std::string validateStructural(const RuntimeConfig& c) {
         // finite geometry
         if (!(in.motion.travelMm > 0.f) || !std::isfinite(in.motion.travelMm)) return "travelMm invalid";
         if (in.motion.softMinMm > in.motion.softMaxMm) return "softMin>softMax";
+        // motion dynamics must be positive & finite for a driven axis (#3 §11.4)
+        if (in.motion.type != SlideDriveType::Disabled) {
+            if (!(in.motion.maxSpeedMmS > 0.f) || !std::isfinite(in.motion.maxSpeedMmS)) return "maxSpeedMmS must be > 0";
+            if (!(in.motion.accelMmS2 > 0.f) || !std::isfinite(in.motion.accelMmS2)) return "accelMmS2 must be > 0";
+        }
+        if (in.motion.type == SlideDriveType::StepDir)
+            if (!(in.motion.stepper.stepsPerMm > 0.f) || !std::isfinite(in.motion.stepper.stepsPerMm)) return "stepsPerMm must be > 0";
+        // servo pulse windows must be ordered (min < max) so mm→µs never inverts
+        for (auto* sv : { &in.motion.servoA, &in.motion.servoB })
+            if (!(sv->minUs < sv->maxUs)) return "servo minUs<maxUs violated";
+        // normalized drive levels must lie in 0..1 (#3 §11.4)
+        if (!is01(so.idle01) || !is01(so.min01) || !is01(so.max01) || !is01(so.startBoost01)) return "source level not in 0..1";
+        if (!is01(g.peak01) || !is01(g.hold01) || !is01(g.closed01) || !is01(g.open01)) return "gate level not in 0..1";
+        if (!is01(in.air.flow.rest01)) return "flow rest01 not in 0..1";
+        if (in.air.angle.enabled) {
+            const auto& ac = in.air.angle;
+            if (!is01(ac.rest01) || !is01(ac.min01) || !is01(ac.nominal01) || !is01(ac.max01)) return "angle level not in 0..1";
+        }
         // note table monotonic (non-decreasing positions)
         if (in.map.firstNonMonotonic() >= 0) return "note table not monotonic";
     }
@@ -547,15 +585,21 @@ inline ConfigDecodeResult configFromJson(const std::string& text, RuntimeConfig&
             cfg.midi.rtp = mi->bool_or("rtp", cfg.midi.rtp);
             cfg.midi.usb = mi->bool_or("usb", cfg.midi.usb);
             cfg.midi.webKeyboard = mi->bool_or("webKeyboard", cfg.midi.webKeyboard);
-            cfg.midi.transpose = (int8_t)mi->int_or("transpose", cfg.midi.transpose);
+            long tr = mi->int_or("transpose", cfg.midi.transpose);
+            if (tr < -64 || tr > 63) { r.error = "midi.transpose out of -64..63"; return r; }
+            cfg.midi.transpose = (int8_t)tr;
         }
         long count = root->int_or("instrumentCount", 1);
         if (count < 0) count = 0;
         if (count > MAX_INSTRUMENTS) count = MAX_INSTRUMENTS;
         cfg.instrumentCount = (uint8_t)count;
+        bool ok = true;
         if (auto* arr = root->find("instruments"))
             for (int i = 0; i < cfg.instrumentCount && i < (int)arr->arr.size(); ++i)
-                instrumentFromJson(arr->arr[i], cfg.instruments[i]);
+                instrumentFromJson(arr->arr[i], cfg.instruments[i], ok);
+        // Reject out-of-range integers rather than accepting a wrapped value
+        // that happens to land in the valid post-narrowing window (#3 §11.3).
+        if (!ok) { r.error = "integer field out of range"; return r; }
     }
 
     // full structural + enum validation before accepting (transactional)

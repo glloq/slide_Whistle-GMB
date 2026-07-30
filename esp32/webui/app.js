@@ -13,6 +13,7 @@ import { MidiSocket } from "./js/ws.js";
 import { h, clear, patchText } from "./js/dom.js";
 import { presetCatalog } from "./js/presets-meta.js";
 import { Wizard, WIZARD_STEPS } from "./js/wizard.js";
+import { applyWizardPatch } from "./js/config.js";
 
 const state = {
   // Only the SESSION token is kept in the browser — never the admin secret (#5).
@@ -192,13 +193,9 @@ async function finishWizard() {
   await guard(async () => {
     if (patch.airPreset != null) await api.applyPreset(patch.airPreset, 0);
     await refreshConfig();
-    // merge the wizard's instrument choices onto the (preset-filled) config
-    const inst = (state.config.instruments && state.config.instruments[0]) || {};
-    inst.enabled = true;
-    inst.name = patch.name; inst.midiChannel = patch.channel;
-    inst.noteMin = patch.noteMin; inst.noteMax = patch.noteMax;
-    inst.motion = Object.assign({}, inst.motion, patch.motion);
-    state.config.instruments[0] = inst;
+    // Deep-merge the wizard's instrument choices onto the (preset-filled) config
+    // and apply the MIDI source, so no answer is dropped (#3 §14.3/§14.4).
+    state.config = applyWizardPatch(state.config, patch);
     const r = await api.putConfig(state.config);
     if (r.restart_required) showRestart(true);
     await refreshConfig();
@@ -242,10 +239,24 @@ function viewDiag(root) {
   const card = h("div", { class: "card" }, [h("h2", { text: "Live status" })]);
   const list = h("div", { class: "mono", id: "statusList" });
   card.appendChild(list);
-  card.appendChild(h("div", { class: "row" }, [
-    h("button", { class: "btn", text: "Home instrument 0", onclick: () => guard(() => api.command({ type: "home", instrument: 0 }), "Homing…") }),
-    h("button", { class: "btn", text: "Factory reset", onclick: () => confirm("Reset to defaults?") && guard(() => api.factoryReset(), "Reset done").then(refreshConfig) }),
-  ]));
+  // One Home button per CONFIGURED, enabled instrument, addressed by its stable
+  // id — not a single hardcoded "instrument 0" (#3 §14.8).
+  const controls = h("div", { class: "row" });
+  const insts = (state.config && state.config.instruments) || [];
+  let any = false;
+  insts.forEach((inst, id) => {
+    if (inst && inst.enabled === false) return;
+    any = true;
+    const label = inst && inst.name ? `Home ${inst.name}` : `Home instrument ${id}`;
+    controls.appendChild(h("button", { class: "btn", text: label,
+      onclick: () => guard(() => api.command({ type: "home", instrument: id }), "Homing…") }));
+  });
+  if (!any)
+    controls.appendChild(h("button", { class: "btn", text: "Home instrument 0",
+      onclick: () => guard(() => api.command({ type: "home", instrument: 0 }), "Homing…") }));
+  controls.appendChild(h("button", { class: "btn", text: "Factory reset",
+    onclick: () => confirm("Reset to defaults?") && guard(() => api.factoryReset(), "Reset done").then(refreshConfig) }));
+  card.appendChild(controls);
   root.appendChild(card);
 }
 

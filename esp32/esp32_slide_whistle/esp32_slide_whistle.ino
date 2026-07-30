@@ -29,7 +29,7 @@
 
 Orchestra        orchestra;
 PressureControl  pressure;
-MIDIHandler      midi;
+MIDIHandler      midiHandler;
 WiFiManager      wifiMgr;
 DemoPlayer       demoPlayer;
 StressTester     stressTester;
@@ -104,7 +104,7 @@ void onMidiCC(uint8_t ch, uint8_t cc, uint8_t value) {
 void taskWeb(void* param) {
   (void)param;
   wifiMgr.begin();
-  webIface.begin(&orchestra, &pressure, &midi, &wifiMgr, &demoPlayer);
+  webIface.begin(&orchestra, &pressure, &midiHandler, &wifiMgr, &demoPlayer);
 
   for (;;) {
     webIface.update();
@@ -126,22 +126,22 @@ void taskMotion(void* param) {
   pressure.begin(DEFAULT_PRESSURE_CONFIG);
 #endif
 
-  midi.begin();
-  midi.setNoteOnCallback(onMidiNoteOn);
-  midi.setNoteOffCallback(onMidiNoteOff);
-  midi.setPitchBendCallback(onMidiPitchBend);
-  midi.setAftertouchCallback(onMidiAftertouch);
-  midi.setCCCallback(onMidiCC);
+  midiHandler.begin();
+  midiHandler.setNoteOnCallback(onMidiNoteOn);
+  midiHandler.setNoteOffCallback(onMidiNoteOff);
+  midiHandler.setPitchBendCallback(onMidiPitchBend);
+  midiHandler.setAftertouchCallback(onMidiAftertouch);
+  midiHandler.setCCCallback(onMidiCC);
 
   // DemoPlayer : ses callbacks passent par MIDIHandler::triggerNoteOn/Off
   // → ils transitent par toute la chaîne (log MIDI + dispatch Orchestra)
   demoPlayer.setCallbacks(
-    [](uint8_t ch, uint8_t note, uint8_t vel) { midi.triggerNoteOn(ch, note, vel); },
-    [](uint8_t ch, uint8_t note)              { midi.triggerNoteOff(ch, note); }
+    [](uint8_t ch, uint8_t note, uint8_t vel) { midiHandler.triggerNoteOn(ch, note, vel); },
+    [](uint8_t ch, uint8_t note)              { midiHandler.triggerNoteOff(ch, note); }
   );
 
   // StressTester partage le même chemin pour passer dans le routing/log
-  stressTester.begin(&orchestra, &midi);
+  stressTester.begin(&orchestra, &midiHandler);
 
 #if LED_ENABLED
   digitalWrite(STATUS_LED_PIN, HIGH);
@@ -188,7 +188,7 @@ void taskMotion(void* param) {
   for (;;) {
 
     // 1. MIDI
-    midi.update();
+    midiHandler.update();
 
     // 2. Motion + air (sous mutex)
     xSemaphoreTake(motionMutex, portMAX_DELAY);

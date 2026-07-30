@@ -8,11 +8,13 @@
  *
  * Sources :
  *   MIDI_SOURCE_SERIAL → DIN-5 via UART2 (GPIO16 RX2)
- *   MIDI_SOURCE_BLE    → BLE MIDI (lathoub/Arduino-BLE-MIDI)
+ *   MIDI_SOURCE_BLE    → BLE MIDI (max22/ESP32-BLE-MIDI)
  *
  * Bibliothèques :
  *   MIDI Library  — FortySevenEffects/Arduino-MIDI-Library
- *   BLE-MIDI      — lathoub/Arduino-BLE-MIDI
+ *   BLE-MIDI      — max22/ESP32-BLE-MIDI (fournit <BLEMidi.h> + BLEMidiServer).
+ *                   L'ancienne dépendance lathoub/Arduino-BLE-MIDI n'exposait
+ *                   PAS <BLEMidi.h> sous ce nom → build legacy cassé (review #1).
  */
 
 #ifndef MIDI_HANDLER_H
@@ -102,8 +104,11 @@ private:
   static void _onBleNoteOff(uint8_t ch, uint8_t note, uint8_t, uint16_t) {
     if (_instance) _instance->dispatchNoteOff(ch, note);
   }
-  static void _onBlePitchBend(uint8_t ch, int16_t val, uint16_t) {
-    if (_instance) _instance->dispatchPitchBend(ch, (int)val);
+  // max22/ESP32-BLE-MIDI delivers the raw 14-bit pitch-bend value (0..16383,
+  // centre 8192) as a uint16_t. The dispatch path expects a signed offset from
+  // centre, matching the FortySevenEffects serial handler, so recentre here.
+  static void _onBlePitchBend(uint8_t ch, uint16_t val, uint16_t) {
+    if (_instance) _instance->dispatchPitchBend(ch, (int)val - 8192);
   }
   static void _onBleAftertouch(uint8_t ch, uint8_t pressure, uint16_t) {
     if (_instance) _instance->dispatchAftertouch(ch, pressure);

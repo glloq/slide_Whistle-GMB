@@ -45,6 +45,56 @@ export function configNeedsRestart(oldCfg, newCfg) {
   return false;
 }
 
+// Recursive merge of plain objects: nested objects are merged key-by-key rather
+// than replaced wholesale, so applying a wizard patch that only sets
+// motion.stepper.stepPin keeps the preset's other stepper fields (#3 §14.4).
+export function deepMerge(base, patch) {
+  const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
+  if (!isObj(base) || !isObj(patch)) return patch === undefined ? base : patch;
+  const out = { ...base };
+  for (const k of Object.keys(patch)) {
+    out[k] = isObj(out[k]) && isObj(patch[k]) ? deepMerge(out[k], patch[k]) : patch[k];
+  }
+  return out;
+}
+
+// Map the wizard's single midiSource choice onto the config.midi transport
+// flags (#3 §14.3). Unknown/empty leaves the flags untouched.
+export function midiFlagsFor(source) {
+  switch (source) {
+    case "serial":
+    case "din":         return { din: true };
+    case "ble":         return { ble: true };
+    case "rtp":         return { rtp: true };
+    case "usb":         return { usb: true };
+    case "web":
+    case "webKeyboard": return { webKeyboard: true };
+    default:            return {};
+  }
+}
+
+// Apply a wizard buildConfigPatch() onto a full config, in place-safe fashion
+// (returns a new config object). Deep-merges motion and applies the MIDI source
+// so NO wizard choice is silently dropped (#3 §14.3/§14.4). Pure + unit-tested.
+export function applyWizardPatch(config, patch) {
+  const cfg = { ...(config || {}) };
+  const insts = Array.isArray(cfg.instruments) ? cfg.instruments.slice() : [];
+  const prev = insts[0] || {};
+  const inst = { ...prev };
+  inst.enabled = true;
+  inst.name = patch.name;
+  inst.midiChannel = patch.channel;
+  inst.noteMin = patch.noteMin;
+  inst.noteMax = patch.noteMax;
+  inst.motion = deepMerge(prev.motion || {}, patch.motion || {});
+  insts[0] = inst;
+  cfg.instruments = insts;
+  if (!cfg.instrumentCount || cfg.instrumentCount < 1) cfg.instrumentCount = insts.length;
+  if (patch.midiSource != null && patch.midiSource !== "")
+    cfg.midi = { ...(cfg.midi || {}), ...midiFlagsFor(patch.midiSource) };
+  return cfg;
+}
+
 // Tracks whether the working config differs from the last-saved one.
 export class UnsavedTracker {
   constructor(saved) { this.saved = JSON.stringify(saved ?? null); }

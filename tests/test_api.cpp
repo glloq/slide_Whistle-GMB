@@ -108,6 +108,18 @@ TEST(api_command_panic_public_enqueues) {
     CHECK(g.sink.cmds[0].type == CommandType::Panic);
 }
 
+TEST(api_command_stamps_incrementing_seq) {
+    Rig g; g.begin();
+    ApiReply a = g.req("POST", "/api/v1/command", "{\"type\":\"panic\"}");
+    ApiReply b = g.req("POST", "/api/v1/command", "{\"type\":\"panic\"}");
+    CHECK_EQ(a.status, 202); CHECK_EQ(b.status, 202);
+    // enqueued commands carry a monotonic seq (#3 §7) …
+    CHECK(g.sink.cmds[0].seq >= 1u);
+    CHECK_EQ(g.sink.cmds[1].seq, g.sink.cmds[0].seq + 1);
+    // … which the client also gets back to match against /status lastAck.
+    CHECK(Rig::parse(a.body).find("data")->num_or("seq", 0) >= 1.0);
+}
+
 TEST(api_command_protected_needs_auth) {
     Rig g; g.begin();
     ApiReply r = g.req("POST", "/api/v1/command", "{\"type\":\"home\",\"instrument\":0}");
