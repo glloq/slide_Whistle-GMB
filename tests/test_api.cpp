@@ -120,6 +120,20 @@ TEST(api_command_stamps_incrementing_seq) {
     CHECK(Rig::parse(a.body).find("data")->num_or("seq", 0) >= 1.0);
 }
 
+TEST(api_command_rejects_out_of_range_fields) {
+    Rig g; g.begin();
+    // channel 256 would wrap to 0 (OMNI) if narrowed before validation (#4 §P1).
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"channel\":256,\"note\":60}", g.adminTok).status, 400);
+    // note 300 would wrap to 44.
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"note\":300}", g.adminTok).status, 400);
+    // instrument 256 would wrap to 0.
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"home\",\"instrument\":256}", g.adminTok).status, 400);
+    // testAir duration beyond int16 would wrap negative.
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"testAir\",\"instrument\":0,\"ms\":40000}", g.adminTok).status, 400);
+    // a valid one still passes.
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"channel\":1,\"note\":60}", g.adminTok).status, 202);
+}
+
 TEST(api_command_protected_needs_auth) {
     Rig g; g.begin();
     ApiReply r = g.req("POST", "/api/v1/command", "{\"type\":\"home\",\"instrument\":0}");

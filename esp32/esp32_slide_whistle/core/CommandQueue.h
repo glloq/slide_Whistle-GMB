@@ -34,7 +34,8 @@ enum class CommandType : uint8_t {
     NoteOn, NoteOff, ControlChange, PitchBend, Panic,
     Home, Jog, TestActuator, TestAir,
     ApplyDynamicConfig, StartCalibration, CancelCalibration,
-    Rearm,   // acknowledge fault + re-arm actuator/air (and re-home) after panic
+    Rearm,        // acknowledge fault + re-arm actuator/air (and re-home) after panic
+    SafeRestart,  // RT task brings everything to a safe state, then the system reboots
 };
 
 struct Command {

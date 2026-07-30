@@ -85,8 +85,28 @@ public:
     // enqueued a command with a given seq can confirm execution by matching it.
     const ExecAck& lastExec() const { return lastAck_; }
 
+    // Global fault gate (review #4 §P0). When set, the engine refuses every
+    // actuation command (NoteOn/CC/PitchBend/Jog/TestActuator/TestAir); only
+    // safety/recovery commands (Panic, NoteOff, Home, Rearm, SafeRestart,
+    // config/calibration) still pass — so the announced Fault state and the real
+    // behaviour agree. MainApp drives this from the system state.
+    void setCommandsBlocked(bool b) { blocked_ = b; }
+    bool commandsBlocked() const { return blocked_; }
+
+    // Set once the RT task has brought everything to a safe state in response to
+    // a SafeRestart command; the (network) task polls this before rebooting so
+    // the reboot is never issued while the RT task still owns the actuators.
+    bool safeRestartDone() const { return safeRestartDone_; }
+
 private:
     void ack(const Command& c, ExecResult r) { lastAck_ = ExecAck{ c.seq, c.type, r }; }
+
+    // Actuation commands that must be refused while a global fault is latched.
+    static bool isActuation(CommandType t) {
+        return t == CommandType::NoteOn || t == CommandType::ControlChange ||
+               t == CommandType::PitchBend || t == CommandType::Jog ||
+               t == CommandType::TestActuator || t == CommandType::TestAir;
+    }
 
     // Resolve a direct command's target by the instrument's STABLE id(), so
     // commands keep addressing the same physical flute even when the live set
@@ -98,6 +118,14 @@ private:
     }
 
     void dispatch(const Command& c, uint32_t nowMs) {
+        // Global fault: refuse actuation, but let safety/recovery through so the
+        // system can still be stopped and re-armed (review #4 §P0).
+        if (blocked_ && isActuation(c.type)) {
+            if (c.type != CommandType::NoteOn && c.type != CommandType::ControlChange &&
+                c.type != CommandType::PitchBend)
+                ack(c, ExecResult::Rejected);   // direct commands get a rejection ack
+            return;
+        }
         switch (c.type) {
             case CommandType::NoteOn:
                 for (uint8_t i = 0; i < count_; ++i)
@@ -125,6 +153,14 @@ private:
             }
             case CommandType::Panic:
                 panicAll(nowMs);
+                break;
+            case CommandType::SafeRestart:
+                // The RT task (sole owner of the actuators) brings everything to
+                // a safe state; the network task waits for safeRestartDone() and
+                // only then reboots — no cross-core actuator access (review #4 §P0).
+                panicAll(nowMs);
+                safeRestartDone_ = true;
+                ack(c, ExecResult::Accepted);
                 break;
             case CommandType::Home: {
                 // Direct commands address instruments by STABLE id(), not the
@@ -202,6 +238,8 @@ private:
     bool               testAirActive_[MAX_INSTRUMENTS] = {false};   // per-instrument TestAir
     uint32_t           testAirStopMs_[MAX_INSTRUMENTS] = {0};
     ExecAck            lastAck_{};                                  // last direct-command ack
+    bool               blocked_ = false;                           // global-fault command gate
+    bool               safeRestartDone_ = false;                   // RT reached safe state for reboot
 };
 
 } // namespace swc

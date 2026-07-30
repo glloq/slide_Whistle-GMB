@@ -366,3 +366,48 @@ TEST(engine_exec_ack_accepted_and_rejected) {
     CHECK_EQ(eng.lastExec().seq, 43u);
     CHECK(eng.lastExec().result == ExecResult::Rejected);
 }
+
+// Review #4 §P0: while a global fault is latched the engine refuses actuation
+// commands (NoteOn/CC/Jog/Test) but still honours safety/recovery (NoteOff,
+// Panic, Home, Rearm), so the announced Fault state matches real behaviour.
+TEST(engine_fault_gate_refuses_actuation) {
+    InstRig a;
+    a.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&a.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    eng.setCommandsBlocked(true);
+    // NoteOn is dropped — no air opens.
+    Command on{CommandType::NoteOn}; on.channel = 1; on.a = 60; on.b = 100; q.push(on);
+    for (int k = 0; k < 4; ++k) eng.tick(k, k * 1000);
+    CHECK(!a.sink.gateOpen);
+    // A direct actuation (TestAir) is rejected with an ack.
+    Command t{CommandType::TestAir}; t.instrument = 0; t.seq = 7; q.push(t);
+    eng.tick(5, 5000);
+    CHECK(eng.lastExec().result == ExecResult::Rejected);
+    CHECK(!a.sink.gateOpen);
+    // Recovery still works: unblock, then a note plays.
+    eng.setCommandsBlocked(false);
+    Command on2{CommandType::NoteOn}; on2.channel = 1; on2.a = 60; on2.b = 100; q.push(on2);
+    for (int k = 6; k < 10; ++k) eng.tick(k, k * 1000);
+    CHECK(a.sink.gateOpen);
+}
+
+// Review #4 §P0: SafeRestart is executed by the RT task — it brings everything
+// to a safe state and only then flags done, so the reboot never races the RT
+// task's ownership of the actuators.
+TEST(engine_safe_restart_reaches_safe_state) {
+    InstRig a;
+    a.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&a.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    // start a note so there is air to shut off
+    Command on{CommandType::NoteOn}; on.channel = 1; on.a = 60; on.b = 100; q.push(on);
+    for (int k = 0; k < 4; ++k) eng.tick(k, k * 1000);
+    CHECK(a.sink.gateOpen);
+    CHECK(!eng.safeRestartDone());
+    Command sr{CommandType::SafeRestart}; sr.seq = 9; q.push(sr);
+    eng.tick(5, 5000);
+    CHECK(eng.safeRestartDone());                 // RT reached safe state
+    CHECK(!a.sink.gateOpen);                       // air closed
+    CHECK(eng.lastExec().result == ExecResult::Accepted);
+}

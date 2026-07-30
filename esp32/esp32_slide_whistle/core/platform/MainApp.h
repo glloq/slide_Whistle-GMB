@@ -95,7 +95,18 @@ public:
 
     void loop() {
         ws_.cleanupClients();
-        if (router_.restartRequested()) { delaySafeRestart(); }
+        // Restart is owned by the RT task: enqueue a SafeRestart command once,
+        // then wait for the RT task to reach a safe state before rebooting — the
+        // network task never touches the actuators directly (review #4 §P0).
+        if (router_.restartRequested() && !safeRestartEnqueued_) {
+            Command c{}; c.type = CommandType::SafeRestart;
+            queue_.push(c);
+            safeRestartEnqueued_ = true;
+        }
+        if (safeRestartEnqueued_ && engine_.safeRestartDone()) {
+            delay(200);          // let the safe-state writes settle / clients flush
+            ESP.restart();
+        }
         delay(5);
     }
 
@@ -279,15 +290,12 @@ private:
                 // in the RT engine clears the faults and requests homing.
                 if (!anyActuatorFault() && !anyAirFault()) state_ = SysState::NeedsHoming;
             }
+            // Keep the command gate consistent with the announced state: in Fault
+            // the engine refuses actuation commands (review #4 §P0).
+            engine_.setCommandsBlocked(state_ == SysState::Fault);
             publishSnapshot();                        // lock-free telemetry (#37)
             vTaskDelayUntil(&last, period);            // deterministic cadence
         }
-    }
-
-    void delaySafeRestart() {
-        engine_.panicAll(millis());       // safe state before reboot (OTA/restart)
-        delay(200);
-        ESP.restart();
     }
 
     static uint32_t millisNow() { return millis(); }
@@ -381,6 +389,7 @@ private:
     std::string      apPassword_;
     bool             fsOk_ = false, firstBoot_ = true, fsFormatted_ = false;
     volatile SysState state_ = SysState::Boot;
+    bool     safeRestartEnqueued_ = false;
 
 public:
     MainApp() { status_.app = this; }

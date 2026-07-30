@@ -218,16 +218,31 @@ private:
         else if (type == "rearm")        c.type = CommandType::Rearm;
         else return reply(400, apiErr("BAD_COMMAND", "unknown command type", "type"));
 
-        c.channel    = (uint8_t)body.int_or("channel", 1);
-        c.a          = (uint8_t)body.int_or("a", body.int_or("note", body.int_or("cc", 0)));
-        c.b          = (uint8_t)body.int_or("b", body.int_or("velocity", body.int_or("value", 0)));
-        c.instrument = (uint8_t)body.int_or("instrument", 0);
+        // Validate raw integer ranges BEFORE narrowing to the small Command
+        // fields — otherwise channel 256→0, note 300→44, instrument 256→0 and a
+        // >32767 ms duration→negative all slip through as plausible values
+        // (review #4 §P1 command validation).
+        long channel = body.int_or("channel", 1);
+        long a       = body.int_or("a", body.int_or("note", body.int_or("cc", 0)));
+        long b       = body.int_or("b", body.int_or("velocity", body.int_or("value", 0)));
+        long inst    = body.int_or("instrument", 0);
+        if (channel < 0 || channel > 16)          return reply(400, apiErr("BAD_RANGE", "channel out of 0..16", "channel"));
+        if (a < 0 || a > 127)                     return reply(400, apiErr("BAD_RANGE", "note/cc out of 0..127", "a"));
+        if (b < 0 || b > 127)                     return reply(400, apiErr("BAD_RANGE", "value out of 0..127", "b"));
+        if (inst < 0 || inst >= MAX_INSTRUMENTS)  return reply(400, apiErr("BAD_INSTRUMENT", "instrument out of range", "instrument"));
+        c.channel    = (uint8_t)channel;
+        c.a          = (uint8_t)a;
+        c.b          = (uint8_t)b;
+        c.instrument = (uint8_t)inst;
         // i16 is a typed payload whose meaning depends on the command: signed
         // pitch-bend for pitch, signed jog delta (mm) for jog, and the auto-stop
         // duration (ms) for testAir — each read from its own key (#3 §7.4).
-        if      (c.type == CommandType::Jog)     c.i16 = (int16_t)body.int_or("delta", body.int_or("deltaMm", 0));
-        else if (c.type == CommandType::TestAir) c.i16 = (int16_t)body.int_or("ms", body.int_or("durationMs", 3000));
-        else                                     c.i16 = (int16_t)body.int_or("bend", 0);
+        long i16;
+        if      (c.type == CommandType::Jog)     i16 = body.int_or("delta", body.int_or("deltaMm", 0));
+        else if (c.type == CommandType::TestAir) i16 = body.int_or("ms", body.int_or("durationMs", 3000));
+        else                                     i16 = body.int_or("bend", 0);
+        if (i16 < -32768 || i16 > 32767)          return reply(400, apiErr("BAD_RANGE", "payload out of int16 range", "value"));
+        c.i16 = (int16_t)i16;
 
         // Safety commands (panic, Note Off, All Notes/Sound Off) always pass —
         // they need no token so a release/stop can never be blocked (#7).
