@@ -221,8 +221,13 @@ private:
         c.channel    = (uint8_t)body.int_or("channel", 1);
         c.a          = (uint8_t)body.int_or("a", body.int_or("note", body.int_or("cc", 0)));
         c.b          = (uint8_t)body.int_or("b", body.int_or("velocity", body.int_or("value", 0)));
-        c.i16        = (int16_t)body.int_or("bend", 0);
         c.instrument = (uint8_t)body.int_or("instrument", 0);
+        // i16 is a typed payload whose meaning depends on the command: signed
+        // pitch-bend for pitch, signed jog delta (mm) for jog, and the auto-stop
+        // duration (ms) for testAir — each read from its own key (#3 §7.4).
+        if      (c.type == CommandType::Jog)     c.i16 = (int16_t)body.int_or("delta", body.int_or("deltaMm", 0));
+        else if (c.type == CommandType::TestAir) c.i16 = (int16_t)body.int_or("ms", body.int_or("durationMs", 3000));
+        else                                     c.i16 = (int16_t)body.int_or("bend", 0);
 
         // Safety commands (panic, Note Off, All Notes/Sound Off) always pass —
         // they need no token so a release/stop can never be blocked (#7).

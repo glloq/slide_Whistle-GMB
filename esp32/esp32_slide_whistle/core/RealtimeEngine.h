@@ -38,11 +38,15 @@ public:
         while (budget-- && q_ && q_->pop(c)) dispatch(c, nowMs);
 
         // Server-side test-air timeout, PER INSTRUMENT so a second test never
-        // orphans the first (reviews #16 + #11).
-        for (uint8_t i = 0; i < count_ && i < MAX_INSTRUMENTS; ++i) {
-            if (testAirActive_[i] && nowMs >= testAirStopMs_[i]) {
-                if (inst_[i] && inst_[i]->air()) inst_[i]->air()->stopNote();
-                testAirActive_[i] = false;
+        // orphans the first (reviews #16 + #11). Keyed by stable id() to match
+        // the dispatch above (#3 §6).
+        for (uint8_t i = 0; i < count_; ++i) {
+            Instrument* in = inst_[i];
+            if (!in) continue;
+            uint8_t slot = in->id();
+            if (slot < MAX_INSTRUMENTS && testAirActive_[slot] && nowMs >= testAirStopMs_[slot]) {
+                if (in->air()) in->air()->stopNote();
+                testAirActive_[slot] = false;
             }
         }
 
@@ -67,6 +71,15 @@ public:
     }
 
 private:
+    // Resolve a direct command's target by the instrument's STABLE id(), so
+    // commands keep addressing the same physical flute even when the live set
+    // is compacted (disabled instruments removed) — array index would drift.
+    Instrument* byId(uint8_t id) {
+        for (uint8_t i = 0; i < count_; ++i)
+            if (inst_[i] && inst_[i]->id() == id) return inst_[i];
+        return nullptr;
+    }
+
     void dispatch(const Command& c, uint32_t nowMs) {
         switch (c.type) {
             case CommandType::NoteOn:
@@ -97,37 +110,47 @@ private:
                 panicAll(nowMs);
                 break;
             case CommandType::Home:
-                if (c.instrument < count_ && inst_[c.instrument] && inst_[c.instrument]->actuator()) {
-                    inst_[c.instrument]->actuator()->clearFault();   // allow re-home after a fault
-                    inst_[c.instrument]->actuator()->requestHoming();
+                // Direct commands address instruments by STABLE id(), not the
+                // compact array index — otherwise a "home flute 2" reaches the
+                // wrong physical flute once disabled ones are compacted (#3 §6).
+                if (Instrument* in = byId(c.instrument)) {
+                    if (in->actuator()) { in->actuator()->clearFault(); in->actuator()->requestHoming(); }
                 }
                 break;
             case CommandType::Rearm:
                 // Acknowledge fault + re-arm actuator & air, then re-home so the
                 // instrument is usable again after panic (review #9).
-                if (c.instrument < count_ && inst_[c.instrument]) {
-                    Instrument* in = inst_[c.instrument];
+                if (Instrument* in = byId(c.instrument)) {
                     if (in->actuator()) in->actuator()->clearFault();
                     if (in->air())      in->air()->rearm();
                     if (in->actuator()) in->actuator()->requestHoming();
                 }
                 break;
             case CommandType::Jog:
+                // Jog is a SIGNED relative move (mm) carried in i16 — a uint8_t
+                // absolute could never express a negative delta (#3 §7.4).
+                if (Instrument* in = byId(c.instrument))
+                    if (in->actuator())
+                        in->actuator()->requestPositionMm(in->actuator()->currentPositionMm() + float(c.i16));
+                break;
             case CommandType::TestActuator:
-                // single-instrument only — never broadcast (correction #13)
-                if (c.instrument < count_ && inst_[c.instrument] && inst_[c.instrument]->actuator())
-                    inst_[c.instrument]->actuator()->requestPositionMm(float(c.a));
+                // absolute test position (mm) in `a`; single-instrument only (#13)
+                if (Instrument* in = byId(c.instrument))
+                    if (in->actuator()) in->actuator()->requestPositionMm(float(c.a));
                 break;
             case CommandType::TestAir:
-                if (c.instrument < count_ && inst_[c.instrument] && inst_[c.instrument]->air()) {
-                    AirNoteRequest r; r.velocity = c.b ? c.b : 100;
-                    inst_[c.instrument]->air()->prepareNote(r);
-                    inst_[c.instrument]->air()->startNote(r);
-                    // schedule an automatic stop (i16 = ms, default 3 s)
-                    uint32_t dur = c.i16 > 0 ? (uint32_t)c.i16 : 3000u;
-                    if (c.instrument < MAX_INSTRUMENTS) {
-                        testAirActive_[c.instrument] = true;
-                        testAirStopMs_[c.instrument] = nowMs + dur;
+                if (Instrument* in = byId(c.instrument)) {
+                    if (in->air()) {
+                        AirNoteRequest r; r.velocity = c.b ? c.b : 100;
+                        in->air()->prepareNote(r);
+                        in->air()->startNote(r);
+                        // schedule an automatic stop (i16 = duration ms, default 3 s)
+                        uint32_t dur = c.i16 > 0 ? (uint32_t)c.i16 : 3000u;
+                        uint8_t slot = in->id();
+                        if (slot < MAX_INSTRUMENTS) {
+                            testAirActive_[slot] = true;
+                            testAirStopMs_[slot] = nowMs + dur;
+                        }
                     }
                 }
                 break;

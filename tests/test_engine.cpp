@@ -313,3 +313,37 @@ TEST(queue_priority_full_rejects_and_pcount_recovers) {
     CHECK(q.push(Command{CommandType::NoteOff}));
     CHECK_EQ(q.size(), 2u);
 }
+
+// Review #3 §6: direct commands (home/jog/test) address the instrument by its
+// STABLE id(), not the compact array position. Here id 3 lives at array index 0;
+// an index-based dispatch would treat instrument=3 as out of range (count=2) and
+// do nothing.
+TEST(engine_direct_command_routes_by_stable_id) {
+    InstRig a, b;
+    a.begin(3, icfg(1, 48, 84));            // stable id 3, array index 0
+    b.begin(1, icfg(2, 48, 84));            // stable id 1, array index 1
+    Instrument* insts[] = {&a.inst, &b.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q);
+    Command t{CommandType::TestAir}; t.instrument = 3; t.i16 = 50; q.push(t);
+    eng.tick(0, 0);
+    CHECK(a.sink.gateOpen);                 // routed to id 3 correctly
+    CHECK(!b.sink.gateOpen);
+    // And the auto-stop timer is keyed by id 3 too — it closes on timeout.
+    for (uint32_t k = 1; k <= 60; ++k) eng.tick(k, k * 1000);
+    CHECK(!a.sink.gateOpen);
+}
+
+// Review #3 §7.4: jog is a signed relative move carried in i16, applied to the
+// actuator's current position — a uint8_t absolute could not go negative.
+TEST(engine_jog_is_signed_relative) {
+    InstRig a;
+    a.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&a.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    Command pos{CommandType::TestActuator}; pos.instrument = 0; pos.a = 50; q.push(pos);
+    eng.tick(0, 0);
+    CHECK_NEAR(a.act.currentPositionMm(), 50.0f, 1e-3);
+    Command jog{CommandType::Jog}; jog.instrument = 0; jog.i16 = -12; q.push(jog);
+    eng.tick(1, 1000);
+    CHECK_NEAR(a.act.currentPositionMm(), 38.0f, 1e-3);   // 50 + (-12)
+}
