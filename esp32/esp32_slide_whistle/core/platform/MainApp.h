@@ -19,8 +19,13 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <Preferences.h>
 #include <ESPAsyncWebServer.h>
 #include "../ConfigStore.h"
+
+#ifndef DEBUG_SERIAL
+#define DEBUG_SERIAL 1
+#endif
 #include "../AuthManager.h"
 #include "../ApiRouter.h"
 #include "../RealtimeEngine.h"
@@ -31,39 +36,50 @@
 
 namespace swc {
 
-enum class SysState : uint8_t { Boot, SafeConfigOnly, Ready, Fault };
+enum class SysState : uint8_t { Boot, SafeConfigOnly, Initializing, NeedsHoming, Homing, Ready, Fault };
 
 class MainApp {
 public:
     static constexpr uint16_t QUEUE_LEN = 64;
 
     void setup() {
-        forceSafeOutputs();                 // 1. de-energise everything first
+#if DEBUG_SERIAL
+        Serial.begin(115200); delay(200);
+#endif
         fsOk_ = fs_.begin(true);
         LoadOutcome lo = LoadOutcome::Default;
         if (fsOk_) { store_.begin(&fs_); lo = store_.load(config_); }
         else       { config_ = defaultConfig(); }
         firstBoot_ = (lo == LoadOutcome::Default);
 
+        // 1. drive every critical output to its inactive state BEFORE anything
+        //    else, even if the config turns out invalid (#8).
+        forceSafeOutputs(config_);
+
+        // 2. admin secret: persisted in NVS so it survives reboots and can be
+        //    shown; generated only on first boot, never a fixed default (#5/#22).
         auth_.begin();
-        uint32_t e[4] = { esp_random(), esp_random(), esp_random(), esp_random() };
-        auth_.regenerateAdminToken(e);      // 2. token generated, never fixed
+        loadOrCreateAdminToken();
 
         // 3. validate the whole config before energising anything
         HardwareResourceValidator v; buildClaims(v, config_);
         bool cfgOk = !HardwareResourceValidator::hasErrors(v.validate());
 
-        buildInstruments();                 // constructs objects in safe state
+        // 4. build ONLY on a valid config; invalid → serve config UI only (#8)
+        if (cfgOk) { state_ = SysState::Initializing; buildInstruments(); }
+        else       { state_ = SysState::SafeConfigOnly; instCount_ = 0; }
+
         engine_.begin(instPtrs_, instCount_, &queue_);
         router_.begin(&auth_, &store_, &config_, &sink_, &entropy_, &status_);
 
         startNetwork();
         startWebServer();
+        printCredentials();                 // Serial: AP password + admin token (#5)
 
-        state_ = cfgOk ? SysState::Ready : SysState::SafeConfigOnly;
+        // 5. valid config → home before declaring READY (#10)
+        if (cfgOk) { requestHomingAll(); state_ = SysState::NeedsHoming; }
 
         xTaskCreatePinnedToCore(rtTaskThunk, "rt",  16384, this, 5, nullptr, 1);
-        // net runs on this task (Core 0) via loop()
     }
 
     void loop() {
@@ -73,35 +89,92 @@ public:
     }
 
 private:
-    void forceSafeOutputs() { /* TODO: drive known critical pins low before config */ }
+    // Force all configured gate/source pins to their inactive level. Runs on
+    // the loaded config regardless of validity so nothing pulses at boot (#8).
+    void forceSafeOutputs(const RuntimeConfig& c) {
+        for (uint8_t i = 0; i < c.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
+            const AirConfig& a = c.instruments[i].air;
+            safeLow(a.gate.pin, a.gate.activeHigh);
+            for (uint8_t p = 0; p < MAX_PUMPS; ++p) safeLow(a.source.pin[p], true);
+        }
+    }
+    static void safeLow(int pin, bool activeHigh) {
+        if (pin < 0) return;
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, activeHigh ? LOW : HIGH);   // inactive
+    }
 
     void buildInstruments() {
         instCount_ = 0;
         for (uint8_t i = 0; i < config_.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
             InstrumentConfig& ic = config_.instruments[i];
+            if (!ic.enabled) continue;          // ignore disabled instruments (#8)
             configureSinks(i, ic);
             rt_[i] = new InstrumentRuntime(&motion_[i], &air_[i]);
             if (!rt_[i]->build(i, ic)) continue;
-            rt_[i]->enterSafeState();           // not energised until homed
             instPtrs_[instCount_++] = &rt_[i]->instrument();
         }
     }
 
     void configureSinks(uint8_t i, const InstrumentConfig& ic) {
         motion_[i].begin(ic.motion);
-        // map air pins from config onto the air sink
         const auto& a = ic.air;
+        // source
         if (a.source.type == AirSourceType::FanOnOff || a.source.type == AirSourceType::FanPwm)
             air_[i].configureSourcePwm(0, a.source.pin[0], 25000);
         else if (a.source.type == AirSourceType::PumpsDirect || a.source.type == AirSourceType::PumpsTank)
             for (uint8_t p = 0; p < a.source.pumpCount && p < MAX_PUMPS; ++p)
                 air_[i].configureSourcePwm(p, a.source.pin[p], 25000);
-        if (a.gate.type == AirGateType::SolenoidSimple) air_[i].configureSolenoid(a.gate.pin, a.gate.activeHigh);
-        else if (a.gate.type == AirGateType::SolenoidPwm) air_[i].configureGatePwm(a.gate.pin, 20000);
-        else if (a.gate.type != AirGateType::None)        air_[i].configureGatePwm(a.gate.pin, 50);
-        if (a.flow.type != FlowControlType::None) air_[i].configureFlow(a.flow.pin);
-        if (a.angle.enabled) air_[i].configureAngle(/*angle pin carried elsewhere*/ -1);
+        // gate — solenoid uses digital / PWM, servo gates use a µs pulse (#13)
+        switch (a.gate.type) {
+            case AirGateType::SolenoidSimple: air_[i].configureSolenoid(a.gate.pin, a.gate.activeHigh); break;
+            case AirGateType::SolenoidPwm:    air_[i].configureSolenoidPwm(a.gate.pin, 20000); break;
+            case AirGateType::None:           break;
+            default:                          air_[i].configureGateServo(a.gate.pin, 1000, 2000); break;
+        }
+        // flow
+        if (a.flow.type == FlowControlType::FlowServo)      air_[i].configureFlowServo(a.flow.pin, 1000, 2000);
+        else if (a.flow.type != FlowControlType::None)      air_[i].configureFlowPwm(a.flow.pin, 20000);
+        // angle
+        if (a.angle.enabled) air_[i].configureAngleServo(a.angle.pin, 1000, 2000);
+        // sensor
         air_[i].configureSensor(a.sensor.pin);
+    }
+
+    void requestHomingAll() {
+        for (uint8_t i = 0; i < instCount_; ++i)
+            if (instPtrs_[i] && instPtrs_[i]->actuator()) instPtrs_[i]->actuator()->requestHoming();
+    }
+    bool allHomed() const {
+        for (uint8_t i = 0; i < instCount_; ++i)
+            if (instPtrs_[i] && instPtrs_[i]->actuator() && !instPtrs_[i]->actuator()->isHomed()) return false;
+        return true;
+    }
+
+    // Persist the admin token in NVS so it survives reboots and can be shown.
+    void loadOrCreateAdminToken() {
+        Preferences p; p.begin("swauth", false);
+        String t = p.getString("admin", "");
+        if (t.length() == 0) {
+            uint32_t e[4] = { esp_random(), esp_random(), esp_random(), esp_random() };
+            auth_.regenerateAdminToken(e);
+            p.putString("admin", auth_.adminToken().c_str());
+        } else {
+            auth_.setAdminToken(std::string(t.c_str()));
+        }
+        p.end();
+    }
+
+    // Show the AP password + admin token on Serial so the operator can log in
+    // (they are otherwise unknowable). Regeneratable physically via factory reset.
+    void printCredentials() {
+#if DEBUG_SERIAL
+        Serial.println(F("=== Slide Whistle — access credentials ==="));
+        if (config_.network.apEnabled)
+            Serial.printf("AP SSID : %s\nAP pass : %s\n", config_.network.apSsid, apPassword_.c_str());
+        Serial.printf("Admin token (X-Auth-Token): %s\n", auth_.adminToken().c_str());
+        Serial.println(F("==========================================="));
+#endif
     }
 
     void startNetwork() {
@@ -125,8 +198,12 @@ private:
         for (;;) {
             uint32_t ms = millis();
             uint32_t us = micros();
+            // Single owner of updates: engine_.tick() ticks each instrument's
+            // actuator + air + sequencer exactly once — no second pass (#9).
             engine_.tick(ms, us, /*budget=*/32);
-            for (uint8_t i = 0; i < instCount_; ++i) rt_[i]->update(ms, us);
+            // Lifecycle: home before declaring READY (#10).
+            if (state_ == SysState::NeedsHoming) state_ = SysState::Homing;
+            else if (state_ == SysState::Homing && allHomed()) state_ = SysState::Ready;
             vTaskDelayUntil(&last, period);            // deterministic cadence
         }
     }

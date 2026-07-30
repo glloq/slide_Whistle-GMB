@@ -161,3 +161,18 @@ TEST(engine_pitchbend_via_queue) {
     // note 60 at 2mm/semi from map: 60→24mm base, +1 semi → 26mm
     CHECK_NEAR(r.act.currentPositionMm(), 26.0f, 0.5);
 }
+
+// Review #16: TestAir must stop itself server-side (never wait on the browser).
+TEST(engine_testair_auto_timeout) {
+    InstRig r; r.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&r.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    Command t{CommandType::TestAir}; t.instrument = 0; t.b = 100; t.i16 = 50;  // 50 ms
+    q.push(t);
+    uint32_t k = 0;
+    eng.tick(k, k * 1000); k++;             // dispatch → air opens
+    CHECK(r.sink.gateOpen);
+    CHECK(eng.testAirActive());
+    for (; k < 80; ++k) eng.tick(k, k * 1000);   // past 50 ms
+    CHECK(!r.sink.gateOpen);                // auto-closed
+}

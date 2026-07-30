@@ -226,3 +226,46 @@ TEST(queue_bounded_no_overflow) {
     CHECK_EQ(q.size(), 4);
     CHECK(q.dropped() >= 6);
 }
+
+// Review #15: the sequencer must wait for BOTH actuator and air to be ready.
+struct GateableAir : IAirSystem {
+    bool ready_ = false; int started_ = 0; bool gate_ = false;
+    bool begin(const AirConfig&, IAirSink*) override { return true; }
+    void update(uint32_t) override {}
+    void prepareNote(const AirNoteRequest&) override {}
+    void startNote(const AirNoteRequest&) override { started_++; gate_ = true; }
+    void updateExpression(const AirExpression&) override {}
+    void stopNote() override { gate_ = false; }
+    void emergencyStop() override { gate_ = false; ready_ = false; }
+    void rearm() override { ready_ = false; }
+    bool isReady() const override { return ready_; }
+    AirState state() const override { return gate_ ? AirState::Playing : AirState::Idle; }
+    FaultCode fault() const override { return FaultCode::None; }
+};
+
+TEST(seq_waits_for_air_ready_before_opening) {
+    DisabledSlideActuator act; SlideMotionConfig mc; mc.type = SlideDriveType::Disabled; act.begin(mc);
+    GateableAir air; NoteMap map; for (int n = 48; n <= 84; ++n) map.setPoint((uint8_t)n, (n-48)*2.0f, 60);
+    NoteSequencer seq; seq.begin(&act, &air, &map, {});
+    uint32_t t = 0;
+    seq.noteOn(60, 100, t);
+    for (int k = 0; k < 5; ++k) { t++; seq.update(t, t*1000); }
+    CHECK(seq.phase() == SeqPhase::Positioning);   // actuator ready, air not → wait
+    CHECK_EQ(air.started_, 0);
+    air.ready_ = true;
+    t++; seq.update(t, t*1000);
+    CHECK(seq.phase() == SeqPhase::Playing);        // air ready → opened
+    CHECK_EQ(air.started_, 1);
+}
+
+TEST(seq_prepare_timeout_never_opens_late) {
+    DisabledSlideActuator act; SlideMotionConfig mc; mc.type = SlideDriveType::Disabled; act.begin(mc);
+    GateableAir air;                                 // air never becomes ready
+    NoteMap map; for (int n = 48; n <= 84; ++n) map.setPoint((uint8_t)n, (n-48)*2.0f, 60);
+    NoteSequencer seq; SequencerConfig cfg; cfg.prepareTimeoutMs = 50; seq.begin(&act, &air, &map, cfg);
+    uint32_t t = 0;
+    seq.noteOn(60, 100, t);
+    for (int k = 0; k < 80; ++k) { t++; seq.update(t, t*1000); }
+    CHECK(seq.phase() != SeqPhase::Playing);         // gave up
+    CHECK_EQ(air.started_, 0);                        // air never opened late
+}

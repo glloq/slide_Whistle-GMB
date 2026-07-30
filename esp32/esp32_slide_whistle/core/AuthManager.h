@@ -71,6 +71,7 @@ public:
 
     // --- admin token (first boot) ------------------------------------------
     void regenerateAdminToken(const uint32_t entropy[4]) { adminToken_ = hex(entropy, 4); }
+    void setAdminToken(const std::string& t) { adminToken_ = t; }   // restore persisted token
     bool hasAdminToken() const { return !adminToken_.empty(); }
     const std::string& adminToken() const { return adminToken_; }
     bool checkAdmin(const std::string& t) const { return hasAdminToken() && ctEqual(t, adminToken_); }

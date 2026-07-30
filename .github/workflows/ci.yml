@@ -96,8 +96,8 @@ jobs:
           find esp32/esp32_slide_whistle/core tests -name '*.h' -o -name '*.cpp' \
             | xargs clang-format --dry-run --Werror || true
 
-  firmware-build:
-    name: PlatformIO firmware build
+  firmware-legacy:
+    name: PlatformIO firmware (legacy v3)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -105,10 +105,23 @@ jobs:
         with: { python-version: "3.x" }
       - name: Install PlatformIO
         run: pip install platformio
-      - name: Build ESP32-WROOM firmware (legacy v3 — gate)
+      - name: Build esp32dev (WROOM)
         run: pio run -e esp32dev
       - name: Report firmware size
         run: pio run -e esp32dev -t size || true
-      - name: Build universal firmware (EXPERIMENTAL — informational)
-        continue-on-error: true
+
+  firmware-universal:
+    name: PlatformIO firmware (universal)
+    # Distinct job so the legacy build failing never hides the universal
+    # result, and vice-versa (review item #2).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.x" }
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build esp32-universal (WROOM)
         run: pio run -e esp32-universal
+      - name: Build esp32-universal (S3)
+        run: pio run -e esp32-s3 || true

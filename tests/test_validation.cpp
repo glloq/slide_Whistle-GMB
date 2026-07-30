@@ -22,6 +22,17 @@ TEST(pwm_output_normalized_and_polarity) {
     q.writeNormalized(0.0f);   CHECK_EQ(q.lastDuty(), 4095u);   // 0% → full raw when active-low
 }
 
+TEST(servo_output_maps_to_microseconds) {
+    // Review #13: a servo must get a 1–2 ms pulse, NOT a 0–100% duty at 50 Hz.
+    ServoOutput s;
+    CHECK(s.attach(26, 1000, 2000, 50, 16));
+    s.writeNormalized(0.0f); CHECK_EQ(s.lastUs(), 1000);
+    s.writeNormalized(0.5f); CHECK_EQ(s.lastUs(), 1500);
+    s.writeNormalized(1.0f); CHECK_EQ(s.lastUs(), 2000);
+    s.writeMicroseconds(3000); CHECK_EQ(s.lastUs(), 2000);   // clamped to maxUs
+    s.writeMicroseconds(500);  CHECK_EQ(s.lastUs(), 1000);   // clamped to minUs
+}
+
 static bool hasCode(const std::vector<ValidationIssue>& v, const char* code) {
     for (const auto& i : v) if (i.code == code) return true;
     return false;

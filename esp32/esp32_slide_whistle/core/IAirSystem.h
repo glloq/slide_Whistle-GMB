@@ -109,6 +109,7 @@ public:
     virtual void stopNote() = 0;
 
     virtual void emergencyStop() = 0;
+    virtual void rearm() = 0;              // recover from E-stop/fault, no rebuild
     virtual bool isReady() const = 0;
     virtual AirState state() const = 0;
     virtual FaultCode fault() const = 0;

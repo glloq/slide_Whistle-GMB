@@ -11,6 +11,7 @@
 
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
+#include <map>
 #include "../ApiRouter.h"
 
 namespace swc {
@@ -20,20 +21,41 @@ public:
     void begin(AsyncWebServer* server, AsyncWebSocket* ws, ApiRouter* router, uint32_t (*nowMs)()) {
         server_ = server; ws_ = ws; router_ = router; now_ = nowMs;
 
-        // REST: one catch-all for /api/v1/*, body accumulated then dispatched.
-        server_->on("/api/v1", HTTP_ANY,
-            [this](AsyncWebServerRequest* r){ handle(r, nullptr, 0, 0, 0); },
-            nullptr,
-            [this](AsyncWebServerRequest* r, uint8_t* d, size_t len, size_t idx, size_t total){
-                handle(r, d, len, idx, total);
-            });
+        // REST: register EACH concrete route (ESPAsyncWebServer matches exact
+        // paths, not prefixes — a single "/api/v1" would never match the
+        // sub-routes, review item #4). Every route shares the same dispatcher
+        // and body accumulator.
+        static const char* kRoutes[] = {
+            "/api/v1/status", "/api/v1/config", "/api/v1/preset",
+            "/api/v1/command", "/api/v1/session", "/api/v1/factory-reset",
+            "/api/v1/restart",
+        };
+        for (const char* path : kRoutes) {
+            server_->on(path, HTTP_ANY,
+                [this](AsyncWebServerRequest* r){ handle(r, nullptr, 0, 0, 0); },
+                nullptr,
+                [this](AsyncWebServerRequest* r, uint8_t* d, size_t len, size_t idx, size_t total){
+                    handle(r, d, len, idx, total);
+                });
+        }
+        // Any other /api/v1/* URI gets a clean 404 envelope instead of the
+        // static handler swallowing it.
+        server_->onNotFound([this](AsyncWebServerRequest* r){
+            if (String(r->url()).startsWith("/api/")) {
+                r->send(404, "application/json",
+                        "{\"ok\":false,\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"unknown route\"}}");
+            } else {
+                r->send(404, "text/plain", "not found");
+            }
+        });
         // static web UI from LittleFS
         server_->serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
 
-        // WebSocket: keyboard note events + differential status push.
+        // WebSocket: per-client session + keyboard note events.
         ws_->onEvent([this](AsyncWebSocket*, AsyncWebSocketClient* c, AwsEventType type,
                             void*, uint8_t* data, size_t len){
-            if (type == WS_EVT_DATA) onWsData(c, data, len);
+            if (type == WS_EVT_DISCONNECT) { wsTokens_.erase(c->id()); }
+            else if (type == WS_EVT_DATA)  { onWsData(c, data, len); }
         });
         server_->addHandler(ws_);
     }
@@ -63,13 +85,22 @@ private:
     }
 
     void onWsData(AsyncWebSocketClient* c, uint8_t* data, size_t len) {
-        // The WS frame is a small JSON command; reuse the same router path so a
-        // web-keyboard NoteOn/NoteOff is authorised and queued identically.
+        std::string frame(reinterpret_cast<char*>(data), len);
+        // A first frame {"auth":"<session>"} associates THIS client id with a
+        // session token (review item #6 — per-client, not one global token).
+        JsonValue j;
+        if (jsonParse(frame, j, nullptr) && j.has("auth")) {
+            wsTokens_[c->id()] = j.str_or("auth", "");
+            c->text("{\"ok\":true,\"data\":{\"authed\":true}}");
+            return;
+        }
+        // Otherwise it's a command; attach this client's stored token and reuse
+        // the same authorised, rate-limited router path as REST.
         ApiRequest req;
         req.method = "POST"; req.path = "/api/v1/command"; req.contentType = "application/json";
-        req.body.assign(reinterpret_cast<char*>(data), len);
-        // a per-connection token is set at WS handshake (stored on the client)
-        req.token = wsToken_;
+        req.body = frame;
+        auto it = wsTokens_.find(c->id());
+        req.token = (it != wsTokens_.end()) ? it->second : std::string();
         ApiReply rep = router_->handle(req, now_ ? now_() : 0);
         c->text(rep.body.c_str());
     }
@@ -86,9 +117,8 @@ private:
     AsyncWebSocket*  ws_ = nullptr;
     ApiRouter*       router_ = nullptr;
     uint32_t (*now_)() = nullptr;
-    std::string      wsToken_;   // set after WS auth; TODO: per-client tokens
+    std::map<uint32_t, std::string> wsTokens_;   // WS client id → session token
 public:
-    void setWsToken(const std::string& t) { wsToken_ = t; }
     AsyncWebSocket* ws() { return ws_; }
 };
 

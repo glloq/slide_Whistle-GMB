@@ -88,6 +88,37 @@ private:
     bool      attached_ = false;
 };
 
+// Servo-specific output: a 50 Hz PWM whose duty encodes a 1–2 ms pulse. A
+// servo valve / flow / angle must NOT be driven with a 0–100 % duty (that is a
+// 0–20 ms pulse) — writeNormalized() here interpolates within [minUs, maxUs]
+// so 0..1 maps to the calibrated pulse window (fixes review item #13).
+class ServoOutput {
+public:
+    bool attach(int pin, uint16_t minUs = 1000, uint16_t maxUs = 2000,
+                uint16_t freqHz = 50, uint8_t resolution = 16) {
+        minUs_ = minUs; maxUs_ = maxUs; periodUs_ = 1000000u / (freqHz ? freqHz : 50);
+        PwmConfig c; c.pin = pin; c.freqHz = freqHz; c.resolution = resolution; c.activeHigh = true;
+        return pwm_.attach(c);
+    }
+    void writeMicroseconds(uint16_t us) {
+        if (us < minUs_) us = minUs_; else if (us > maxUs_) us = maxUs_;
+        uint32_t duty = (uint32_t)((float)us / (float)periodUs_ * pwm_.maxDuty() + 0.5f);
+        pwm_.writeRaw(duty);
+        lastUs_ = us;
+    }
+    void writeNormalized(float v) {
+        if (v < 0.f) v = 0.f; else if (v > 1.f) v = 1.f;
+        writeMicroseconds((uint16_t)(minUs_ + v * (maxUs_ - minUs_) + 0.5f));
+    }
+    void detach() { pwm_.detach(); }
+    bool attached() const { return pwm_.attached(); }
+    uint16_t lastUs() const { return lastUs_; }
+private:
+    PwmOutput pwm_;
+    uint16_t minUs_ = 1000, maxUs_ = 2000, lastUs_ = 1500;
+    uint32_t periodUs_ = 20000;
+};
+
 } // namespace swc
 
 #endif // SWC_CORE_PWMOUTPUT_H

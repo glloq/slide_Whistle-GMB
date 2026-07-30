@@ -77,6 +77,16 @@ public:
     bool isHomed() const override { return homed_; }
     bool isMoving() const override { return state_ == MotionState::Moving; }
 
+    void clearFault() override {
+        // Re-arm from E-stop / Fault. Homing state is preserved so a homed
+        // servo stays ready; an unhomed stepper simply becomes homable again.
+        if (state_ == MotionState::EStopped || state_ == MotionState::Fault) {
+            fault_ = FaultCode::None;
+            state_ = MotionState::Idle;
+            vel_ = 0.0f; target_ = pos_;
+        }
+    }
+
     bool isReadyForAir() const override {
         if (state_ == MotionState::Fault || state_ == MotionState::EStopped) return false;
         if (!homed_) return false;
@@ -176,7 +186,7 @@ public:
         if (state_ == MotionState::EStopped) return false;
         homed_   = false;
         fault_   = FaultCode::None;
-        hphase_  = HPhase::FastApproach;
+        hphase_  = HPhase::FastSeek;
         phaseStartUs_ = 0; havePhaseTime_ = false;
         state_   = MotionState::Homing;
         if (sink_) sink_->enableDriver(true);
@@ -192,7 +202,7 @@ protected:
         return true;
     }
 
-    enum class HPhase : uint8_t { Idle, FastApproach, Backoff, SlowApproach, ApplyOffset, Done };
+    enum class HPhase : uint8_t { Idle, FastSeek, BackoffUntilReleased, SlowSeek, MoveToOffset, Done };
 
     void homingStep(float dt, uint32_t nowUs) override {
         if (!havePhaseTime_) { phaseStartUs_ = nowUs; havePhaseTime_ = true; }
@@ -203,35 +213,45 @@ protected:
             if (sink_) sink_->enableDriver(false);
             return;
         }
-        float dir = cfg_.stepper.homeTowardZero ? -1.0f : 1.0f;
-        bool hit  = sink_ && sink_->readEndstop(!cfg_.stepper.homeTowardZero);
+        const float dir = cfg_.stepper.homeTowardZero ? -1.0f : 1.0f;
+        const bool  hit = sink_ && sink_->readEndstop(!cfg_.stepper.homeTowardZero);
 
         switch (hphase_) {
-            case HPhase::FastApproach:
-                pos_ += dir * cfg_.stepper.homingFastMmS * dt;
-                if (hit) { enterPhase(HPhase::Backoff, nowUs); backoffFrom_ = pos_; }
+            case HPhase::FastSeek:                        // drive toward the switch
+                if (hit) { enterPhase(HPhase::BackoffUntilReleased, nowUs); backoffFrom_ = pos_; }
+                else     pos_ += dir * cfg_.stepper.homingFastMmS * dt;
                 break;
-            case HPhase::Backoff:
+            case HPhase::BackoffUntilReleased:            // retreat until released + min distance
                 pos_ -= dir * cfg_.stepper.homingFastMmS * dt;
-                if (std::fabs(pos_ - backoffFrom_) >= cfg_.stepper.homeBackoffMm)
-                    enterPhase(HPhase::SlowApproach, nowUs);
+                if (!hit && std::fabs(pos_ - backoffFrom_) >= cfg_.stepper.homeBackoffMm)
+                    enterPhase(HPhase::SlowSeek, nowUs);
                 break;
-            case HPhase::SlowApproach:
-                pos_ += dir * cfg_.stepper.homingSlowMmS * dt;
-                if (hit) enterPhase(HPhase::ApplyOffset, nowUs);
+            case HPhase::SlowSeek:                         // creep back to precise contact
+                if (hit) {
+                    pos_    = 0.0f;                         // define zero AT the switch
+                    target_ = cfg_.stepper.homeOffsetMm;   // then physically move to offset
+                    enterPhase(HPhase::MoveToOffset, nowUs);
+                } else {
+                    pos_ += dir * cfg_.stepper.homingSlowMmS * dt;
+                }
                 break;
-            case HPhase::ApplyOffset:
-                // define zero at contact, then apply configured offset
-                pos_    = cfg_.stepper.homeOffsetMm;
-                target_ = pos_;
-                homed_  = true;
-                hphase_ = HPhase::Done;
-                state_  = MotionState::Idle;
+            case HPhase::MoveToOffset: {                   // real move, not a logical snap
+                float d = target_ - pos_;
+                float step = cfg_.stepper.homingSlowMmS * dt;
+                if (std::fabs(d) <= step) {
+                    pos_ = target_; homed_ = true;
+                    hphase_ = HPhase::Done; state_ = MotionState::Idle;
+                } else {
+                    pos_ += (d > 0 ? 1.0f : -1.0f) * step;
+                }
                 break;
+            }
             default: break;
         }
-        pos_ = clampv(pos_, cfg_.softMinMm - cfg_.stepper.homeBackoffMm - 5.0f,
-                            cfg_.softMaxMm + 5.0f);
+        // Only a GENEROUS seek bound during homing — never the musical soft
+        // limits, which would stall the seek before reaching a distant switch.
+        const float seekBound = cfg_.travelMm * 2.0f + 20.0f;
+        pos_ = clampv(pos_, -seekBound, seekBound);
     }
 
     void enterPhase(HPhase p, uint32_t nowUs) { hphase_ = p; phaseStartUs_ = nowUs; havePhaseTime_ = true; }

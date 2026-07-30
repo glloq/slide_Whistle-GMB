@@ -46,10 +46,18 @@ public:
         return true;
     }
 
-    // Hardware-safe boot: keep everything de-energised until validated/homed.
+    // Panic: latch a safe state (used at runtime, NOT as boot initialisation —
+    // after build() the objects are already idle/de-energised).
     void enterSafeState() {
         air_.emergencyStop();
         if (act_) act_->emergencyStop();
+    }
+
+    // Re-arm after a panic/fault without reconstructing anything (fixes the
+    // "permanent E-stop at boot" defect): clears the latch on air + actuator.
+    void arm() {
+        if (act_) act_->clearFault();
+        air_.rearm();
     }
 
     Instrument&     instrument() { return inst_; }
