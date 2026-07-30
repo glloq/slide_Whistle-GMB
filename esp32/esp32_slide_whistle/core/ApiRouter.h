@@ -183,7 +183,14 @@ private:
         if (!store_->save(cand)) return reply(500, apiErr("PERSIST_FAILED", "could not persist config"));
         bool rr = configNeedsRestart(*live_, cand);
         *live_ = cand;
-        if (rr) restartRequired_ = true;   // dynamic params apply now; hw needs reboot
+        if (rr) {
+            restartRequired_ = true;       // hardware change: needs reboot
+        } else if (sink_) {
+            // Dynamic-only change: tell the RT task to apply it to live objects
+            // NOW, so reporting "applied" is truthful (correction #17).
+            Command c{CommandType::ApplyDynamicConfig};
+            sink_->push(c);
+        }
         JsonValue data = JsonValue::makeObj();
         data.set("restart_required", rr);
         data.set("applied", !rr);          // dynamic-only changes are live immediately

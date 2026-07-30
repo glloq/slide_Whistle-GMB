@@ -34,12 +34,13 @@ public:
     }
 
     // ---- dynamic (no-restart) reconfiguration -----------------------------
-    void applyDynamic(const InstrumentConfig& cfg) {   // correction #11
-        // range + policy + CC map can change live; propagate range so a held
-        // note outside the new range is dropped safely.
+    void applyDynamic(const InstrumentConfig& cfg) {   // corrections #11, #17
+        // Range + policy + CC map + calibration table can change live; propagate
+        // to the real-time objects so the UI's "applied" claim is truthful.
         noteMin_ = cfg.noteMin; noteMax_ = cfg.noteMax;
         channel_ = cfg.midiChannel; cc_ = cfg.cc;
         seq_.setConfig(cfg.seq);
+        if (map_) *map_ = cfg.map;                    // refresh note→position table
         if (seq_.activeNoteOr(-1) >= 0) {
             int n = seq_.activeNoteOr(-1);
             if (n < noteMin_ || n > noteMax_) allNotesOff(lastNow_);

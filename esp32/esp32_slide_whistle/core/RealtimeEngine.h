@@ -16,6 +16,7 @@
 
 #include "Instrument.h"
 #include "CommandQueue.h"
+#include "RuntimeConfig.h"
 
 namespace swc {
 
@@ -27,6 +28,8 @@ public:
         bendRangeSemis_ = 2.0f;
     }
     void setPitchBendRange(float semis) { bendRangeSemis_ = semis; }
+    // Live config source for ApplyDynamicConfig (indexed by Instrument::id()).
+    void setLiveConfig(const RuntimeConfig* cfg) { live_ = cfg; }
 
     // Drain up to `budget` commands, then tick every instrument. Called from a
     // periodic RT task (vTaskDelayUntil) — no blocking, no allocation.
@@ -110,7 +113,16 @@ private:
                     testAirStopMs_ = nowMs + dur;
                 }
                 break;
-            default: break;   // ApplyDynamicConfig / calibration handled elsewhere
+            case CommandType::ApplyDynamicConfig:
+                // Push the newly-saved dynamic parameters into the live objects
+                // so the API's "applied" claim is truthful (correction #17).
+                // Config is indexed by the instrument's stable id().
+                if (live_)
+                    for (uint8_t i = 0; i < count_; ++i)
+                        if (inst_[i] && inst_[i]->id() < live_->instrumentCount)
+                            inst_[i]->applyDynamic(live_->instruments[inst_[i]->id()]);
+                break;
+            default: break;   // calibration handled elsewhere
         }
     }
 
@@ -118,6 +130,7 @@ private:
     uint8_t            count_ = 0;
     CommandQueue<QN>*  q_ = nullptr;
     float              bendRangeSemis_ = 2.0f;
+    const RuntimeConfig* live_ = nullptr;       // for ApplyDynamicConfig
     int                testAirInst_ = -1;      // instrument index of a running TestAir, or -1
     uint32_t           testAirStopMs_ = 0;
 };
