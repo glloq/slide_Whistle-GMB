@@ -61,7 +61,7 @@ Markers:
 | `/api/v1` dispatch logic (auth, transactional apply, restart) — Section 14 | IMPLEMENTED · TESTED IN SOFTWARE |
 | Config→objects builder (`InstrumentRuntime`) | IMPLEMENTED · TESTED IN SOFTWARE |
 | Firmware orchestration (`MainApp`, 2 tasks, boot-safe) | IMPLEMENTED (structure) · EXPERIMENTAL · NOT TESTED — REQUIRES HARDWARE |
-| Async web-server adapter (`WebServerAdapter`) + universal sketch | IMPLEMENTED (structure) · EXPERIMENTAL · NOT TESTED — REQUIRES HARDWARE — CI build is informational |
+| Async web-server adapter (`WebServerAdapter`) + universal sketch | IMPLEMENTED (structure) · EXPERIMENTAL · NOT TESTED — REQUIRES HARDWARE — now COMPILES in CI (universal WROOM + S3 + LittleFS image, hard-failing job) |
 | WebSocket keyboard + differential status push — Section 13 | PARTIAL (WS command path scaffolded) · TODO diff push |
 | forceSafeOutputs pin map, BLE/rtpMIDI bring-up, lock-free status snapshot | TODO |
 
@@ -184,10 +184,39 @@ correct-by-construction but needs hardware to validate. TODO = not yet done
 | 45 | Calibration UI / OTA missing | TODO |
 
 Net: the real-time/config/air correctness defects that can be proven off-device
-are fixed and covered by tests (139 automated cases total). The remainder are
+are fixed and covered by tests (144 C++ cases + 22 node cases total). The remainder are
 hardware-transport bound (RMT stepping, PCA9685, ToF, BLE/rtp/DIN, WS transport
 edge cases) or larger UI build-out, and are listed here honestly rather than
 marked done.
+
+## Third review response (compile & correctness)
+
+The headline finding of review #3 was correct and is now resolved: **no ESP32
+firmware environment had ever actually compiled** — the green CI was native
+unit tests only, which gave false confidence (§1.3). The PlatformIO firmware
+jobs now build successfully in CI, verified on the branch:
+
+| # | Item | Status |
+|---|------|--------|
+| 1.1 | ESP32 build kept `-std=gnu++11`; C++17 core failed to compile | FIXED·CI-VERIFIED (`build_unflags = -std=gnu++11` on every ESP32 env) |
+| 1.2 | Legacy `<BLEMidi.h>` not provided by pinned lib | FIXED·CI-VERIFIED (swapped to `max22/ESP32-BLE-MIDI`; fixed pitch-bend callback type; `<AsyncJson.h>` include; `midi`→`midiHandler` namespace clash; `lib_ldf_mode = deep+` for Adafruit BusIO SPI/Wire) |
+| 1.3 | Native-only CI = false confidence | RESOLVED — universal WROOM + S3 + LittleFS image **and** legacy v3 now compile as hard-failing CI jobs |
+| 2.1 | Queue size/empty/dropped/clear unlocked | FIXED·TESTED (all observers take the portMUX lock; `clear()` too) |
+| 2.2 | Panic/NoteOff dropped when queue full | FIXED·TESTED (evict newest non-priority to admit a safety command; `pcount_` bookkeeping) |
+| 3 | Snapshot `read()` overwritable mid-serialize | FIXED·TESTED (seqlock `readCopy()`; JSON built from a consistent copy) |
+| 5.1 | Unmapped note still opened air (wrong note) | FIXED·TESTED (sequencer refuses a note with no position mapping) |
+| 5.2 | prepareTimeout retried the same note forever | FIXED·TESTED (timed-out note dropped before fallback) |
+| 11.3 | JSON narrowed ints before validation (channel 256→0=OMNI) | FIXED·TESTED (`checkedInt` range-checks raw values pre-narrow; decode rejected on overflow) |
+| 11.4 | Missing positivity/normalized validations | FIXED·TESTED (maxSpeed/accel>0, stepsPerMm>0, servo minUs<maxUs, all `*01` levels in 0..1) |
+| 14.2 | Wizard rejected air preset index 0 (`!!0`) | FIXED·TESTED (presence check, not truthiness) |
+
+Still open from review #3 (unchanged from the lists above): RMT/timer step
+generation with step-count feedback (§4), routing by stable instrument id (§6),
+air-fault → global Fault propagation and exec-acks (§7), boot-safe stepper/PCA
+outputs (§8), LEDC release/S3 capacity (§9), time-scaled tank PI cascade (§10),
+the remaining backends (§16: PCA9685, ToF/digital sensors, DIN/BLE/rtp/WiFi-STA),
+and the larger UI build-out (§14). These remain hardware- or transport-bound and
+are tracked here rather than marked done.
 
 ## How to run the software tests
 
@@ -195,5 +224,7 @@ marked done.
 make -C tests            # builds with g++/clang++, runs all cases
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same suite plus JSON/JS validation and
-a PlatformIO firmware build on every push.
+CI (`.github/workflows/ci.yml`) runs the same suite plus JSON/JS validation and,
+on every push, three hard-failing PlatformIO jobs that must all compile: the
+legacy v3 sketch (`esp32dev`), the universal firmware (`esp32-universal` WROOM +
+`esp32-s3`), and the LittleFS UI image. Only `clang-format` is informational.
