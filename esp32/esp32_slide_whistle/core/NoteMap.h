@@ -136,9 +136,12 @@ public:
     bool isMonotonic() const { return firstNonMonotonic() < 0; }
 
 private:
+    // An entry participates in mapping when it is ENABLED — whether it is a
+    // hand-calibrated point or a provisional (generated) one. This keeps a
+    // preset's provisional linear table playable (review item #7); the UI still
+    // shows provisional points as "not hardware-validated" via `calibrated`.
     bool usable(int n) const {
-        return n >= 0 && n < MIDI_NOTE_COUNT &&
-               entries_[n].enabled && entries_[n].calibrated;
+        return n >= 0 && n < MIDI_NOTE_COUNT && entries_[n].enabled;
     }
 
     NoteEntry entries_[MIDI_NOTE_COUNT];

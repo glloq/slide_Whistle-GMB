@@ -86,14 +86,14 @@ TEST(pump_direct_cascade) {
 }
 
 TEST(pump_tank_no_sensor_no_autostart) {
-    FakeAirSink s; s.sensorRaw = NAN;   // sensor absent
+    FakeAirSink s; s.sensorRaw = NAN;   // sensor absent from boot
     AirConfig c; c.source.type = AirSourceType::PumpsTank; c.source.requireSensor = true;
-    c.sensor.type = AirSensorType::PressureAnalog;
+    c.sensor.type = AirSensorType::PressureAnalog; c.sensor.staleTimeoutMs = 20;
     PumpTankSource p; p.begin(c, &s);
-    p.update(10);
+    for (uint32_t t = 1; t < 40; ++t) p.update(t);   // past the absence timeout
     CHECK(!p.ready());
     CHECK(p.fault() == FaultCode::SensorMissing);
-    CHECK_NEAR(s.src[0], 0.0f, 1e-3);   // pumps stay off
+    CHECK_NEAR(s.src[0], 0.0f, 1e-3);   // pumps stay off, never auto-started
 }
 
 TEST(pump_tank_fills_and_stops) {
@@ -203,4 +203,101 @@ TEST(airsystem_valve_timeout_safety) {
     CHECK(!s.gateOpen);
     CHECK(a.fault() == FaultCode::ValveTimeout);
     CHECK(a.state() == AirState::Fault);
+}
+
+// Review #14: a perfectly stable sensor reading is NOT stale.
+TEST(sensor_stable_value_not_stale) {
+    FakeAirSink s; s.sensorRaw = 50;
+    AirConfig c; c.sensor.type = AirSensorType::PressureAnalog;
+    c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
+    c.sensor.staleTimeoutMs = 100;
+    AirSensor sensor; sensor.begin(c, &s);
+    for (uint32_t t = 1; t < 500; ++t) sensor.update(t);   // constant reading, long time
+    CHECK(sensor.present());
+    CHECK(sensor.valid());                                  // stable ≠ stale
+    CHECK(sensor.fault() == FaultCode::None);
+}
+
+// Review #15: a transient NaN does not make the sensor permanently absent.
+TEST(sensor_recovers_from_transient_nan) {
+    FakeAirSink s; s.sensorRaw = 50;
+    AirConfig c; c.sensor.type = AirSensorType::PressureAnalog;
+    c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
+    c.sensor.staleTimeoutMs = 100;
+    AirSensor sensor; sensor.begin(c, &s);
+    for (uint32_t t = 1; t < 20; ++t) sensor.update(t);
+    CHECK(sensor.present());
+    s.sensorRaw = NAN;                                      // brief glitch
+    for (uint32_t t = 20; t < 40; ++t) sensor.update(t);    // < staleTimeout
+    CHECK(sensor.present());                                // still considered present
+    s.sensorRaw = 55;                                       // recovers
+    for (uint32_t t = 40; t < 60; ++t) sensor.update(t);
+    CHECK(sensor.present());
+    CHECK(sensor.valid());
+}
+
+// Review #16: direct-pump cascade actually starts pumps 2/3 via update().
+TEST(pump_direct_cascade_via_update) {
+    FakeAirSink s; AirConfig c;
+    c.source.type = AirSourceType::PumpsDirect; c.source.pumpCount = 3; c.source.cascadeDelayMs = 100;
+    c.source.min01 = 0.3f; c.source.max01 = 1.0f;
+    PumpDirectSource p; p.begin(c, &s);
+    AirNoteRequest r; r.velocity = 127;
+    p.prepare(r, 0);
+    CHECK(s.src[0] > 0.0f); CHECK_NEAR(s.src[1], 0.0f, 1e-3);   // only pump 0 at t=0
+    for (uint32_t t = 1; t < 250; ++t) p.update(t);            // advance with NO new note
+    CHECK(s.src[1] > 0.0f); CHECK(s.src[2] > 0.0f);
+    CHECK(p.ready());
+}
+
+// Review #18: an out-of-range sensor reading stops the tank pumps.
+TEST(pump_tank_out_of_range_stops) {
+    FakeAirSink s; AirConfig c;
+    c.source.type = AirSourceType::PumpsTank; c.source.requireSensor = true;
+    c.source.lowThresh=40; c.source.highThresh=80; c.source.safetyThresh=200; c.source.minOffMs=0;
+    c.sensor.type = AirSensorType::PressureAnalog;
+    c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100;
+    c.sensor.physLo=0; c.sensor.physHi=90;   // valid band ends at 90
+    PumpTankSource p; p.begin(c, &s);
+    s.sensorRaw = 99;                          // 99 > physHi 90 → out of range
+    for (uint32_t t = 1; t < 10; ++t) p.update(t);
+    CHECK(p.fault() == FaultCode::SensorOutOfRange);
+    CHECK_NEAR(s.src[0], 0.0f, 1e-3);
+}
+
+// Review #13: air rearm clears a latched subcomponent (valve timeout) fault.
+TEST(air_rearm_clears_subcomponent_fault) {
+    FakeAirSink s; auto cfg = []{ AirConfig c; c.source.type=AirSourceType::ExternalPassive;
+        c.gate.type=AirGateType::SolenoidSimple; c.valveOpenTimeoutMs=50; return c; }();
+    AirSystem a; a.begin(cfg, &s);
+    AirNoteRequest r; r.velocity=100;
+    a.setNow(0); a.startNote(r);
+    for (uint32_t t=1;t<=80;++t) a.update(t);
+    CHECK(a.fault() == FaultCode::ValveTimeout);
+    a.rearm();
+    CHECK(a.fault() == FaultCode::None);
+    CHECK(a.state() == AirState::Idle);
+    a.setNow(100); a.startNote(r); a.update(101);   // usable again
+    CHECK(s.gateOpen);
+}
+
+// Review #17: tank PWM regulation drives harder far from target than near it.
+TEST(pump_tank_pid_targets_setpoint) {
+    FakeAirSink s; AirConfig c;
+    c.source.type = AirSourceType::PumpsTank; c.source.requireSensor = true;
+    c.source.lowThresh = 40; c.source.highThresh = 80; c.source.safetyThresh = 200;
+    c.source.target = 70; c.source.tankPwm = true; c.source.pidKp = 0.02f; c.source.pidKi = 0.0f;
+    c.source.min01 = 0.0f; c.source.max01 = 1.0f; c.source.minOffMs = 0; c.source.refillTimeoutMs = 1000000;
+    c.sensor.type = AirSensorType::PressureAnalog;
+    c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
+    c.sensor.filterAlpha = 1.0f;   // no smoothing lag for the test
+    PumpTankSource p; p.begin(c, &s);
+    s.sensorRaw = 30;                          // far below target → strong drive, starts filling
+    for (uint32_t t = 1; t < 5; ++t) p.update(t);
+    float driveFar = s.src[0];
+    s.sensorRaw = 66;                          // near target, still filling (<high)
+    for (uint32_t t = 5; t < 10; ++t) p.update(t);
+    float driveNear = s.src[0];
+    CHECK(driveFar > driveNear);               // PI uses the setpoint
+    CHECK(driveNear > 0.0f);
 }

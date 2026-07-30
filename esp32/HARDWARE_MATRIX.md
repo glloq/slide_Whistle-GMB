@@ -129,6 +129,66 @@ Remaining hardware-bound work: RMT/timer step generation with step-count
 feedback (#12), PCA9685 / ToF / digital-sensor / BLE-MIDI / rtpMIDI / WiFi-STA
 bring-up (#14), and physical validation of every mount.
 
+## Second review response (45 items)
+
+FIXED·TESTED = code changed + native/node test proves it. FIXED = code changed,
+correct-by-construction but needs hardware to validate. TODO = not yet done
+(hardware-bound unless noted).
+
+| # | Item | Status |
+|---|------|--------|
+| 1 | BLE-MIDI dep breaks CI clone | FIXED (dep off common; legacy-only) |
+| 2 | CommandQueue not thread-safe | FIXED (portMUX critical sections) |
+| 3 | All LEDC on channel 0 | FIXED·TESTED (LedcAllocator) |
+| 4 | Stepper not position-servoed | TODO — RMT/timer + step-count feedback (hardware) |
+| 5 | liveConfig never connected; push ignored | FIXED·TESTED (setLiveConfig + truthful `applied`) |
+| 6 | applyDynamic incomplete (motor/air params) | FIXED·TESTED — speed/accel/soft-limits + flow params now applied live; pins/type stay restart-only |
+| 7 | Presets lose musical table | FIXED·TESTED (enabled entries kept) |
+| 8 | Null deref for disabled-then-enabled | FIXED (status iterates compacted ptrs) |
+| 9 | Panic permanent, no rearm | FIXED·TESTED (Rearm command) |
+| 10 | MIDI transports not integrated | TODO — DIN/BLE/rtp/STA bring-up (hardware) |
+| 11 | Concurrent air tests orphan a flute | FIXED·TESTED (per-instrument sessions) |
+| 12 | Homing hangs in Homing on fault | FIXED (→ Fault state) |
+| 13 | Air rearm leaves subcomponent faults | FIXED·TESTED (resetFault) |
+| 14 | Stable sensor flagged stale | FIXED·TESTED (freshness = new sample) |
+| 15 | NaN → permanently absent | FIXED·TESTED (recovers; boot timeout) |
+| 16 | Pump cascade never advances | FIXED·TESTED (update-driven) |
+| 17 | Tank modes/PID not implemented | FIXED·TESTED (target-aware PI + hysteresis); level/position modes still share the sensor value |
+| 18 | Out-of-range sensor keeps pumping | FIXED·TESTED (stops pumps) |
+| 19 | FlowServoAsValve drives one servo twice | TODO — unified controller (hardware) |
+| 20 | PCA9685 configurable but not driven | TODO (hardware) |
+| 21 | ToF/digital sensors not implemented | TODO (hardware) |
+| 22 | Air servo µs hardcoded | FIXED·TESTED (configurable window) |
+| 23 | Endstops not watched while playing | TODO (hardware) |
+| 24 | Validator accepts missing required pins | FIXED·TESTED (PIN_REQUIRED) |
+| 25 | Resources not validated (angle/UART/I2C/I2S…) | PARTIAL — angle servo + servo-gate LEDC + pumps/PCA now claimed; UART/I2C/I2S buses TODO |
+| 26 | Enum values unvalidated | FIXED·TESTED |
+| 27 | Structural validation thin | FIXED·TESTED (ranges/monotonic/thresholds) |
+| 28 | Future schema accepted | FIXED·TESTED (refused) |
+| 29 | Bad checksum imports accepted | FIXED·TESTED (rejected) |
+| 30 | LittleFS auto-format wipes data | FIXED (mount no-format first) |
+| 31 | Rate limiter global | FIXED·TESTED (per-client buckets) |
+| 32 | Origin off by default | FIXED — network.allowedOrigin config drives real enforcement |
+| 33 | requireAuth field not applied | FIXED (MainApp applies it) |
+| 34 | WS confirms auth without verifying | FIXED (verifySession on auth frame) |
+| 35 | WS fragmented frames unhandled | TODO (hardware/transport) |
+| 36 | HTTP body allocated before size check | TODO (transport) |
+| 37 | Status snapshot unsynchronized | FIXED·TESTED — lock-free double-buffer snapshot |
+| 38 | Wizard steps mostly empty | PARTIAL — instrument/motion/air real; others TODO |
+| 39 | finishWizard ignores most choices | FIXED·TESTED (buildConfigPatch) |
+| 40 | Play works w/o login, no WS errors shown | FIXED (onMessage → toast) |
+| 41 | Config not reloaded after login | FIXED |
+| 42 | Double WS reconnect | FIXED·TESTED |
+| 43 | Unbounded browser queue | FIXED·TESTED (bounded + coalesce) |
+| 44 | Expert mode is raw JSON | TODO — per-block forms |
+| 45 | Calibration UI / OTA missing | TODO |
+
+Net: the real-time/config/air correctness defects that can be proven off-device
+are fixed and covered by tests (139 automated cases total). The remainder are
+hardware-transport bound (RMT stepping, PCA9685, ToF, BLE/rtp/DIN, WS transport
+edge cases) or larger UI build-out, and are listed here honestly rather than
+marked done.
+
 ## How to run the software tests
 
 ```sh

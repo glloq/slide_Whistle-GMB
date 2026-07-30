@@ -211,3 +211,41 @@ TEST(engine_apply_dynamic_updates_live_notemap) {
     for (uint32_t k=t+50; k<t+3000; ++k) eng.tick(k, k*1000);
     CHECK_NEAR(act.currentPositionMm(), 60.0f, 1.0f);
 }
+
+// Review #9: a Rearm command recovers an instrument after panic (no reboot).
+TEST(engine_rearm_after_panic) {
+    InstRig r; r.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&r.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    q.push(Command{CommandType::Panic});
+    eng.tick(0, 0);
+    CHECK(r.air.state() == AirState::EStopped);
+    // Rearm → air/actuator cleared, instrument usable again
+    Command re{CommandType::Rearm}; re.instrument = 0; q.push(re);
+    for (uint32_t k = 1; k < 20; ++k) eng.tick(k, k * 1000);
+    CHECK(r.air.state() != AirState::EStopped);
+    Command on{CommandType::NoteOn}; on.channel = 1; on.a = 60; on.b = 100; q.push(on);
+    for (uint32_t k = 20; k < 25; ++k) eng.tick(k, k * 1000);
+    CHECK(r.sink.gateOpen);                 // plays after rearm
+}
+
+// Review #11: two concurrent air tests each get their own timeout — the first
+// is not orphaned when the second starts.
+TEST(engine_two_testair_sessions_independent) {
+    InstRig r0, r1;
+    r0.begin(0, icfg(1, 48, 84));
+    r1.begin(1, icfg(2, 48, 84));
+    Instrument* insts[] = {&r0.inst, &r1.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q);
+    Command t0{CommandType::TestAir}; t0.instrument = 0; t0.i16 = 40; q.push(t0);
+    eng.tick(0, 0);
+    Command t1{CommandType::TestAir}; t1.instrument = 1; t1.i16 = 40; q.push(t1);
+    eng.tick(5, 5000);
+    CHECK(r0.sink.gateOpen); CHECK(r1.sink.gateOpen);
+    // advance past instrument 0's timeout (started at t=0, dur 40) but before 1's
+    for (uint32_t k = 6; k <= 44; ++k) eng.tick(k, k * 1000);
+    CHECK(!r0.sink.gateOpen);               // #0 auto-closed on its own timer
+    CHECK(r1.sink.gateOpen);                // #1 still running
+    for (uint32_t k = 45; k <= 60; ++k) eng.tick(k, k * 1000);
+    CHECK(!r1.sink.gateOpen);               // #1 auto-closed
+}

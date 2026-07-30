@@ -87,6 +87,14 @@ public:
         }
     }
 
+    void applyDynamic(const SlideMotionConfig& c) override {
+        // Only the safe, dynamic fields — never pins / type / backend (#6).
+        cfg_.maxSpeedMmS = c.maxSpeedMmS;
+        cfg_.accelMmS2   = c.accelMmS2;
+        cfg_.softMinMm   = c.softMinMm;
+        cfg_.softMaxMm   = c.softMaxMm;
+    }
+
     bool isReadyForAir() const override {
         if (state_ == MotionState::Fault || state_ == MotionState::EStopped) return false;
         if (!homed_) return false;

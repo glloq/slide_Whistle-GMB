@@ -41,7 +41,9 @@ struct SourceConfig {
     // tank regulation
     TankRegulationMode tankMode = TankRegulationMode::Pressure;
     bool     tankPwm    = true;          // PID (pwm) vs hysteresis (on/off)
-    float    target     = 60.0f;         // physical target
+    float    target     = 60.0f;         // physical regulation target
+    float    pidKp      = 0.02f;         // PWM drive per unit of (target - value)
+    float    pidKi      = 0.0005f;       // integral gain
     float    lowThresh  = 40.0f;
     float    highThresh = 80.0f;
     float    safetyThresh = 100.0f;      // overpressure cutoff
@@ -55,6 +57,8 @@ struct GateConfig {
     int8_t     pin = -1;                  // solenoid GPIO, or servo GPIO
     PwmBackend backend = PwmBackend::Gpio;
     uint8_t    pcaChannel = 0;
+    uint16_t   servoMinUs = 1000;         // servo-gate pulse window (calibratable, #22)
+    uint16_t   servoMaxUs = 2000;
     bool     activeHigh = true;
     uint32_t openTimeoutMs = 0;          // 0 = disabled (safety)
     // solenoid pwm economiser
@@ -73,6 +77,7 @@ struct FlowConfig {
     int8_t   pin = -1;                    // flow servo / proportional valve pin
     PwmBackend backend = PwmBackend::Gpio;
     uint8_t  pcaChannel = 0;
+    uint16_t servoMinUs = 1000, servoMaxUs = 2000;   // flow-servo pulse window (#22)
     uint8_t  min = 0, nominal = 64, max = 127;
     float    rest01 = 0.0f;
     VelocityCurve curve = VelocityCurve::Linear;
@@ -85,6 +90,7 @@ struct AngleConfig {
     int8_t   pin = -1;                    // jet-angle servo pin (independent of flow)
     PwmBackend backend = PwmBackend::Gpio;
     uint8_t  pcaChannel = 0;
+    uint16_t servoMinUs = 1000, servoMaxUs = 2000;   // angle-servo pulse window (#22)
     float    rest01 = 0.5f, min01 = 0.0f, nominal01 = 0.5f, max01 = 1.0f;
     bool     useCc74 = true;
 };
@@ -117,29 +123,43 @@ struct AirConfig {
 class AirSensor : public IAirSensor {
 public:
     void begin(const AirConfig& cfg, IAirSink* sink) override {
-        c_ = cfg.sensor; sink_ = sink; filt_ = NAN; lastChangeMs_ = 0;
-        present_ = (c_.type != AirSensorType::None); lastRaw_ = NAN; haveTime_ = false;
+        c_ = cfg.sensor; sink_ = sink; filt_ = NAN; lastRaw_ = NAN;
+        configured_ = (c_.type != AirSensorType::None);
+        present_ = configured_; lastGoodMs_ = 0; lastChangeMs_ = 0; haveTime_ = false;
+        stale_ = false; inRange_ = true; frozen_ = false;
     }
     void update(uint32_t nowMs) override {
-        if (!present_) return;
+        if (!configured_) return;
+        if (!haveFirst_) { firstMs_ = nowMs; haveFirst_ = true; }
         float raw = sink_ ? sink_->readSensorRaw() : NAN;
-        if (std::isnan(raw)) { present_ = false; return; }   // disconnected
+        if (std::isnan(raw)) {
+            // Transient bad read: keep trying. Declare the sensor ABSENT only
+            // after readings have been missing longer than the timeout (measured
+            // from the last good sample, or from boot if none ever arrived), and
+            // recover automatically once a real value returns (review #15).
+            uint32_t ref = haveTime_ ? lastGoodMs_ : firstMs_;
+            if (elapsed_u32(nowMs, ref) > c_.staleTimeoutMs) present_ = false;
+            return;   // no fresh sample this tick — do not fabricate one
+        }
+        present_ = true;                          // recovered / present
+        lastGoodMs_ = nowMs; haveTime_ = true;    // a fresh sample arrived → not stale
+        stale_ = false;
         if (std::isnan(filt_)) filt_ = raw;
         else filt_ = filt_ + c_.filterAlpha * (raw - filt_);
-        if (std::isnan(lastRaw_) || std::fabs(raw - lastRaw_) > 0.5f) {
-            lastRaw_ = raw; lastChangeMs_ = nowMs; haveTime_ = true;
-        }
+        // "frozen" is a DISTINCT diagnostic (long window) — a perfectly stable
+        // reading is NOT stale (review #14).
+        if (std::isnan(lastRaw_) || std::fabs(raw - lastRaw_) > 0.5f) { lastRaw_ = raw; lastChangeMs_ = nowMs; }
+        frozen_ = elapsed_u32(nowMs, lastChangeMs_) > (c_.staleTimeoutMs * 20u);
         float phys = c_.physMin + (filt_ - c_.rawMin) / (c_.rawMax - c_.rawMin) *
                      (c_.physMax - c_.physMin);
         if (c_.invert) phys = c_.physMax - (phys - c_.physMin);
         inRange_ = (phys >= c_.physLo && phys <= c_.physHi);
         if (inRange_) lastValid_ = phys;
-        // stale if the raw reading has been frozen too long
-        stale_ = haveTime_ && elapsed_u32(nowMs, lastChangeMs_) > c_.staleTimeoutMs;
     }
     bool present() const override { return present_; }
     bool valid()   const override { return present_ && !stale_ && inRange_; }
     float value()  const override { return lastValid_; }
+    bool  frozen()  const { return frozen_; }
     FaultCode fault() const override {
         if (!present_) return FaultCode::SensorMissing;
         if (stale_)    return FaultCode::SensorStale;
@@ -149,8 +169,9 @@ public:
 private:
     SensorConfig c_; IAirSink* sink_ = nullptr;
     float filt_ = NAN, lastRaw_ = NAN, lastValid_ = 0;
-    uint32_t lastChangeMs_ = 0; bool haveTime_ = false;
-    bool present_ = false, stale_ = false, inRange_ = true;
+    uint32_t lastGoodMs_ = 0, lastChangeMs_ = 0, firstMs_ = 0;
+    bool haveTime_ = false, haveFirst_ = false;
+    bool configured_ = false, present_ = false, stale_ = false, inRange_ = true, frozen_ = false;
 };
 
 // ===========================================================================
@@ -162,6 +183,7 @@ public:
     void update(uint32_t) override {}
     bool ready() const override { return true; }
     void safeState() override { if (sink_) for (uint8_t i=0;i<MAX_PUMPS;++i) sink_->setSourceLevel(i, 0.0f); }
+    void resetFault() override { fault_ = FaultCode::None; }
     FaultCode fault() const override { return fault_; }
 protected:
     SourceConfig c_; IAirSink* sink_ = nullptr; FaultCode fault_ = FaultCode::None;
@@ -204,9 +226,10 @@ private:
 class PumpDirectSource : public BaseSource {
 public:
     void prepare(const AirNoteRequest& r, uint32_t nowMs) override {
-        startMs_ = nowMs; started_ = 0; run(r, nowMs);
+        startMs_ = nowMs; started_ = 0; req_ = r; running_ = true; run(r, nowMs);
     }
     void run(const AirNoteRequest& r, uint32_t nowMs) override {
+        req_ = r; running_ = true;
         float lvl = lerp(c_.min01, c_.max01, r.velocity / 127.0f);
         uint8_t n = clampv<uint8_t>(c_.pumpCount, 1, MAX_PUMPS);
         // cascade: enable pump i once its stagger delay elapsed (limit inrush)
@@ -216,10 +239,17 @@ public:
             if (on && i + 1 > started_) started_ = i + 1;
         }
     }
-    void idle(uint32_t) override { if (sink_) for (uint8_t i=0;i<MAX_PUMPS;++i) sink_->setSourceLevel(i, 0.0f); }
+    // Drive the cascade forward so pumps 2/3 actually start after their delay
+    // even without a new note event (review #16).
+    void update(uint32_t nowMs) override { if (running_) run(req_, nowMs); }
+    void idle(uint32_t) override {
+        running_ = false; started_ = 0;
+        if (sink_) for (uint8_t i=0;i<MAX_PUMPS;++i) sink_->setSourceLevel(i, 0.0f);
+    }
     bool ready() const override { return started_ >= clampv<uint8_t>(c_.pumpCount,1,MAX_PUMPS); }
 private:
-    uint32_t startMs_ = 0; uint8_t started_ = 0;
+    uint32_t startMs_ = 0; uint8_t started_ = 0; bool running_ = false;
+    AirNoteRequest req_;
 };
 
 class PumpTankSource : public BaseSource {
@@ -231,6 +261,7 @@ public:
     void idle(uint32_t nowMs) override { regulate(nowMs); }
     void update(uint32_t nowMs) override { if (!extSensor_) sensor_.update(nowMs); regulate(nowMs); }
     bool ready() const override { return regulatedReady_ && fault_ == FaultCode::None; }
+    void resetFault() override { fault_ = FaultCode::None; filling_ = false; regulatedReady_ = false; pidI_ = 0.0f; }
 private:
     AirSensor* activeSensor() { return extSensor_ ? extSensor_ : &sensor_; }
     void regulate(uint32_t nowMs) {
@@ -241,6 +272,11 @@ private:
         }
         if (c_.requireSensor && s->fault() == FaultCode::SensorStale) {
             fault_ = FaultCode::SensorStale; regulatedReady_ = false; safeState(); return;
+        }
+        // An out-of-range reading means we can't trust lastValid_ — stop the
+        // pumps rather than regulate on a stale/implausible value (review #18).
+        if (c_.requireSensor && s->fault() == FaultCode::SensorOutOfRange) {
+            fault_ = FaultCode::SensorOutOfRange; regulatedReady_ = false; safeState(); return;
         }
         float p = s->value();
         if (p >= c_.safetyThresh) { fault_ = FaultCode::Overpressure; regulatedReady_ = false; safeState(); return; }
@@ -253,9 +289,17 @@ private:
             if (elapsed_u32(nowMs, fillStartMs_) > c_.refillTimeoutMs) {   // rearmed EVERY cycle
                 fault_ = FaultCode::PumpTimeout; filling_ = false; safeState(); return;
             }
-            if (p >= c_.highThresh) { filling_ = false; lastOffMs_ = nowMs; if (sink_) setPumps(n, 0.0f); return; }
-            float drive = c_.tankPwm ? clampv((c_.highThresh - p)/(c_.highThresh - c_.lowThresh), c_.min01, c_.max01)
-                                     : c_.max01;
+            if (p >= c_.highThresh) { filling_ = false; lastOffMs_ = nowMs; pidI_ = 0.0f; if (sink_) setPumps(n, 0.0f); return; }
+            // PWM: regulate toward `target` with a PI law (uses target, review
+            // #17). On/off: run at max within the low/high hysteresis band.
+            float drive;
+            if (c_.tankPwm) {
+                float err = c_.target - p;
+                pidI_ = clampv(pidI_ + err * c_.pidKi, -c_.max01, c_.max01);
+                drive = clampv(c_.pidKp * err + pidI_, c_.min01, c_.max01);
+            } else {
+                drive = c_.max01;
+            }
             setPumps(n, drive);
         } else if (sink_) {
             setPumps(n, 0.0f);
@@ -265,6 +309,7 @@ private:
     AirSensor sensor_; AirSensor* extSensor_ = nullptr;
     bool regulatedReady_ = false, filling_ = false;
     uint32_t fillStartMs_ = 0, lastOffMs_ = 0;
+    float pidI_ = 0.0f;
 };
 
 // ===========================================================================
@@ -294,6 +339,7 @@ public:
     }
     bool isOpen() const override { return open_; }
     void safeState() override { open_ = false; if (sink_) sink_->setGateOpen(false); }
+    void resetFault() override { fault_ = FaultCode::None; }
     FaultCode fault() const override { return fault_; }
 private:
     GateConfig c_; IAirSink* sink_ = nullptr; bool open_ = false;
@@ -318,6 +364,7 @@ public:
     }
     bool isOpen() const override { return open_; }
     void safeState() override { open_ = false; phasePeak_ = false; if (sink_) sink_->setGatePwm(0.0f); } // immediate close on panic
+    void resetFault() override { fault_ = FaultCode::None; }
     FaultCode fault() const override { return fault_; }
     float holdLevel() const { return c_.hold01; }
 private:
@@ -340,6 +387,7 @@ public:
     }
     bool isOpen() const override { return open_; }
     void safeState() override { want_ = false; open_ = false; if (sink_) sink_->setGatePwm(c_.closed01); } // truly closed
+    void resetFault() override { fault_ = FaultCode::None; }
     FaultCode fault() const override { return fault_; }
 private:
     GateConfig c_; IAirSink* sink_ = nullptr; bool want_ = false, open_ = false;
@@ -364,6 +412,14 @@ public:
         tgt_ = shape(span);
     }
     void rest() override { tgt_ = c_.rest01; }
+    // Update the dynamic flow shaping params live, keeping the current output.
+    void applyDynamic(const FlowConfig& f) {
+        uint8_t mn = f.min, nm = f.nominal, mx = f.max;
+        if (nm < mn) nm = mn;
+        if (nm > mx) nm = mx;
+        c_.min = mn; c_.nominal = nm; c_.max = mx;
+        c_.curve = f.curve; c_.expo = f.expo; c_.maxSlewPerMs = f.maxSlewPerMs; c_.rest01 = f.rest01;
+    }
     void update(uint32_t nowMs) override {
         if (c_.type == FlowControlType::None) { cur_ = 0.0f; return; }
         float dt = 1.0f;

@@ -143,6 +143,7 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     src.set("tankMode", (int)so.tankMode);
     src.set("tankPwm", so.tankPwm);
     src.set("target", so.target);
+    src.set("pidKp", so.pidKp); src.set("pidKi", so.pidKi);
     src.set("requireSensor", so.requireSensor);
     src.set("lowThresh", so.lowThresh);
     src.set("highThresh", so.highThresh);
@@ -159,6 +160,7 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     g.set("peak01", gc.peak01); g.set("peakMs", (double)gc.peakMs); g.set("hold01", gc.hold01);
     g.set("closed01", gc.closed01); g.set("open01", gc.open01);
     g.set("openDelayMs", (double)gc.openDelayMs); g.set("closeDelayMs", (double)gc.closeDelayMs);
+    g.set("servoMinUs", (int)gc.servoMinUs); g.set("servoMaxUs", (int)gc.servoMaxUs);
     a.set("gate", g);
     const auto& fc = in.air.flow;
     JsonValue f = JsonValue::makeObj();
@@ -167,6 +169,7 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     f.set("min", (int)fc.min); f.set("nominal", (int)fc.nominal); f.set("max", (int)fc.max);
     f.set("rest01", fc.rest01); f.set("curve", (int)fc.curve); f.set("expo", fc.expo);
     f.set("maxSlewPerMs", fc.maxSlewPerMs);
+    f.set("servoMinUs", (int)fc.servoMinUs); f.set("servoMaxUs", (int)fc.servoMaxUs);
     a.set("flow", f);
     const auto& ac = in.air.angle;
     JsonValue ang = JsonValue::makeObj();
@@ -175,6 +178,7 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     ang.set("rest01", ac.rest01); ang.set("min01", ac.min01);
     ang.set("nominal01", ac.nominal01); ang.set("max01", ac.max01);
     ang.set("useCc74", ac.useCc74);
+    ang.set("servoMinUs", (int)ac.servoMinUs); ang.set("servoMaxUs", (int)ac.servoMaxUs);
     a.set("angle", ang);
     const auto& sc = in.air.sensor;
     JsonValue se = JsonValue::makeObj();
@@ -208,15 +212,17 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     cc.set("vibratoEnabled", in.cc.vibratoEnabled);
     v.set("cc", cc);
 
-    // calibration points (only calibrated entries) — full per-note air window
+    // calibration points: every ENABLED entry (calibrated or provisional) so a
+    // preset's provisional table survives a save/reload (review item #7).
     JsonValue cal = JsonValue::makeArr();
     for (int n = 0; n < MIDI_NOTE_COUNT; ++n) {
         const NoteEntry& e = in.map.entry((uint8_t)n);
-        if (!e.calibrated) continue;
+        if (!e.enabled) continue;
         JsonValue pt = JsonValue::makeObj();
         pt.set("note", n); pt.set("mm", e.positionMm);
         pt.set("tol", e.positionToleranceMm);
         pt.set("airMin", (int)e.airMin); pt.set("air", (int)e.airNominal); pt.set("airMax", (int)e.airMax);
+        pt.set("calibrated", e.calibrated);   // false = provisional / not hw-validated
         pt.set("enabled", e.enabled);
         cal.arr.push_back(pt);
     }
@@ -285,6 +291,8 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
             so.tankMode = (TankRegulationMode)src->int_or("tankMode", (int)so.tankMode);
             so.tankPwm = src->bool_or("tankPwm", so.tankPwm);
             so.target = (float)src->num_or("target", so.target);
+            so.pidKp = (float)src->num_or("pidKp", so.pidKp);
+            so.pidKi = (float)src->num_or("pidKi", so.pidKi);
             so.requireSensor = src->bool_or("requireSensor", so.requireSensor);
             so.lowThresh = (float)src->num_or("lowThresh", so.lowThresh);
             so.highThresh = (float)src->num_or("highThresh", so.highThresh);
@@ -307,6 +315,8 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
             gc.open01 = (float)g->num_or("open01", gc.open01);
             gc.openDelayMs = (uint32_t)g->num_or("openDelayMs", gc.openDelayMs);
             gc.closeDelayMs = (uint32_t)g->num_or("closeDelayMs", gc.closeDelayMs);
+            gc.servoMinUs = (uint16_t)g->int_or("servoMinUs", gc.servoMinUs);
+            gc.servoMaxUs = (uint16_t)g->int_or("servoMaxUs", gc.servoMaxUs);
         }
         if (auto* f = a->find("flow")) {
             auto& fc = in.air.flow;
@@ -321,6 +331,8 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
             fc.curve = (VelocityCurve)f->int_or("curve", (int)fc.curve);
             fc.expo = (float)f->num_or("expo", fc.expo);
             fc.maxSlewPerMs = (float)f->num_or("maxSlewPerMs", fc.maxSlewPerMs);
+            fc.servoMinUs = (uint16_t)f->int_or("servoMinUs", fc.servoMinUs);
+            fc.servoMaxUs = (uint16_t)f->int_or("servoMaxUs", fc.servoMaxUs);
         }
         if (auto* ang = a->find("angle")) {
             auto& ac = in.air.angle;
@@ -333,6 +345,8 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
             ac.nominal01 = (float)ang->num_or("nominal01", ac.nominal01);
             ac.max01 = (float)ang->num_or("max01", ac.max01);
             ac.useCc74 = ang->bool_or("useCc74", ac.useCc74);
+            ac.servoMinUs = (uint16_t)ang->int_or("servoMinUs", ac.servoMinUs);
+            ac.servoMaxUs = (uint16_t)ang->int_or("servoMaxUs", ac.servoMaxUs);
         }
         if (auto* se = a->find("sensor")) {
             auto& sc = in.air.sensor;
@@ -383,8 +397,70 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
             e.airMin = (uint8_t)pt.int_or("airMin", e.airMin);
             e.airMax = (uint8_t)pt.int_or("airMax", e.airMax);
             e.enabled = pt.bool_or("enabled", true);
+            e.calibrated = pt.bool_or("calibrated", true);  // preserve provisional status
         }
     }
+}
+
+// --- validation --------------------------------------------------------------
+inline bool enumOk(int v, int hi) { return v >= 0 && v <= hi; }
+
+// Full structural validation (review items #26/#27). Returns "" if valid, else
+// a short reason. Runs on the decoded struct before it is ever accepted.
+inline std::string validateStructural(const RuntimeConfig& c) {
+    if (!enumOk((int)c.device.board, 2)) return "bad device.board";
+    if (c.instrumentCount > MAX_INSTRUMENTS) return "instrumentCount out of range";
+    for (uint8_t idx = 0; idx < c.instrumentCount; ++idx) {
+        const InstrumentConfig& in = c.instruments[idx];
+        // enums
+        if (!enumOk((int)in.motion.type, 3)) return "bad motion.type";
+        if (!enumOk((int)in.motion.dualMode, 2)) return "bad motion.dualMode";
+        if (!enumOk((int)in.air.source.type, 4)) return "bad air.source.type";
+        if (!enumOk((int)in.air.gate.type, 5)) return "bad air.gate.type";
+        if (!enumOk((int)in.air.flow.type, 5)) return "bad air.flow.type";
+        if (!enumOk((int)in.air.sensor.type, 7)) return "bad air.sensor.type";
+        if (!enumOk((int)in.air.source.tankMode, 2)) return "bad tankMode";
+        if (!enumOk((int)in.air.flow.curve, 4)) return "bad flow.curve";
+        if (!enumOk((int)in.seq.mono, 2)) return "bad seq.mono";
+        if (!enumOk((int)in.seq.legato, 5)) return "bad seq.legato";
+        if (!enumOk((int)in.seq.vibratoUnit, 2)) return "bad vibratoUnit";
+        // ranges
+        if (in.midiChannel > 16) return "midiChannel out of 0..16";
+        if (in.noteMin > 127 || in.noteMax > 127) return "note out of 0..127";
+        if (in.noteMin > in.noteMax) return "noteMin>noteMax";
+        const auto& f = in.air.flow;
+        if (!(f.min <= f.nominal && f.nominal <= f.max)) return "flow min<=nominal<=max violated";
+        const auto& g = in.air.gate;
+        if (g.hold01 > g.peak01 + 1e-6f) return "gate hold>peak";
+        const auto& s = in.air.sensor;
+        if (s.type != AirSensorType::None) {
+            if (!(s.rawMin < s.rawMax)) return "sensor rawMin<rawMax violated";
+            if (!(s.physLo < s.physHi)) return "sensor physLo<physHi violated";
+            if (!(s.filterAlpha >= 0.f && s.filterAlpha <= 1.f)) return "filterAlpha out of 0..1";
+        }
+        const auto& so = in.air.source;
+        if (so.type == AirSourceType::PumpsDirect || so.type == AirSourceType::PumpsTank)
+            if (so.pumpCount < 1 || so.pumpCount > MAX_PUMPS) return "pumpCount out of 1..3";
+        if (so.type == AirSourceType::PumpsTank) {
+            if (!(so.lowThresh < so.highThresh)) return "tank low<high violated";
+            if (!(so.highThresh < so.safetyThresh)) return "tank high<safety violated";
+            if (!(so.target >= so.lowThresh && so.target <= so.highThresh)) return "tank target outside low..high";
+        }
+        // servo calibration must be monotonic in mm
+        for (auto* sv : { &in.motion.servoA, &in.motion.servoB }) {
+            if (sv->calCount < 2 || sv->calCount > 8) return "servo calCount invalid";
+            for (uint8_t i = 1; i < sv->calCount; ++i)
+                if (!(sv->cal[i].mm > sv->cal[i-1].mm)) return "servo calibration not monotonic";
+        }
+        // finite geometry
+        if (!(in.motion.travelMm > 0.f) || !std::isfinite(in.motion.travelMm)) return "travelMm invalid";
+        if (in.motion.softMinMm > in.motion.softMaxMm) return "softMin>softMax";
+        // note table monotonic (non-decreasing positions)
+        if (in.map.firstNonMonotonic() >= 0) return "note table not monotonic";
+    }
+    // USB MIDI is impossible on a classic WROOM
+    if (c.midi.usb && c.device.board == BoardKind::Esp32Wroom) return "USB MIDI unavailable on WROOM";
+    return "";
 }
 
 // --- top-level ---------------------------------------------------------------
@@ -399,6 +475,7 @@ inline std::string configToJson(const RuntimeConfig& c) {
     n.set("apEnabled", c.network.apEnabled);
     n.set("requireAuth", c.network.requireAuth);
     n.set("disableApWhenConnected", c.network.disableApWhenConnected);
+    n.set("allowedOrigin", std::string(c.network.allowedOrigin));
     root.set("network", n);
     JsonValue mi = JsonValue::makeObj();
     mi.set("din", c.midi.din); mi.set("ble", c.midi.ble); mi.set("rtp", c.midi.rtp);
@@ -439,6 +516,9 @@ inline ConfigDecodeResult configFromJson(const std::string& text, RuntimeConfig&
     }
 
     long ver = root->int_or("schemaVersion", 0);
+    // Refuse configs from a FUTURE schema rather than partially decoding an
+    // unknown structure (review item #28).
+    if (ver > (long)CONFIG_SCHEMA_VERSION) { r.error = "unsupported (future) schemaVersion"; return r; }
     RuntimeConfig cfg = defaultConfig();
     if (ver > 0 && ver < (long)CONFIG_SCHEMA_VERSION) {
         if (!migrateLegacy(*root, cfg)) { r.error = "migration failed"; return r; }
@@ -458,6 +538,8 @@ inline ConfigDecodeResult configFromJson(const std::string& text, RuntimeConfig&
             cfg.network.apEnabled = n->bool_or("apEnabled", cfg.network.apEnabled);
             cfg.network.requireAuth = n->bool_or("requireAuth", cfg.network.requireAuth);
             cfg.network.disableApWhenConnected = n->bool_or("disableApWhenConnected", cfg.network.disableApWhenConnected);
+            std::snprintf(cfg.network.allowedOrigin, sizeof(cfg.network.allowedOrigin), "%s",
+                          n->str_or("allowedOrigin", cfg.network.allowedOrigin).c_str());
         }
         if (auto* mi = root->find("midi")) {
             cfg.midi.din = mi->bool_or("din", cfg.midi.din);
@@ -476,13 +558,9 @@ inline ConfigDecodeResult configFromJson(const std::string& text, RuntimeConfig&
                 instrumentFromJson(arr->arr[i], cfg.instruments[i]);
     }
 
-    // structural validation before accepting (transactional)
-    for (int i = 0; i < cfg.instrumentCount; ++i) {
-        InstrumentConfig& in = cfg.instruments[i];
-        if (in.noteMin > in.noteMax) { r.error = "noteMin>noteMax"; return r; }
-        if (in.air.flow.min > in.air.flow.max) { r.error = "flow min>max"; return r; }
-        if (in.air.gate.hold01 > in.air.gate.peak01 + 1e-6f) { r.error = "gate hold>peak"; return r; }
-    }
+    // full structural + enum validation before accepting (transactional)
+    std::string verr = validateStructural(cfg);
+    if (!verr.empty()) { r.error = verr; return r; }
     out = cfg;
     r.ok = true;
     return r;

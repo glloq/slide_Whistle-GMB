@@ -141,7 +141,18 @@ public:
         estopped_ = false;
         fault_ = FaultCode::None;
         safety_.reset();
+        if (src_)  src_->resetFault();     // clear latched subcomponent faults (#13)
+        if (gate_) gate_->resetFault();
         state_ = AirState::Idle;
+    }
+
+    void applyDynamic(const AirConfig& c) override {
+        // Live: flow shaping + safety timings. Source/gate hardware types stay
+        // restart-only (#6).
+        cfg_.flow = c.flow;
+        flow_impl_.applyDynamic(c.flow);
+        cfg_.valveOpenTimeoutMs = c.valveOpenTimeoutMs;
+        cfg_.minNoteMs = c.minNoteMs;
     }
 
     bool isReady() const override {

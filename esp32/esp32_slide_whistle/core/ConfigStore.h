@@ -80,6 +80,7 @@ public:
         RuntimeConfig probe;
         ConfigDecodeResult r = configFromJson(json, probe);
         if (!r.ok) { err = r.error; return false; }
+        if (!r.checksumOk) { err = "checksum mismatch"; return false; }   // review item #29
         if (!save(probe)) { err = "persist failed"; return false; }
         out = probe;
         return true;

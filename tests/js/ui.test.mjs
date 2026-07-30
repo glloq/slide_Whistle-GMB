@@ -104,6 +104,49 @@ test("ws: single socket, one frame per event (not HTTP)", () => {
   assert.equal(ws.sent.length, 2);
 });
 
+test("ws: bounded queue drops old NoteOn but keeps NoteOff (#43)", () => {
+  const sock = new MidiSocket("ws://x", { socketFactory: () => new FakeWS(), maxQueue: 4 });
+  sock.connect();                       // never opened → everything queues
+  for (let n = 0; n < 20; n++) sock.send({ type: "noteOn", channel: 1, note: 60 + n });
+  sock.send({ type: "noteOff", channel: 1, note: 60 });
+  assert.ok(sock.queue.length <= 4);
+  assert.ok(sock.queue.some((q) => q.type === "noteOff"));   // release preserved
+});
+
+test("ws: coalesces CC on same channel/controller (#43)", () => {
+  const sock = new MidiSocket("ws://x", { socketFactory: () => new FakeWS(), maxQueue: 32 });
+  sock.connect();
+  sock.send({ type: "cc", channel: 1, a: 11, b: 10 });
+  sock.send({ type: "cc", channel: 1, a: 11, b: 99 });   // replaces the previous
+  const ccs = sock.queue.filter((q) => q.type === "cc" && q.a === 11);
+  assert.equal(ccs.length, 1);
+  assert.equal(ccs[0].b, 99);
+});
+
+test("ws: intentional close does not schedule a reconnect (#42)", () => {
+  let count = 0;
+  const sock = new MidiSocket("ws://x", { socketFactory: () => { count++; return new FakeWS(); } });
+  sock.connect();               // count = 1
+  sock.close();                 // intentional
+  if (sock.ws.onclose) sock.ws.onclose();
+  assert.equal(sock._timer, null);   // no pending reconnect timer
+  assert.equal(count, 1);            // no extra socket created
+});
+
+test("wizard: buildConfigPatch carries every choice (#39)", () => {
+  const w = new Wizard({ name: "Alto", channel: 3, noteMin: 50, noteMax: 80, motionType: "stepper" });
+  w.set({ wiring: { stepPin: 32, dirPin: 33, enablePin: 25, endstopPin: 34 }, travelMm: 120, airPreset: 2, midiSource: "din" });
+  const p = w.buildConfigPatch();
+  assert.equal(p.name, "Alto");
+  assert.equal(p.channel, 3);
+  assert.equal(p.noteMin, 50);
+  assert.equal(p.motion.type, 1);            // stepper
+  assert.equal(p.motion.stepper.stepPin, 32);
+  assert.equal(p.motion.travelMm, 120);
+  assert.equal(p.airPreset, 2);
+  assert.equal(p.midiSource, "din");
+});
+
 // --- macros.js -------------------------------------------------------------
 test("macros: stop at first failing step (#24)", async () => {
   const ran = [];

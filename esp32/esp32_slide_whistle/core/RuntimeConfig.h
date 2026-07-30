@@ -41,6 +41,7 @@ struct NetworkConfig {
     bool apPasswordGenerated = true;   // generated at first boot, never a fixed default
     bool requireAuth  = true;          // critical commands require the admin token
     bool disableApWhenConnected = false;
+    char allowedOrigin[48] = "";       // if set, only this Origin may POST (#32)
 };
 
 struct MidiConfig {
@@ -106,9 +107,9 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
         switch (in.motion.type) {
             case SlideDriveType::StepDir: {
                 const auto& s = in.motion.stepper;
-                v.claimPin(s.stepPin, true, false, base + ".motion.stepper.stepPin", own + " step");
-                v.claimPin(s.dirPin, true, false, base + ".motion.stepper.dirPin", own + " dir");
-                v.claimPin(s.enablePin, true, false, base + ".motion.stepper.enablePin", own + " enable");
+                v.requirePin(s.stepPin, true, false, base + ".motion.stepper.stepPin", own + " step");  // mandatory
+                v.requirePin(s.dirPin, true, false, base + ".motion.stepper.dirPin", own + " dir");     // mandatory
+                v.claimPin(s.enablePin, true, false, base + ".motion.stepper.enablePin", own + " enable");  // optional
                 v.claimPin(s.endstopMin.pin, false, false, base + ".motion.stepper.endstopMin.pin", own + " endstop");
                 if (s.endstopMax.present)
                     v.claimPin(s.endstopMax.pin, false, false, base + ".motion.stepper.endstopMax.pin", own + " endstop2");
@@ -128,11 +129,11 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
         {
             const auto& src = in.air.source;
             if (src.type == AirSourceType::FanOnOff || src.type == AirSourceType::FanPwm) {
-                v.claimPin(src.pin[0], true, false, base + ".air.source.fanPin", own + " fan");
+                v.requirePin(src.pin[0], true, false, base + ".air.source.fanPin", own + " fan");
                 if (src.type == AirSourceType::FanPwm) v.claimLedc(base + ".air.source.fanLedc");
             } else if (src.type == AirSourceType::PumpsDirect || src.type == AirSourceType::PumpsTank) {
                 for (uint8_t p = 0; p < src.pumpCount && p < MAX_PUMPS; ++p) {
-                    v.claimPin(src.pin[p], true, false, base + ".air.source.pump[" + std::to_string(p) + "]", own + " pump");
+                    v.requirePin(src.pin[p], true, false, base + ".air.source.pump[" + std::to_string(p) + "]", own + " pump");
                     v.claimLedc(base + ".air.source.pumpLedc[" + std::to_string(p) + "]");
                 }
                 if (src.type == AirSourceType::PumpsTank)
@@ -148,8 +149,21 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
             if (in.air.gate.backend == PwmBackend::Pca9685)
                 v.claimPca(0x40, in.air.gate.pcaChannel, base + ".air.gate.pcaChannel");
             else {
-                v.claimPin(in.air.gate.pin, true, false, base + ".air.gate.pin", own + " gate");
-                if (in.air.gate.type == AirGateType::SolenoidPwm) v.claimLedc(base + ".air.gate.ledc");
+                v.requirePin(in.air.gate.pin, true, false, base + ".air.gate.pin", own + " gate");
+                // solenoid PWM AND every servo gate (valve/diverter) need a LEDC
+                // channel; only the plain on/off solenoid does not (review #25).
+                if (in.air.gate.type != AirGateType::SolenoidSimple)
+                    v.claimLedc(base + ".air.gate.ledc");
+            }
+        }
+
+        // --- jet-angle servo (independent output, review #25) ---
+        if (in.air.angle.enabled) {
+            if (in.air.angle.backend == PwmBackend::Pca9685)
+                v.claimPca(0x40, in.air.angle.pcaChannel, base + ".air.angle.pcaChannel");
+            else {
+                v.requirePin(in.air.angle.pin, true, false, base + ".air.angle.pin", own + " angle");
+                v.claimLedc(base + ".air.angle.ledc");
             }
         }
 
@@ -167,7 +181,11 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
         // --- sensor pin (analog constrained to ADC1 when WiFi is on) ---
         if (in.air.sensor.type == AirSensorType::PressureAnalog ||
             in.air.sensor.type == AirSensorType::HallAnalog) {
-            v.claimPin(in.air.sensor.pin, false, true, base + ".air.sensor.pin", own + " sensor");
+            // A tank source that requires the sensor MUST have its pin assigned.
+            if (in.air.source.type == AirSourceType::PumpsTank && in.air.source.requireSensor)
+                v.requirePin(in.air.sensor.pin, false, true, base + ".air.sensor.pin", own + " sensor");
+            else
+                v.claimPin(in.air.sensor.pin, false, true, base + ".air.sensor.pin", own + " sensor");
             v.claimRange((long)in.air.sensor.physLo, (long)in.air.sensor.physHi, base + ".air.sensor.range");
         } else if (in.air.sensor.type == AirSensorType::EndstopMechanical ||
                    in.air.sensor.type == AirSensorType::EndstopOptical ||
@@ -188,7 +206,7 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
 inline void claimServo(HardwareResourceValidator& v, const ServoMotionConfig& s,
                        const std::string& base, const std::string& owner) {
     if (s.backend == PwmBackend::Gpio) {
-        v.claimPin(s.pin, true, false, base + ".pin", owner);
+        v.requirePin(s.pin, true, false, base + ".pin", owner);   // servo pin mandatory (#24)
         v.claimLedc(base + ".ledc");
     }
     v.claimRange(s.minUs, s.maxUs, base + ".pulse");

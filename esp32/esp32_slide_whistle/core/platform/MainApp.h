@@ -30,6 +30,7 @@
 #include "../ApiRouter.h"
 #include "../RealtimeEngine.h"
 #include "../InstrumentRuntime.h"
+#include "../StatusSnapshot.h"
 #include "EspSinks.h"
 #include "EspEntropy.h"
 #include "WebServerAdapter.h"
@@ -46,7 +47,7 @@ public:
 #if DEBUG_SERIAL
         Serial.begin(115200); delay(200);
 #endif
-        fsOk_ = fs_.begin(true);
+        fsOk_ = mountFs();
         LoadOutcome lo = LoadOutcome::Default;
         if (fsOk_) { store_.begin(&fs_); lo = store_.load(config_); }
         else       { config_ = defaultConfig(); }
@@ -59,6 +60,9 @@ public:
         // 2. admin secret: persisted in NVS so it survives reboots and can be
         //    shown; generated only on first boot, never a fixed default (#5/#22).
         auth_.begin();
+        auth_.setRequireAuth(config_.network.requireAuth);   // honour the config field (review #33)
+        if (config_.network.allowedOrigin[0])                // enforce Origin only if set (#32)
+            auth_.setAllowedOrigin(config_.network.allowedOrigin);
         loadOrCreateAdminToken();
 
         // 3. validate the whole config before energising anything
@@ -70,6 +74,7 @@ public:
         else       { state_ = SysState::SafeConfigOnly; instCount_ = 0; }
 
         engine_.begin(instPtrs_, instCount_, &queue_);
+        engine_.setLiveConfig(&config_);    // so ApplyDynamicConfig actually applies (#5)
         router_.begin(&auth_, &store_, &config_, &sink_, &entropy_, &status_);
 
         startNetwork();
@@ -89,6 +94,14 @@ public:
     }
 
 private:
+    // Mount LittleFS WITHOUT auto-format first (a transient mount error must not
+    // wipe config/backup/UI, review #30). Format only as a flagged last resort.
+    bool mountFs() {
+        for (int i = 0; i < 2; ++i) { if (fs_.begin(false)) return true; delay(50); }
+        fsFormatted_ = true;                 // surfaced in status; operator is warned
+        return fs_.begin(true);
+    }
+
     // Force all configured gate/source pins to their inactive level. Runs on
     // the loaded config regardless of validity so nothing pulses at boot (#8).
     void forceSafeOutputs(const RuntimeConfig& c) {
@@ -130,13 +143,13 @@ private:
             case AirGateType::SolenoidSimple: air_[i].configureSolenoid(a.gate.pin, a.gate.activeHigh); break;
             case AirGateType::SolenoidPwm:    air_[i].configureSolenoidPwm(a.gate.pin, 20000); break;
             case AirGateType::None:           break;
-            default:                          air_[i].configureGateServo(a.gate.pin, 1000, 2000); break;
+            default: air_[i].configureGateServo(a.gate.pin, a.gate.servoMinUs, a.gate.servoMaxUs); break;
         }
         // flow
-        if (a.flow.type == FlowControlType::FlowServo)      air_[i].configureFlowServo(a.flow.pin, 1000, 2000);
+        if (a.flow.type == FlowControlType::FlowServo)      air_[i].configureFlowServo(a.flow.pin, a.flow.servoMinUs, a.flow.servoMaxUs);
         else if (a.flow.type != FlowControlType::None)      air_[i].configureFlowPwm(a.flow.pin, 20000);
         // angle
-        if (a.angle.enabled) air_[i].configureAngleServo(a.angle.pin, 1000, 2000);
+        if (a.angle.enabled) air_[i].configureAngleServo(a.angle.pin, a.angle.servoMinUs, a.angle.servoMaxUs);
         // sensor
         air_[i].configureSensor(a.sensor.pin);
     }
@@ -149,6 +162,13 @@ private:
         for (uint8_t i = 0; i < instCount_; ++i)
             if (instPtrs_[i] && instPtrs_[i]->actuator() && !instPtrs_[i]->actuator()->isHomed()) return false;
         return true;
+    }
+    bool anyActuatorFault() const {
+        for (uint8_t i = 0; i < instCount_; ++i) {
+            auto* a = instPtrs_[i] ? instPtrs_[i]->actuator() : nullptr;
+            if (a && a->fault() != FaultCode::None) return true;
+        }
+        return false;
     }
 
     // Persist the admin token in NVS so it survives reboots and can be shown.
@@ -186,7 +206,7 @@ private:
         // TODO: station mode + rtpMIDI + BLE-MIDI bring-up
     }
     void startWebServer() {
-        web_.begin(&server_, &ws_, &router_, &MainApp::millisNow);
+        web_.begin(&server_, &ws_, &router_, &auth_, &MainApp::millisNow);
         server_.begin();
     }
 
@@ -201,9 +221,14 @@ private:
             // Single owner of updates: engine_.tick() ticks each instrument's
             // actuator + air + sequencer exactly once — no second pass (#9).
             engine_.tick(ms, us, /*budget=*/32);
-            // Lifecycle: home before declaring READY (#10).
+            // Lifecycle: home before declaring READY (#10); a homing fault must
+            // move to Fault, never hang in Homing (review #12).
             if (state_ == SysState::NeedsHoming) state_ = SysState::Homing;
-            else if (state_ == SysState::Homing && allHomed()) state_ = SysState::Ready;
+            else if (state_ == SysState::Homing) {
+                if (anyActuatorFault()) state_ = SysState::Fault;
+                else if (allHomed())    state_ = SysState::Ready;
+            }
+            publishSnapshot();                        // lock-free telemetry (#37)
             vTaskDelayUntil(&last, period);            // deterministic cadence
         }
     }
@@ -216,20 +241,51 @@ private:
 
     static uint32_t millisNow() { return millis(); }
 
-    // Status snapshot for the web (TODO: lock-free double buffer).
+    // Fill + publish the telemetry snapshot from the RT task (single writer).
+    void publishSnapshot() {
+        StatusSnapshot& s = snap_.back();
+        s.systemState = uint8_t(state_);
+        s.restartRequired = router_.restartRequired();
+        s.instrumentCount = instCount_;
+        for (uint8_t i = 0; i < instCount_ && i < MAX_INSTRUMENTS; ++i) {
+            Instrument* in = instPtrs_[i];
+            InstrumentStatus& is = s.instruments[i];
+            if (!in) { is = InstrumentStatus{}; continue; }
+            auto* a = in->actuator();
+            is.id = in->id();
+            is.homed = a && a->isHomed();
+            is.moving = a && a->isMoving();
+            is.posMm = a ? a->currentPositionMm() : 0.0f;
+            is.targetMm = a ? a->targetPositionMm() : 0.0f;
+            is.motionState = a ? uint8_t(a->state()) : 0;
+            is.fault = a ? uint8_t(a->fault()) : 0;
+            is.airState = in->air() ? uint8_t(in->air()->state()) : 0;
+            is.activeNote = int16_t(in->sequencer().activeNoteOr(-1));
+        }
+        snap_.publish();
+    }
+
+    // Web reader: builds JSON from the PUBLISHED snapshot, never from live
+    // objects the RT task is mutating (review #37 — no torn reads / no lock).
     struct StatusSrc : IStatusSource {
         MainApp* app = nullptr;
         JsonValue statusJson() override {
+            const StatusSnapshot& s = app->snap_.read();
             JsonValue v = JsonValue::makeObj();
-            v.set("state", int(app->state_));
+            v.set("state", int(s.systemState));
+            v.set("seq", (double)s.seq);
             v.set("firstBoot", app->firstBoot_);
+            v.set("fsFormatted", app->fsFormatted_);
             JsonValue arr = JsonValue::makeArr();
-            for (uint8_t i = 0; i < app->instCount_; ++i) {
+            for (uint8_t i = 0; i < s.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
+                const InstrumentStatus& is = s.instruments[i];
                 JsonValue o = JsonValue::makeObj();
-                auto* a = app->rt_[i]->actuator();
-                o.set("pos_mm", a ? a->currentPositionMm() : 0.0);
-                o.set("homed", a ? a->isHomed() : false);
-                o.set("note", app->rt_[i]->instrument().sequencer().activeNoteOr(-1));
+                o.set("id", (int)is.id);
+                o.set("pos_mm", (double)is.posMm);
+                o.set("homed", is.homed);
+                o.set("moving", is.moving);
+                o.set("note", (int)is.activeNote);
+                o.set("fault", (int)is.fault);
                 arr.arr.push_back(o);
             }
             v.set("instruments", arr);
@@ -248,6 +304,7 @@ private:
     RealtimeEngine<QUEUE_LEN> engine_;
     ApiRouter        router_;
     StatusSrc        status_{};
+    SnapshotPublisher snap_;
 
     EspMotionSink    motion_[MAX_INSTRUMENTS];
     EspAirSink       air_[MAX_INSTRUMENTS];
@@ -259,7 +316,7 @@ private:
     AsyncWebSocket   ws_{"/ws"};
     WebServerAdapter web_;
     std::string      apPassword_;
-    bool             fsOk_ = false, firstBoot_ = true;
+    bool             fsOk_ = false, firstBoot_ = true, fsFormatted_ = false;
     volatile SysState state_ = SysState::Boot;
 
 public:

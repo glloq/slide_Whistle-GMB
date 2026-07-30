@@ -50,7 +50,7 @@ TEST(config_roundtrip) {
     c.instrumentCount = 2;
     c.instruments[0].enabled = true; applyPreset(c.instruments[0], PresetId::StepperSolenoidPwmFlow);
     std::snprintf(c.instruments[0].name, 24, "Soprano \"1\"");
-    c.instruments[0].map.setPoint(60, 24.5f, 42);
+    c.instruments[0].map.setPoint(60, 34.0f, 42);   // monotonic w.r.t. the provisional table
     c.instruments[1].enabled = true; applyPreset(c.instruments[1], PresetId::SingleServoMinimalAir);
     c.instruments[1].midiChannel = 2;
 
@@ -66,7 +66,7 @@ TEST(config_roundtrip) {
     CHECK(d.instruments[0].air.gate.type == AirGateType::SolenoidPwm);
     CHECK_EQ(d.instruments[1].midiChannel, 2);
     CHECK(d.instruments[1].motion.type == SlideDriveType::SingleServo);
-    float mm = 0; CHECK(d.instruments[0].map.positionForNote(60, mm)); CHECK_NEAR(mm, 24.5f, 1e-3);
+    float mm = 0; CHECK(d.instruments[0].map.positionForNote(60, mm)); CHECK_NEAR(mm, 34.0f, 1e-3);
 }
 
 TEST(config_checksum_detects_tamper) {
@@ -290,4 +290,75 @@ TEST(config_roundtrip_full_fields) {
     CHECK_NEAR(e.positionMm, 42.5f, 1e-3);
     CHECK_NEAR(e.positionToleranceMm, 0.7f, 1e-3);
     CHECK_EQ(e.airMin, 30); CHECK_EQ(e.airMax, 90);
+}
+
+// Review #7: a preset's provisional linear table survives export→import→save
+// and stays playable.
+TEST(preset_provisional_table_survives_roundtrip) {
+    RuntimeConfig c = defaultConfig(); c.instrumentCount = 1;
+    c.instruments[0].enabled = true;
+    applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);   // fills a provisional table
+    float mm0 = 0; CHECK(c.instruments[0].map.positionForNote(60, mm0));   // playable in-memory
+    std::string json = configToJson(c);
+    RuntimeConfig d;
+    CHECK(configFromJson(json, d).ok);
+    float mm1 = 0; CHECK(d.instruments[0].map.positionForNote(60, mm1));   // still playable
+    CHECK_NEAR(mm1, mm0, 1e-3);
+    CHECK(!d.instruments[0].map.entry(60).calibrated);   // still flagged provisional
+}
+
+// Review #26: an out-of-range enum is rejected, not silently cast.
+TEST(config_rejects_bad_enum) {
+    const char* bad = R"({"schemaVersion":4,"instrumentCount":1,"instruments":[
+        {"enabled":true,"channel":1,"noteMin":48,"noteMax":84,
+         "motion":{"type":99,"travelMm":100}}]})";
+    RuntimeConfig d;
+    CHECK(!configFromJson(bad, d).ok);
+}
+
+// Review #28: a future schema version is refused.
+TEST(config_rejects_future_schema) {
+    const char* fut = R"({"schemaVersion":9999,"instrumentCount":1,"instruments":[
+        {"enabled":false,"channel":1,"noteMin":48,"noteMax":84}]})";
+    RuntimeConfig d;
+    ConfigDecodeResult r = configFromJson(fut, d);
+    CHECK(!r.ok);
+}
+
+// Review #27: min<=nominal<=max and tank thresholds enforced.
+TEST(config_rejects_flow_and_tank_ranges) {
+    RuntimeConfig c = defaultConfig(); c.instruments[0].enabled = true;
+    c.instruments[0].air.flow.min = 100; c.instruments[0].air.flow.nominal = 10; c.instruments[0].air.flow.max = 120;
+    RuntimeConfig d;
+    CHECK(!configFromJson(configToJson(c), d).ok);        // nominal < min
+}
+
+// Review #29: an import with a wrong checksum is rejected.
+TEST(store_import_rejects_bad_checksum) {
+    FakeFs fs; ConfigStore st; st.begin(&fs);
+    RuntimeConfig c = defaultConfig(); c.instruments[0].enabled = true;
+    std::string json = st.exportJson(c);
+    auto pos = json.find("\"channel\":1");
+    CHECK(pos != std::string::npos);
+    json[pos + 10] = '5';                                 // tamper the body, checksum now stale
+    RuntimeConfig out; std::string err;
+    CHECK(!st.importJson(json, out, err));
+    CHECK(err == "checksum mismatch");
+}
+
+// Review #22: air-servo pulse windows (gate/flow/angle) round-trip.
+TEST(config_air_servo_us_roundtrip) {
+    RuntimeConfig c = defaultConfig(); c.instruments[0].enabled = true;
+    auto& a = c.instruments[0].air;
+    a.gate.type = AirGateType::ServoValve; a.gate.pin = 27;
+    a.gate.servoMinUs = 800; a.gate.servoMaxUs = 2200;
+    a.flow.type = FlowControlType::FlowServo; a.flow.pin = 26;
+    a.flow.servoMinUs = 900; a.flow.servoMaxUs = 2100;
+    a.angle.enabled = true; a.angle.pin = 13; a.angle.servoMinUs = 1100; a.angle.servoMaxUs = 1900;
+    RuntimeConfig d;
+    CHECK(configFromJson(configToJson(c), d).ok);
+    CHECK_EQ(d.instruments[0].air.gate.servoMinUs, 800);
+    CHECK_EQ(d.instruments[0].air.gate.servoMaxUs, 2200);
+    CHECK_EQ(d.instruments[0].air.flow.servoMinUs, 900);
+    CHECK_EQ(d.instruments[0].air.angle.servoMaxUs, 1900);
 }

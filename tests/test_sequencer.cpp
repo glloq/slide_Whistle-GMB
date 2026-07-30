@@ -238,6 +238,7 @@ struct GateableAir : IAirSystem {
     void stopNote() override { gate_ = false; }
     void emergencyStop() override { gate_ = false; ready_ = false; }
     void rearm() override { ready_ = false; }
+    void applyDynamic(const AirConfig&) override {}
     bool isReady() const override { return ready_; }
     AirState state() const override { return gate_ ? AirState::Playing : AirState::Idle; }
     FaultCode fault() const override { return FaultCode::None; }

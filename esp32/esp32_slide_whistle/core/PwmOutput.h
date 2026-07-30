@@ -15,6 +15,7 @@
 #define SWC_CORE_PWMOUTPUT_H
 
 #include <cstdint>
+#include "LedcAllocator.h"
 
 namespace swc {
 
@@ -22,7 +23,7 @@ struct PwmConfig {
     int      pin        = -1;
     uint32_t freqHz     = 5000;
     uint8_t  resolution = 12;    // bits
-    uint8_t  channel    = 0;     // used by the 2.x API only
+    uint8_t  channel    = 0xFF;  // 2.x only; 0xFF = auto-allocate a unique channel
     bool     activeHigh = true;
 };
 
@@ -36,8 +37,13 @@ public:
     #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
         attached_ = ledcAttach((uint8_t)c.pin, c.freqHz, c.resolution);
     #else
-        ledcSetup(c.channel, c.freqHz, c.resolution);
-        ledcAttachPin((uint8_t)c.pin, c.channel);
+        // 2.x: assign a UNIQUE channel (review #3) rather than defaulting to 0.
+        if (cfg_.channel == 0xFF) {
+            int ch = LedcAllocator::global().allocate();
+            cfg_.channel = (ch < 0) ? 0 : (uint8_t)ch;
+        }
+        ledcSetup(cfg_.channel, c.freqHz, c.resolution);
+        ledcAttachPin((uint8_t)c.pin, cfg_.channel);
         attached_ = true;
     #endif
 #else

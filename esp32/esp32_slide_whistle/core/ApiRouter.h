@@ -94,8 +94,9 @@ public:
         // 2. Origin check for state-changing methods (safety exempt)
         if (!safety && r.method != "GET" && auth_ && !auth_->originAllowed(r.origin))
             return reply(403, apiErr("BAD_ORIGIN", "Origin not allowed", "Origin"));
-        // 3. rate limit (safety exempt)
-        if (!safety && auth_ && !auth_->allowRequest(nowMs))
+        // 3. rate limit (safety exempt), per client so one caller can't starve
+        //    the others (review #31). Key by token, else Origin, else anon.
+        if (!safety && auth_ && !auth_->allowRequestFor(clientKey(r), nowMs))
             return reply(429, apiErr("RATE_LIMITED", "too many requests"));
 
         // 4. routing
@@ -183,17 +184,20 @@ private:
         if (!store_->save(cand)) return reply(500, apiErr("PERSIST_FAILED", "could not persist config"));
         bool rr = configNeedsRestart(*live_, cand);
         *live_ = cand;
+        bool dynQueued = false;
         if (rr) {
             restartRequired_ = true;       // hardware change: needs reboot
         } else if (sink_) {
-            // Dynamic-only change: tell the RT task to apply it to live objects
-            // NOW, so reporting "applied" is truthful (correction #17).
+            // Dynamic-only change: tell the RT task to apply it. Only claim it is
+            // applied if it actually made it onto the queue (review #5).
             Command c{CommandType::ApplyDynamicConfig};
-            sink_->push(c);
+            dynQueued = sink_->push(c);
         }
         JsonValue data = JsonValue::makeObj();
         data.set("restart_required", rr);
-        data.set("applied", !rr);          // dynamic-only changes are live immediately
+        data.set("saved", true);
+        data.set("applied", rr ? false : dynQueued);   // truthful
+        if (!rr && !dynQueued) data.set("apply_pending", true);   // saved, will apply when queue drains
         return reply(200, apiFromValidationOk(issues, data));
     }
 
@@ -211,6 +215,7 @@ private:
         else if (type == "jog")     c.type = CommandType::Jog;
         else if (type == "testActuator") c.type = CommandType::TestActuator;
         else if (type == "testAir")      c.type = CommandType::TestAir;
+        else if (type == "rearm")        c.type = CommandType::Rearm;
         else return reply(400, apiErr("BAD_COMMAND", "unknown command type", "type"));
 
         c.channel    = (uint8_t)body.int_or("channel", 1);
@@ -254,6 +259,12 @@ private:
         if (t == "panic" || t == "noteOff") return true;
         if (t == "cc") { long a = b.int_or("a", b.int_or("cc", -1)); return a == 120 || a == 123; }
         return false;
+    }
+
+    static std::string clientKey(const ApiRequest& r) {
+        if (!r.token.empty()) return "t:" + r.token;
+        if (!r.origin.empty()) return "o:" + r.origin;
+        return "anon";
     }
 
     bool ctJson(const ApiRequest& r) const { return r.contentType.find("application/json") != std::string::npos; }
