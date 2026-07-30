@@ -147,6 +147,17 @@ test("wizard: buildConfigPatch carries every choice (#39)", () => {
   assert.equal(p.midiSource, "din");
 });
 
+test("wizard: air step accepts preset 0 (falsy-index bug #14.2)", () => {
+  const w = new Wizard({ name: "Alto", channel: 3, noteMin: 50, noteMax: 80, motionType: "disabled" });
+  w.set({ travelMm: 100, airPreset: 0 });
+  // Drive the step pointer to the air step and confirm Next is allowed.
+  while (w.step() !== "air" && w.next()) { /* advance */ }
+  assert.equal(w.step(), "air");
+  assert.equal(w.canNext(), true);        // preset 0 must not block
+  w.set({ airPreset: null });
+  assert.equal(w.canNext(), false);       // absent preset still blocks
+});
+
 // --- macros.js -------------------------------------------------------------
 test("macros: stop at first failing step (#24)", async () => {
   const ran = [];

@@ -21,7 +21,8 @@ const VALIDATORS = {
   motion: (d) => ["stepper", "single", "dual", "disabled"].includes(d.motionType),
   wiring: (d) => wiringComplete(d),
   mechCal: (d) => d.travelMm > 0,
-  air: (d) => !!d.airPreset,
+  // A preset of 0 (first entry) is valid — test for presence, not truthiness.
+  air: (d) => d.airPreset != null && d.airPreset !== "",
   musicCal: () => true,   // may be skipped / auto-generated
   validate: (d) => d.midiSource != null,
 };
