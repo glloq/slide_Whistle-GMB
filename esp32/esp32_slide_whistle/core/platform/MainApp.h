@@ -47,6 +47,12 @@ public:
 #if DEBUG_SERIAL
         Serial.begin(115200); delay(200);
 #endif
+        // The ESP32-S3 exposes 8 LEDC channels, not the 16 of a classic WROOM —
+        // cap the allocator so we never hand out a channel the chip lacks
+        // (review #3 §9.3). Only matters on the 2.x LEDC API path.
+#if defined(BOARD_ESP32_S3)
+        LedcAllocator::global().setCapacity(8);
+#endif
         fsOk_ = mountFs();
         LoadOutcome lo = LoadOutcome::Default;
         if (fsOk_) { store_.begin(&fs_); lo = store_.load(config_); }

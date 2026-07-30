@@ -146,6 +146,32 @@ TEST(ledc_allocator_unique_channels) {
     CHECK_EQ(a.allocate(), 0);
 }
 
+// Review #3 §9.2: a released channel returns to the pool and is reused (lowest
+// free), so a reconfigure doesn't leak channels; used() tracks live count.
+TEST(ledc_allocator_release_and_reuse) {
+    LedcAllocator a(4);
+    CHECK_EQ(a.allocate(), 0);
+    CHECK_EQ(a.allocate(), 1);
+    CHECK_EQ(a.allocate(), 2);
+    CHECK_EQ(a.used(), 3);
+    a.release(1);                  // free the middle channel
+    CHECK_EQ(a.used(), 2);
+    CHECK(!a.isAllocated(1));
+    CHECK_EQ(a.allocate(), 1);     // reused, not leaked
+    CHECK_EQ(a.allocate(), 3);     // then the last free one
+    CHECK_EQ(a.allocate(), -1);    // now full
+    a.release(9);                  // out-of-range release is a no-op
+    CHECK_EQ(a.used(), 4);
+}
+
+// Review #3 §9.3: the S3 has fewer channels — capacity caps allocation.
+TEST(ledc_allocator_capacity_cap) {
+    LedcAllocator a(16);
+    a.setCapacity(8);
+    for (int i = 0; i < 8; ++i) CHECK(a.allocate() >= 0);
+    CHECK_EQ(a.allocate(), -1);    // 8-channel board is full
+}
+
 TEST(validate_required_pins_missing) {
     // Review #24: an enabled stepper with unassigned STEP/DIR is an error.
     RuntimeConfig c = defaultConfig(); c.instrumentCount = 1;

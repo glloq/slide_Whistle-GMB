@@ -38,9 +38,13 @@ public:
         attached_ = ledcAttach((uint8_t)c.pin, c.freqHz, c.resolution);
     #else
         // 2.x: assign a UNIQUE channel (review #3) rather than defaulting to 0.
+        // On exhaustion FAIL — never fall back to channel 0 and stomp an
+        // already-attached output (review #3 §9.1).
         if (cfg_.channel == 0xFF) {
             int ch = LedcAllocator::global().allocate();
-            cfg_.channel = (ch < 0) ? 0 : (uint8_t)ch;
+            if (ch < 0) { attached_ = false; return false; }
+            cfg_.channel = (uint8_t)ch;
+            ownedChannel_ = true;    // release it back to the pool on detach()
         }
         ledcSetup(cfg_.channel, c.freqHz, c.resolution);
         ledcAttachPin((uint8_t)c.pin, cfg_.channel);
@@ -79,6 +83,12 @@ public:
         if (attached_) ledcDetach((uint8_t)cfg_.pin);
     #else
         if (attached_) ledcDetachPin((uint8_t)cfg_.pin);
+        // Return an auto-allocated channel to the pool so a reconfigure reuses
+        // it instead of leaking it (review #3 §9.2).
+        if (ownedChannel_ && cfg_.channel != 0xFF) {
+            LedcAllocator::global().release(cfg_.channel);
+            cfg_.channel = 0xFF; ownedChannel_ = false;
+        }
     #endif
 #endif
         attached_ = false;
@@ -92,6 +102,7 @@ private:
     PwmConfig cfg_;
     uint32_t  maxDuty_ = 0, lastDuty_ = 0;
     bool      attached_ = false;
+    bool      ownedChannel_ = false;   // 2.x: channel came from the allocator
 };
 
 // Servo-specific output: a 50 Hz PWM whose duty encodes a 1–2 ms pulse. A
