@@ -184,7 +184,7 @@ correct-by-construction but needs hardware to validate. TODO = not yet done
 | 45 | Calibration UI / OTA missing | TODO |
 
 Net: the real-time/config/air correctness defects that can be proven off-device
-are fixed and covered by tests (150 C++ cases + 25 node cases total). The remainder are
+are fixed and covered by tests (152 C++ cases + 25 node cases total). The remainder are
 hardware-transport bound (RMT stepping, PCA9685, ToF, BLE/rtp/DIN, WS transport
 edge cases) or larger UI build-out, and are listed here honestly rather than
 marked done.
@@ -212,6 +212,7 @@ jobs now build successfully in CI, verified on the branch:
 | 7.2 | Only actuator faults propagated to system Fault | FIXED (anyAirFault() folded into Homing→Fault + new Ready→Fault guard) — compiles in CI, REQUIRES HARDWARE |
 | 7.3 | Fault state never recovered after Rearm | FIXED (Fault→NeedsHoming once all faults clear) — compiles in CI, REQUIRES HARDWARE |
 | 7.4 | Jog absolute uint8_t / testAir duration mis-sourced | FIXED·TESTED (jog is signed i16 delta on current pos; API fills i16 per command type) |
+| 7 (ack) | No exec feedback; bad-id command silently dropped | FIXED·TESTED (engine ExecAck Accepted/Rejected; API stamps+returns seq; /status emits lastAck) — async homing completion ack still TODO |
 | 8 | Boot-safe only gate/source pins | FIXED (also disables stepper driver + quiets step/dir + GPIO servo/flow/angle pins) — compiles in CI, REQUIRES HARDWARE |
 | 9.1 | LEDC exhaustion fell back to channel 0 | FIXED·TESTED (attach() fails instead of stomping channel 0) |
 | 9.2 | LedcAllocator leaked channels (no release) | FIXED·TESTED (bitmap alloc/release/reuse; detach() returns owned channel) |
@@ -224,8 +225,9 @@ jobs now build successfully in CI, verified on the branch:
 | 14.8 | Diagnostics hardcoded "instrument 0" | FIXED (one Home button per configured instrument, by stable id) — DOM, not unit-tested |
 
 Still open from review #3: RMT/timer step generation with step-count feedback
-(§4) and continuous endstop monitoring while playing (§4/§23), exec-acks for
-Home/Jog/Test (§7), tank level/position regulation modes (§10.3), the remaining
+(§4) and continuous endstop monitoring while playing (§4/§23), completion acks
+for async homing (§7 — dispatch acks are done), tank level/position regulation
+modes (§10.3), the remaining
 backends (§16: PCA9685 drive, ToF/digital sensors, DIN/BLE/rtp/WiFi-STA
 transports), WS transport edge cases (§13), and the larger UI build-out — Expert
 per-block forms, calibration/OTA screens, Play-without-session guard (§14
