@@ -184,7 +184,7 @@ correct-by-construction but needs hardware to validate. TODO = not yet done
 | 45 | Calibration UI / OTA missing | TODO |
 
 Net: the real-time/config/air correctness defects that can be proven off-device
-are fixed and covered by tests (144 C++ cases + 22 node cases total). The remainder are
+are fixed and covered by tests (147 C++ cases + 25 node cases total). The remainder are
 hardware-transport bound (RMT stepping, PCA9685, ToF, BLE/rtp/DIN, WS transport
 edge cases) or larger UI build-out, and are listed here honestly rather than
 marked done.
@@ -208,15 +208,26 @@ jobs now build successfully in CI, verified on the branch:
 | 5.2 | prepareTimeout retried the same note forever | FIXED·TESTED (timed-out note dropped before fallback) |
 | 11.3 | JSON narrowed ints before validation (channel 256→0=OMNI) | FIXED·TESTED (`checkedInt` range-checks raw values pre-narrow; decode rejected on overflow) |
 | 11.4 | Missing positivity/normalized validations | FIXED·TESTED (maxSpeed/accel>0, stepsPerMm>0, servo minUs<maxUs, all `*01` levels in 0..1) |
+| 6 | Direct commands routed by array index, not stable id | FIXED·TESTED (byId() resolver; test-air timeout keyed by id) |
+| 7.2 | Only actuator faults propagated to system Fault | FIXED (anyAirFault() folded into Homing→Fault + new Ready→Fault guard) — compiles in CI, REQUIRES HARDWARE |
+| 7.3 | Fault state never recovered after Rearm | FIXED (Fault→NeedsHoming once all faults clear) — compiles in CI, REQUIRES HARDWARE |
+| 7.4 | Jog absolute uint8_t / testAir duration mis-sourced | FIXED·TESTED (jog is signed i16 delta on current pos; API fills i16 per command type) |
+| 8 | Boot-safe only gate/source pins | FIXED (also disables stepper driver + quiets step/dir + GPIO servo/flow/angle pins) — compiles in CI, REQUIRES HARDWARE |
+| 10.1 | Tank PI integral not time-scaled | FIXED·TESTED (integral scaled by clamped dt; per-call rate no longer changes gain) |
 | 14.2 | Wizard rejected air preset index 0 (`!!0`) | FIXED·TESTED (presence check, not truthiness) |
+| 14.3 | finishWizard dropped the MIDI source choice | FIXED·TESTED (applyWizardPatch + midiFlagsFor map source → config.midi) |
+| 14.4 | Shallow motion merge wiped preset sub-fields | FIXED·TESTED (deepMerge preserves sibling nested fields) |
+| 14.8 | Diagnostics hardcoded "instrument 0" | FIXED (one Home button per configured instrument, by stable id) — DOM, not unit-tested |
 
-Still open from review #3 (unchanged from the lists above): RMT/timer step
-generation with step-count feedback (§4), routing by stable instrument id (§6),
-air-fault → global Fault propagation and exec-acks (§7), boot-safe stepper/PCA
-outputs (§8), LEDC release/S3 capacity (§9), time-scaled tank PI cascade (§10),
-the remaining backends (§16: PCA9685, ToF/digital sensors, DIN/BLE/rtp/WiFi-STA),
-and the larger UI build-out (§14). These remain hardware- or transport-bound and
-are tracked here rather than marked done.
+Still open from review #3: RMT/timer step generation with step-count feedback
+(§4) and continuous endstop monitoring while playing (§4/§23), exec-acks for
+Home/Jog/Test (§7), LEDC channel release + S3 capacity (§9), the tank cascade
+(multi-pump staged spin-up) and level/position regulation modes (§10.2/§10.3),
+the remaining backends (§16: PCA9685 drive, ToF/digital sensors, DIN/BLE/rtp/
+WiFi-STA transports), WS transport edge cases (§13), and the larger UI build-out
+— Expert per-block forms, calibration/OTA screens, Play-without-session guard
+(§14 remainder). These remain hardware- or transport-bound and are tracked here
+rather than marked done.
 
 ## How to run the software tests
 
