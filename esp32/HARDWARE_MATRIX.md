@@ -184,7 +184,7 @@ correct-by-construction but needs hardware to validate. TODO = not yet done
 | 45 | Calibration UI / OTA missing | TODO |
 
 Net: the real-time/config/air correctness defects that can be proven off-device
-are fixed and covered by tests (147 C++ cases + 25 node cases total). The remainder are
+are fixed and covered by tests (150 C++ cases + 25 node cases total). The remainder are
 hardware-transport bound (RMT stepping, PCA9685, ToF, BLE/rtp/DIN, WS transport
 edge cases) or larger UI build-out, and are listed here honestly rather than
 marked done.
@@ -213,7 +213,11 @@ jobs now build successfully in CI, verified on the branch:
 | 7.3 | Fault state never recovered after Rearm | FIXED (Fault→NeedsHoming once all faults clear) — compiles in CI, REQUIRES HARDWARE |
 | 7.4 | Jog absolute uint8_t / testAir duration mis-sourced | FIXED·TESTED (jog is signed i16 delta on current pos; API fills i16 per command type) |
 | 8 | Boot-safe only gate/source pins | FIXED (also disables stepper driver + quiets step/dir + GPIO servo/flow/angle pins) — compiles in CI, REQUIRES HARDWARE |
+| 9.1 | LEDC exhaustion fell back to channel 0 | FIXED·TESTED (attach() fails instead of stomping channel 0) |
+| 9.2 | LedcAllocator leaked channels (no release) | FIXED·TESTED (bitmap alloc/release/reuse; detach() returns owned channel) |
+| 9.3 | LEDC capacity not capped on S3 | FIXED (MainApp caps allocator to 8 under BOARD_ESP32_S3) — compiles in CI |
 | 10.1 | Tank PI integral not time-scaled | FIXED·TESTED (integral scaled by clamped dt; per-call rate no longer changes gain) |
+| 10.2 | Tank pumps energised all at once | FIXED·TESTED (staged in over cascadeDelayMs from fill start) |
 | 14.2 | Wizard rejected air preset index 0 (`!!0`) | FIXED·TESTED (presence check, not truthiness) |
 | 14.3 | finishWizard dropped the MIDI source choice | FIXED·TESTED (applyWizardPatch + midiFlagsFor map source → config.midi) |
 | 14.4 | Shallow motion merge wiped preset sub-fields | FIXED·TESTED (deepMerge preserves sibling nested fields) |
@@ -221,12 +225,11 @@ jobs now build successfully in CI, verified on the branch:
 
 Still open from review #3: RMT/timer step generation with step-count feedback
 (§4) and continuous endstop monitoring while playing (§4/§23), exec-acks for
-Home/Jog/Test (§7), LEDC channel release + S3 capacity (§9), the tank cascade
-(multi-pump staged spin-up) and level/position regulation modes (§10.2/§10.3),
-the remaining backends (§16: PCA9685 drive, ToF/digital sensors, DIN/BLE/rtp/
-WiFi-STA transports), WS transport edge cases (§13), and the larger UI build-out
-— Expert per-block forms, calibration/OTA screens, Play-without-session guard
-(§14 remainder). These remain hardware- or transport-bound and are tracked here
+Home/Jog/Test (§7), tank level/position regulation modes (§10.3), the remaining
+backends (§16: PCA9685 drive, ToF/digital sensors, DIN/BLE/rtp/WiFi-STA
+transports), WS transport edge cases (§13), and the larger UI build-out — Expert
+per-block forms, calibration/OTA screens, Play-without-session guard (§14
+remainder). These remain hardware- or transport-bound and are tracked here
 rather than marked done.
 
 ## How to run the software tests
