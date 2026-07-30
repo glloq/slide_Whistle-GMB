@@ -82,6 +82,9 @@ struct FlowConfig {
 
 struct AngleConfig {
     bool     enabled = false;
+    int8_t   pin = -1;                    // jet-angle servo pin (independent of flow)
+    PwmBackend backend = PwmBackend::Gpio;
+    uint8_t  pcaChannel = 0;
     float    rest01 = 0.5f, min01 = 0.0f, nominal01 = 0.5f, max01 = 1.0f;
     bool     useCc74 = true;
 };

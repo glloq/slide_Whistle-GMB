@@ -195,3 +195,36 @@ TEST(disabled_actuator_always_ready) {
     CHECK(act.isReadyForAir());
     CHECK(act.requestPositionMm(999.0f));    // accepted no-op
 }
+
+// Review #1: rearm after an e-stop without reconstructing the object.
+TEST(stepper_clearfault_rearm_and_rehome) {
+    FakeSink sink; sink.endstopAtMm = 0.0f;
+    StepDirSlideActuator act(&sink);
+    act.begin(stepperCfg()); act.requestHoming(); pump(act, 0, 3000);
+    CHECK(act.isHomed());
+    act.emergencyStop();
+    CHECK(act.state() == MotionState::EStopped);
+    CHECK(!act.requestHoming());             // blocked while latched
+    act.clearFault();                         // re-arm
+    CHECK(act.state() == MotionState::Idle);
+    CHECK(act.requestHoming());               // homing allowed again
+    pump(act, 4000000, 3000);
+    CHECK(act.isHomed());
+    CHECK(act.fault() == FaultCode::None);
+}
+
+// Review #11: a distant endstop must not be clamped away by the soft limits,
+// and the offset phase must actually move to the offset.
+TEST(stepper_homing_distant_switch_and_offset) {
+    FakeSink sink; sink.endstopAtMm = -30.0f;   // switch 30 mm below soft-min (0)
+    auto c = stepperCfg();
+    c.stepper.homeOffsetMm = 5.0f;               // park 5 mm off the switch
+    c.stepper.phaseTimeoutMs = 5000;
+    StepDirSlideActuator act(&sink);
+    CHECK(act.begin(c));
+    CHECK(act.requestHoming());
+    pump(act, 0, 6000);                          // seek travels past soft-min, then offsets
+    CHECK(act.isHomed());
+    CHECK(act.fault() == FaultCode::None);
+    CHECK_NEAR(act.currentPositionMm(), 5.0f, 0.6);   // real move to offset, not a snap
+}

@@ -161,3 +161,53 @@ TEST(engine_pitchbend_via_queue) {
     // note 60 at 2mm/semi from map: 60→24mm base, +1 semi → 26mm
     CHECK_NEAR(r.act.currentPositionMm(), 26.0f, 0.5);
 }
+
+// Review #16: TestAir must stop itself server-side (never wait on the browser).
+TEST(engine_testair_auto_timeout) {
+    InstRig r; r.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&r.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    Command t{CommandType::TestAir}; t.instrument = 0; t.b = 100; t.i16 = 50;  // 50 ms
+    q.push(t);
+    uint32_t k = 0;
+    eng.tick(k, k * 1000); k++;             // dispatch → air opens
+    CHECK(r.sink.gateOpen);
+    CHECK(eng.testAirActive());
+    for (; k < 80; ++k) eng.tick(k, k * 1000);   // past 50 ms
+    CHECK(!r.sink.gateOpen);                // auto-closed
+}
+
+// Review #17: a dynamic config change (ApplyDynamicConfig) actually reaches the
+// live objects — here a re-calibrated note table changes the commanded mm.
+TEST(engine_apply_dynamic_updates_live_notemap) {
+    // stepper so we can observe the commanded position
+    struct MSink2 : IMotionSink { float mm=0; void writeStepperMm(float v) override{mm=v;}
+        void writeServoUs(uint8_t,uint16_t) override{} void enableDriver(bool) override{}
+        bool readEndstop(bool) override{return mm<=0.0f;} } m;
+    StepDirSlideActuator act(&m);
+    SlideMotionConfig mc; mc.type=SlideDriveType::StepDir; mc.travelMm=100; mc.softMaxMm=100;
+    mc.maxSpeedMmS=400; mc.accelMmS2=4000; mc.stepper.stepsPerMm=80;
+    mc.stepper.homingFastMmS=400; mc.stepper.phaseTimeoutMs=5000; mc.stepper.homeBackoffMm=2;
+    act.begin(mc);
+    AirSystem air; FASink sink; air.begin(air2(), &sink);
+    NoteMap map; for (int n=48;n<=84;++n) map.setPoint((uint8_t)n,(n-48)*2.0f,60);  // 60→24mm
+    Instrument inst; inst.begin(0, &act, &air, &map, icfg(1,48,84));
+    act.requestHoming();
+    uint32_t t=0; for (int k=0;k<3000 && !act.isHomed();++k){t++;act.update(t*1000);} CHECK(act.isHomed());
+
+    Instrument* insts[]={&inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts,1,&q);
+
+    // live config with a DIFFERENT calibration: note 60 → 50 mm
+    RuntimeConfig live = defaultConfig(); live.instrumentCount=1;
+    live.instruments[0]=icfg(1,48,84);
+    for (int n=48;n<=84;++n) live.instruments[0].map.setPoint((uint8_t)n,(n-48)*5.0f,60); // 60→60mm
+    eng.setLiveConfig(&live);
+
+    Command a{CommandType::ApplyDynamicConfig}; q.push(a);
+    for (uint32_t k=t; k<t+50; ++k) eng.tick(k, k*1000);   // apply
+    // now play note 60 → should target the NEW 60 mm, not the old 24 mm
+    Command on{CommandType::NoteOn}; on.channel=1; on.a=60; on.b=100; q.push(on);
+    for (uint32_t k=t+50; k<t+3000; ++k) eng.tick(k, k*1000);
+    CHECK_NEAR(act.currentPositionMm(), 60.0f, 1.0f);
+}

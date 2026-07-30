@@ -88,10 +88,16 @@ TEST(api_bad_content_type) {
 TEST(api_origin_enforced) {
     Rig g; g.begin();
     g.auth.setAllowedOrigin("http://slide.local");
-    ApiReply bad = g.req("POST", "/api/v1/command", "{\"type\":\"panic\"}", "", "application/json", "http://evil");
+    // a NON-safety command from a bad Origin is refused (safety cmds are exempt)
+    ApiReply bad = g.req("POST", "/api/v1/command",
+                         "{\"type\":\"noteOn\",\"note\":60}", g.adminTok, "application/json", "http://evil");
     CHECK_EQ(bad.status, 403);
-    ApiReply ok = g.req("POST", "/api/v1/command", "{\"type\":\"panic\"}", "", "application/json", "http://slide.local");
+    ApiReply ok = g.req("POST", "/api/v1/command",
+                        "{\"type\":\"noteOn\",\"note\":60}", g.adminTok, "application/json", "http://slide.local");
     CHECK_EQ(ok.status, 202);
+    // but panic bypasses Origin (safety must always pass)
+    ApiReply panic = g.req("POST", "/api/v1/command", "{\"type\":\"panic\"}", "", "application/json", "http://evil");
+    CHECK_EQ(panic.status, 202);
 }
 
 TEST(api_command_panic_public_enqueues) {
@@ -188,4 +194,20 @@ TEST(api_unknown_route_404) {
     Rig g; g.begin();
     ApiReply r = g.req("GET", "/api/v1/nope");
     CHECK_EQ(r.status, 404);
+}
+
+// Review #7: safety commands bypass the rate limiter; notes do not.
+TEST(api_rate_limit_exempts_safety) {
+    Rig g; g.begin();
+    g.auth.configureRate(2, 0.0001);   // ~2 tokens, negligible refill
+    // two protected notes consume the budget
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"note\":60}", g.adminTok).status, 202);
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"note\":61}", g.adminTok).status, 202);
+    // third note is rate-limited
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"note\":62}", g.adminTok).status, 429);
+    // but a Note Off and a Panic still get through (no token needed either)
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOff\",\"note\":60}").status, 202);
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"panic\"}").status, 202);
+    // All Sound Off (cc 120) too
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"cc\",\"a\":120,\"b\":0}").status, 202);
 }

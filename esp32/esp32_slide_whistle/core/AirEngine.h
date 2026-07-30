@@ -137,6 +137,13 @@ public:
         fault_ = FaultCode::EmergencyStop;
     }
 
+    void rearm() override {
+        estopped_ = false;
+        fault_ = FaultCode::None;
+        safety_.reset();
+        state_ = AirState::Idle;
+    }
+
     bool isReady() const override {
         return !estopped_ && state_ != AirState::Fault && src_ && src_->ready();
     }

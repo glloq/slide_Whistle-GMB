@@ -188,3 +188,106 @@ TEST(store_factory_reset) {
     RuntimeConfig e; st.load(e);
     CHECK_EQ(e.schemaVersion, (uint32_t)CONFIG_SCHEMA_VERSION);
 }
+
+// Review #18: field-by-field round-trip of the FULL configuration surface.
+TEST(config_roundtrip_full_fields) {
+    RuntimeConfig c = defaultConfig();
+    c.instrumentCount = 1;
+    InstrumentConfig& i = c.instruments[0];
+    i.enabled = true; i.midiChannel = 4; i.noteMin = 40; i.noteMax = 90; i.watchdogMs = 12345;
+    // motion / stepper — every field
+    i.motion.type = SlideDriveType::StepDir;
+    i.motion.travelMm = 137.5f; i.motion.maxSpeedMmS = 95.0f; i.motion.accelMmS2 = 640.0f;
+    i.motion.softMinMm = 2.0f; i.motion.softMaxMm = 135.0f;
+    auto& s = i.motion.stepper;
+    s.stepPin = 32; s.dirPin = 33; s.enablePin = 25; s.enableActiveHigh = true; s.invertDir = true;
+    s.stepsPerRev = 400; s.microsteps = 32; s.stepsPerMm = 123.4f;
+    s.homingFastMmS = 44.0f; s.homingSlowMmS = 6.5f; s.homeTowardZero = false;
+    s.homeOffsetMm = 7.25f; s.homeBackoffMm = 4.5f; s.phaseTimeoutMs = 9000; s.idleDisableMs = 15000;
+    s.alwaysHold = true;
+    s.endstopMin = {true, true, true, false, 34};
+    s.endstopMax = {true, false, false, true, 35};
+    // servoA multipoint + trim/offset
+    auto& sa = i.motion.servoA;
+    sa.backend = PwmBackend::Pca9685; sa.pcaChannel = 5; sa.freqHz = 330;
+    sa.minUs = 700; sa.maxUs = 2300; sa.invert = true; sa.restUs = 1400; sa.safeUs = 1450;
+    sa.trimUs = -20; sa.offsetUs = 15; sa.detachIdleMs = 8000;
+    sa.cal[0] = {0.0f, 700}; sa.cal[1] = {60.0f, 1500}; sa.cal[2] = {135.0f, 2300}; sa.calCount = 3;
+    i.motion.dualMode = DualSyncMode::MasterSlave; i.motion.servoBEnabled = false;
+    // air — source (tank), gate, flow, angle, sensor
+    auto& so = i.air.source;
+    so.type = AirSourceType::PumpsTank; so.pumpCount = 3; so.pin[0]=16; so.pin[1]=17; so.pin[2]=18;
+    so.idle01=0.1f; so.min01=0.2f; so.max01=0.95f; so.startBoost01=0.3f;
+    so.spinUpMs=250; so.stopDelayMs=600; so.cascadeDelayMs=90;
+    so.tankMode = TankRegulationMode::Level; so.tankPwm=false; so.target=70;
+    so.requireSensor=true; so.lowThresh=45; so.highThresh=85; so.safetyThresh=110;
+    so.refillTimeoutMs=7000; so.minOffMs=400;
+    auto& g = i.air.gate;
+    g.type = AirGateType::ServoValve; g.pin=27; g.backend=PwmBackend::Gpio; g.pcaChannel=2;
+    g.activeHigh=false; g.openTimeoutMs=1500; g.peak01=0.9f; g.peakMs=35; g.hold01=0.35f;
+    g.closed01=0.15f; g.open01=0.85f; g.openDelayMs=25; g.closeDelayMs=18;
+    auto& f = i.air.flow;
+    f.type = FlowControlType::FlowServo; f.pin=26; f.backend=PwmBackend::Pca9685; f.pcaChannel=7;
+    f.min=8; f.nominal=70; f.max=118; f.rest01=0.05f; f.curve=VelocityCurve::Exponential;
+    f.expo=2.6f; f.maxSlewPerMs=0.03f;
+    auto& an = i.air.angle;
+    an.enabled=true; an.pin=13; an.backend=PwmBackend::Gpio; an.pcaChannel=1;
+    an.rest01=0.4f; an.min01=0.1f; an.nominal01=0.5f; an.max01=0.9f; an.useCc74=false;
+    auto& sc = i.air.sensor;
+    sc.type=AirSensorType::TofVL53L0X; sc.pin=36; sc.i2cAddr=0x29;
+    sc.rawMin=10; sc.rawMax=4000; sc.physMin=1; sc.physMax=99; sc.invert=true;
+    sc.filterAlpha=0.22f; sc.staleTimeoutMs=750; sc.physLo=2; sc.physHi=115;
+    i.air.valveOpenTimeoutMs=2500; i.air.minNoteMs=30;
+    // seq — full legato/timings/vibrato
+    i.seq.mono = MonoPolicy::HighestNote; i.seq.legato = LegatoPolicy::HoldWithinDistance;
+    i.seq.legatoMaxDistanceMm=9.5f; i.seq.legatoMaxTimeMs=140; i.seq.legatoMaxMoveTimeMs=55.0f;
+    i.seq.minNoteMs=20; i.seq.prepareTimeoutMs=3500; i.seq.vibratoUnit=VibratoUnit::Millimetre;
+    i.seq.vibratoRateHz=6.2f;
+    // calibration with full per-note window
+    i.map.setPoint(60, 42.5f, 55); { NoteEntry& e = i.map.entry(60); e.positionToleranceMm=0.7f; e.airMin=30; e.airMax=90; }
+
+    std::string json = configToJson(c);
+    RuntimeConfig d;
+    CHECK(configFromJson(json, d).ok);
+    const InstrumentConfig& o = d.instruments[0];
+    // spot-check across every subsystem
+    CHECK_EQ(o.watchdogMs, 12345u);
+    CHECK_NEAR(o.motion.travelMm, 137.5f, 1e-3);
+    CHECK_EQ(o.motion.stepper.stepsPerRev, 400);
+    CHECK_EQ(o.motion.stepper.microsteps, 32);
+    CHECK_NEAR(o.motion.stepper.homeOffsetMm, 7.25f, 1e-3);
+    CHECK_EQ(o.motion.stepper.idleDisableMs, 15000u);
+    CHECK(o.motion.stepper.endstopMax.present);
+    CHECK_EQ(o.motion.stepper.endstopMax.pin, 35);
+    CHECK(o.motion.stepper.endstopMin.normallyClosed);
+    CHECK_EQ(o.motion.servoA.pcaChannel, 5);
+    CHECK_EQ(o.motion.servoA.freqHz, 330);
+    CHECK_EQ(o.motion.servoA.trimUs, -20);
+    CHECK_EQ(o.motion.servoA.calCount, 3);
+    CHECK_NEAR(o.motion.servoA.cal[1].mm, 60.0f, 1e-3);
+    CHECK(!o.motion.servoBEnabled);
+    CHECK(o.air.source.type == AirSourceType::PumpsTank);
+    CHECK_EQ(o.air.source.pin[2], 18);
+    CHECK(o.air.source.tankMode == TankRegulationMode::Level);
+    CHECK_EQ(o.air.source.refillTimeoutMs, 7000u);
+    CHECK_NEAR(o.air.gate.hold01, 0.35f, 1e-3);
+    CHECK_EQ(o.air.gate.peakMs, 35u);
+    CHECK_NEAR(o.air.gate.open01, 0.85f, 1e-3);
+    CHECK_EQ(o.air.flow.pcaChannel, 7);
+    CHECK(o.air.flow.curve == VelocityCurve::Exponential);
+    CHECK_NEAR(o.air.flow.expo, 2.6f, 1e-3);
+    CHECK(o.air.angle.enabled); CHECK_EQ(o.air.angle.pin, 13);
+    CHECK(o.air.sensor.type == AirSensorType::TofVL53L0X);
+    CHECK_EQ(o.air.sensor.i2cAddr, 0x29);
+    CHECK_NEAR(o.air.sensor.filterAlpha, 0.22f, 1e-3);
+    CHECK_EQ(o.air.valveOpenTimeoutMs, 2500u);
+    CHECK(o.seq.mono == MonoPolicy::HighestNote);
+    CHECK(o.seq.legato == LegatoPolicy::HoldWithinDistance);
+    CHECK_NEAR(o.seq.legatoMaxDistanceMm, 9.5f, 1e-3);
+    CHECK_EQ(o.seq.prepareTimeoutMs, 3500u);
+    CHECK(o.seq.vibratoUnit == VibratoUnit::Millimetre);
+    const NoteEntry& e = o.map.entry(60);
+    CHECK_NEAR(e.positionMm, 42.5f, 1e-3);
+    CHECK_NEAR(e.positionToleranceMm, 0.7f, 1e-3);
+    CHECK_EQ(e.airMin, 30); CHECK_EQ(e.airMax, 90);
+}

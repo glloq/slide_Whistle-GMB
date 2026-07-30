@@ -84,13 +84,18 @@ public:
     void clearRestartRequested() { restartRequested_ = false; }
 
     ApiReply handle(const ApiRequest& r, uint32_t nowMs) {
+        // Safety commands (panic, Note Off, All Notes/Sound Off) must ALWAYS get
+        // through: they are exempt from Origin and rate-limit checks so a stop
+        // can never be starved by a burst of notes/CC (correction #7).
+        const bool safety = isSafetyRequest(r);
+
         // 1. request-size guard (Section 14)
         if (r.body.size() > maxBody_) return reply(413, apiErr("BODY_TOO_LARGE", "request body exceeds limit"));
-        // 2. Origin check for state-changing methods
-        if (r.method != "GET" && auth_ && !auth_->originAllowed(r.origin))
+        // 2. Origin check for state-changing methods (safety exempt)
+        if (!safety && r.method != "GET" && auth_ && !auth_->originAllowed(r.origin))
             return reply(403, apiErr("BAD_ORIGIN", "Origin not allowed", "Origin"));
-        // 3. rate limit
-        if (auth_ && !auth_->allowRequest(nowMs))
+        // 3. rate limit (safety exempt)
+        if (!safety && auth_ && !auth_->allowRequest(nowMs))
             return reply(429, apiErr("RATE_LIMITED", "too many requests"));
 
         // 4. routing
@@ -178,7 +183,14 @@ private:
         if (!store_->save(cand)) return reply(500, apiErr("PERSIST_FAILED", "could not persist config"));
         bool rr = configNeedsRestart(*live_, cand);
         *live_ = cand;
-        if (rr) restartRequired_ = true;   // dynamic params apply now; hw needs reboot
+        if (rr) {
+            restartRequired_ = true;       // hardware change: needs reboot
+        } else if (sink_) {
+            // Dynamic-only change: tell the RT task to apply it to live objects
+            // NOW, so reporting "applied" is truthful (correction #17).
+            Command c{CommandType::ApplyDynamicConfig};
+            sink_->push(c);
+        }
         JsonValue data = JsonValue::makeObj();
         data.set("restart_required", rr);
         data.set("applied", !rr);          // dynamic-only changes are live immediately
@@ -207,8 +219,12 @@ private:
         c.i16        = (int16_t)body.int_or("bend", 0);
         c.instrument = (uint8_t)body.int_or("instrument", 0);
 
-        // auth: panic is public; everything else is protected
-        if (!auth_ || auth_->authorize(criticalityFor(c.type), r.token, nowMs)) {
+        // Safety commands (panic, Note Off, All Notes/Sound Off) always pass —
+        // they need no token so a release/stop can never be blocked (#7).
+        bool safe = (c.type == CommandType::Panic || c.type == CommandType::NoteOff ||
+                     (c.type == CommandType::ControlChange && (c.a == 120 || c.a == 123)));
+        Criticality crit = safe ? Criticality::Public : criticalityFor(c.type);
+        if (!auth_ || auth_->authorize(crit, r.token, nowMs)) {
             if (!sink_ || !sink_->push(c)) return reply(503, apiErr("QUEUE_FULL", "command queue full"));
             JsonValue d = JsonValue::makeObj(); d.set("queued", true);
             return reply(202, apiOk(d));   // accepted — executed by the RT task
@@ -227,6 +243,17 @@ private:
         }
         merged.set("warnings", warns);
         return apiOk(merged);
+    }
+
+    // A request is "safety" if it is a command that stops/releases the machine.
+    bool isSafetyRequest(const ApiRequest& r) const {
+        if (r.method != "POST" || r.path != "/api/v1/command") return false;
+        if (r.contentType.find("application/json") == std::string::npos) return false;
+        JsonValue b; if (!jsonParse(r.body, b, nullptr)) return false;
+        std::string t = b.str_or("type", "");
+        if (t == "panic" || t == "noteOff") return true;
+        if (t == "cc") { long a = b.int_or("a", b.int_or("cc", -1)); return a == 120 || a == 123; }
+        return false;
     }
 
     bool ctJson(const ApiRequest& r) const { return r.contentType.find("application/json") != std::string::npos; }

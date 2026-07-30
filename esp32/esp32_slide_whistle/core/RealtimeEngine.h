@@ -16,6 +16,7 @@
 
 #include "Instrument.h"
 #include "CommandQueue.h"
+#include "RuntimeConfig.h"
 
 namespace swc {
 
@@ -27,12 +28,22 @@ public:
         bendRangeSemis_ = 2.0f;
     }
     void setPitchBendRange(float semis) { bendRangeSemis_ = semis; }
+    // Live config source for ApplyDynamicConfig (indexed by Instrument::id()).
+    void setLiveConfig(const RuntimeConfig* cfg) { live_ = cfg; }
 
     // Drain up to `budget` commands, then tick every instrument. Called from a
     // periodic RT task (vTaskDelayUntil) — no blocking, no allocation.
     void tick(uint32_t nowMs, uint32_t nowUs, uint16_t budget = 32) {
         Command c;
         while (budget-- && q_ && q_->pop(c)) dispatch(c, nowMs);
+
+        // Server-side test-air timeout: a TestAir never stays open waiting on
+        // the browser — it closes itself after its duration (correction #16).
+        if (testAirInst_ >= 0 && nowMs >= testAirStopMs_) {
+            if (testAirInst_ < count_ && inst_[testAirInst_] && inst_[testAirInst_]->air())
+                inst_[testAirInst_]->air()->stopNote();
+            testAirInst_ = -1;
+        }
 
         for (uint8_t i = 0; i < count_; ++i) {
             Instrument* in = inst_[i];
@@ -45,8 +56,11 @@ public:
 
     void panicAll(uint32_t nowMs) {
         if (q_) q_->clear();
+        testAirInst_ = -1;                 // cancel any running test
         for (uint8_t i = 0; i < count_; ++i) if (inst_[i]) inst_[i]->panic(nowMs);
     }
+
+    bool testAirActive() const { return testAirInst_ >= 0; }
 
 private:
     void dispatch(const Command& c, uint32_t nowMs) {
@@ -89,15 +103,26 @@ private:
                     inst_[c.instrument]->actuator()->requestPositionMm(float(c.a));
                 break;
             case CommandType::TestAir:
-                if (c.instrument < count_ && inst_[c.instrument]) {
+                if (c.instrument < count_ && inst_[c.instrument] && inst_[c.instrument]->air()) {
                     AirNoteRequest r; r.velocity = c.b ? c.b : 100;
-                    if (inst_[c.instrument]->air()) {
-                        inst_[c.instrument]->air()->prepareNote(r);
-                        inst_[c.instrument]->air()->startNote(r);
-                    }
+                    inst_[c.instrument]->air()->prepareNote(r);
+                    inst_[c.instrument]->air()->startNote(r);
+                    // schedule an automatic stop (i16 = ms, default 3 s)
+                    uint32_t dur = c.i16 > 0 ? (uint32_t)c.i16 : 3000u;
+                    testAirInst_ = c.instrument;
+                    testAirStopMs_ = nowMs + dur;
                 }
                 break;
-            default: break;   // ApplyDynamicConfig / calibration handled elsewhere
+            case CommandType::ApplyDynamicConfig:
+                // Push the newly-saved dynamic parameters into the live objects
+                // so the API's "applied" claim is truthful (correction #17).
+                // Config is indexed by the instrument's stable id().
+                if (live_)
+                    for (uint8_t i = 0; i < count_; ++i)
+                        if (inst_[i] && inst_[i]->id() < live_->instrumentCount)
+                            inst_[i]->applyDynamic(live_->instruments[inst_[i]->id()]);
+                break;
+            default: break;   // calibration handled elsewhere
         }
     }
 
@@ -105,6 +130,9 @@ private:
     uint8_t            count_ = 0;
     CommandQueue<QN>*  q_ = nullptr;
     float              bendRangeSemis_ = 2.0f;
+    const RuntimeConfig* live_ = nullptr;       // for ApplyDynamicConfig
+    int                testAirInst_ = -1;      // instrument index of a running TestAir, or -1
+    uint32_t           testAirStopMs_ = 0;
 };
 
 } // namespace swc

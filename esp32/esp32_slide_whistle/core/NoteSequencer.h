@@ -32,6 +32,9 @@ struct SequencerConfig {
     uint32_t legatoMaxTimeMs     = 120;     // for HoldWithinTime
     float    legatoMaxMoveTimeMs = 60.0f;   // for HoldWithinMoveTime
     uint32_t minNoteMs           = 0;
+    // Max time to wait for the actuator AND the air source to be ready before
+    // giving up on a note (so a stuck spin-up / unreached position can't hang).
+    uint32_t prepareTimeoutMs    = 4000;
     // vibrato
     VibratoUnit vibratoUnit = VibratoUnit::Cents;
     float    vibratoRateHz  = 5.0f;
@@ -121,11 +124,18 @@ public:
             applyPosition(nowMs);
 
         if (phase_ == SeqPhase::Positioning && act_ && air_) {
-            if (act_->isReadyForAir()) {
+            // Open the air only once BOTH the slide is at position AND the air
+            // source is actually ready (fan spun up / tank at pressure / sensor
+            // valid) — never open early (correction #15).
+            if (act_->isReadyForAir() && air_->isReady()) {
                 AirNoteRequest r = airRequestFor(activeNote());
                 air_->startNote(r);
                 phase_ = SeqPhase::Playing;
                 noteOnMs_ = nowMs;
+            } else if (cfg_.prepareTimeoutMs &&
+                       elapsed_u32(nowMs, positionStartMs_) > cfg_.prepareTimeoutMs) {
+                // Gave up waiting: abandon the note safely, never open air late.
+                cancelToStackOrRelease(nowMs);
             }
         }
         if (pendingRelease_ && !sustainHeld_ && cfg_.minNoteMs &&
@@ -206,7 +216,8 @@ private:
             // glissando / legato-hold: air stays open, just move — stay Playing
             noteOnMs_ = nowMs;
         } else {
-            phase_ = SeqPhase::Positioning;   // wait for isReadyForAir → open air in update()
+            phase_ = SeqPhase::Positioning;   // wait for actuator + air ready in update()
+            positionStartMs_ = nowMs;
         }
     }
 
@@ -295,7 +306,7 @@ private:
     SeqPhase phase_ = SeqPhase::Idle;
 
     bool     sustainHeld_ = false, pendingRelease_ = false;
-    uint32_t noteOnMs_ = 0, releaseAtMs_ = 0;
+    uint32_t noteOnMs_ = 0, releaseAtMs_ = 0, positionStartMs_ = 0;
     float    pitchBend_ = 0.0f, vibratoDepth_ = 0.0f;
 };
 

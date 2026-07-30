@@ -12,14 +12,39 @@ import { NoteRegistry, bindLifecycleFlush } from "./js/notes.js";
 import { MidiSocket } from "./js/ws.js";
 import { h, clear, patchText } from "./js/dom.js";
 import { presetCatalog } from "./js/presets-meta.js";
+import { Wizard, WIZARD_STEPS } from "./js/wizard.js";
 
 const state = {
-  token: sessionStorage.getItem("token") || "",
+  // Only the SESSION token is kept in the browser — never the admin secret (#5).
+  session: sessionStorage.getItem("session") || "",
   config: null,
   tab: "play",
+  wizard: new Wizard(),
 };
-const api = makeApi({ getToken: () => state.token });
-const socket = new MidiSocket(wsUrl(), { token: state.token }).connect();
+const api = makeApi({ getToken: () => state.session });
+const socket = new MidiSocket(wsUrl(), { token: state.session }).connect();
+
+async function doLogin(adminToken) {
+  const r = await guard(() => api.login(adminToken), "Logged in");
+  if (r && r.session) {
+    state.session = r.session;
+    sessionStorage.setItem("session", r.session);   // session only, not the admin token
+    socket.token = r.session;
+    socket.close(); socket.connect();                // re-auth the WebSocket
+    render();
+  }
+}
+function loginCard() {
+  const input = h("input", { type: "password", placeholder: "admin token (shown on Serial at boot)" });
+  return h("div", { class: "card" }, [
+    h("h2", { text: "Administrator login" }),
+    h("p", { class: "muted", text: "Enter the admin token printed on the device's serial console to unlock configuration." }),
+    input,
+    h("div", { class: "row" }, [
+      h("button", { class: "btn btn-primary", text: "Log in", onclick: () => doLogin(input.value.trim()) }),
+    ]),
+  ]);
+}
 const notes = new NoteRegistry((kind, m) =>
   socket.send({ type: kind, channel: m.channel, note: m.note, velocity: m.velocity ?? 100 }));
 bindLifecycleFlush(notes);
@@ -104,6 +129,8 @@ function buildKeyboard(start, count) {
 }
 
 function viewSetup(root) {
+  if (!state.session) { root.appendChild(loginCard()); return; }   // must log in first
+  root.appendChild(wizardCard());
   root.appendChild(h("div", { class: "card" }, [
     h("h2", { text: "Air mounting presets" }),
     h("p", { class: "muted", text: "Pick a mounting; it fills sane defaults you can still edit in Expert mode." }),
@@ -118,6 +145,47 @@ function viewSetup(root) {
   ]));
 }
 
+// First-boot / simple-mode wizard driven by wizard.js (gating enforced there).
+function wizardCard() {
+  const w = state.wizard;
+  const card = h("div", { class: "card" });
+  card.appendChild(h("h2", { text: `Setup wizard — step ${w.index + 1}/${WIZARD_STEPS.length}: ${w.step()}` }));
+  const body = h("div");
+  const step = w.step();
+  if (step === "instrument") {
+    body.appendChild(field("Name", h("input", { value: w.data.name || "", oninput: (e) => w.set({ name: e.target.value }) })));
+    body.appendChild(field("MIDI channel", numInput(w.data.channel, 0, 16, (v) => w.set({ channel: v }))));
+  } else if (step === "motion") {
+    for (const [id, label] of [["stepper","Stepper"],["single","One servo"],["dual","Two servos"],["disabled","No movement"]])
+      body.appendChild(h("button", { class: "btn", "aria-selected": String(w.data.motionType === id),
+        text: label, onclick: () => { w.set({ motionType: id }); render(); } }));
+  } else if (step === "air") {
+    presetCatalog.forEach((p) => body.appendChild(h("button", { class: "btn",
+      "aria-selected": String(w.data.airPreset === p.index),
+      text: p.name, onclick: () => { w.set({ airPreset: p.index }); render(); } })));
+  } else {
+    body.appendChild(h("p", { class: "muted", text: "Configure this step, then continue." }));
+  }
+  card.appendChild(body);
+  card.appendChild(h("div", { class: "row" }, [
+    h("button", { class: "btn", text: "◀ Back", onclick: () => { w.prev(); render(); } }),
+    h("button", { class: "btn btn-primary", text: w.isLast() ? "Finish" : "Next ▶",
+      onclick: () => { if (w.isLast()) finishWizard(); else if (w.next()) render(); else toast("Complete this step first", "err"); } }),
+  ]));
+  return card;
+}
+function field(label, node) { return h("div", {}, [h("label", { text: label }), node]); }
+function numInput(val, min, max, on) {
+  return h("input", { type: "number", value: String(val ?? ""), min: String(min), max: String(max),
+    oninput: (e) => on(parseInt(e.target.value, 10)) });
+}
+async function finishWizard() {
+  const w = state.wizard;
+  if (w.data.airPreset != null) await applyPreset(w.data.airPreset);
+  toast("Wizard complete", "ok");
+  state.tab = "diag"; render();
+}
+
 async function applyPreset(index) {
   await guard(async () => {
     const r = await api.applyPreset(index, 0);
@@ -127,6 +195,7 @@ async function applyPreset(index) {
 }
 
 function viewExpert(root) {
+  if (!state.session) { root.appendChild(loginCard()); return; }   // protected
   const card = h("div", { class: "card" });
   card.appendChild(h("h2", { text: "Configuration (JSON)" }));
   const ta = h("textarea", { class: "mono", rows: "16", style: "width:100%" });

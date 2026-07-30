@@ -109,6 +109,10 @@ public:
     virtual bool isReadyForAir() const = 0;   // homed, at target, not moving
     virtual bool isMoving() const = 0;
 
+    // Re-arm after an emergency stop / fault WITHOUT reconstructing the object.
+    // A homed actuator returns to Idle; an unhomed one is left needing homing.
+    virtual void clearFault() = 0;
+
     virtual float currentPositionMm() const = 0;
     virtual float targetPositionMm() const = 0;
     virtual MotionState state() const = 0;

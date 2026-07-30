@@ -107,47 +107,59 @@ public:
         if (index < 3 && source_[index].attached()) source_[index].writeNormalized(v);
     }
     void setGateOpen(bool open) override {
-        if (gatePin_ >= 0) digitalWrite(gatePin_, (open == gateActiveHigh_) ? HIGH : LOW);
+        if (solenoidPin_ >= 0) digitalWrite(solenoidPin_, (open == solenoidActiveHigh_) ? HIGH : LOW);
     }
-    void setGatePwm(float v) override { if (gate_.attached()) gate_.writeNormalized(v); }
-    void setFlow(float v) override    { if (flow_.attached()) flow_.writeNormalized(v); }
-    void setAngle(float v) override   { if (angle_.attached()) angle_.writeNormalized(v); }
-    float readSensorRaw() override {
-        if (sensorPin_ < 0) return NAN;
-        return (float)analogRead(sensorPin_);
+    // Gate PWM: solenoid economiser uses a raw duty; a servo gate uses a µs pulse.
+    void setGatePwm(float v) override {
+        if (gateServo_.attached())    gateServo_.writeNormalized(v);
+        else if (gatePwm_.attached()) gatePwm_.writeNormalized(v);
     }
+    void setFlow(float v) override {
+        if (flowServo_.attached())    flowServo_.writeNormalized(v);
+        else if (flowPwm_.attached()) flowPwm_.writeNormalized(v);
+    }
+    void setAngle(float v) override { if (angleServo_.attached()) angleServo_.writeNormalized(v); }
+    float readSensorRaw() override { return sensorPin_ < 0 ? NAN : (float)analogRead(sensorPin_); }
 
-    // Wiring helpers (called by the platform bring-up code)
+    // ---- wiring helpers -----------------------------------------------------
     void configureSourcePwm(uint8_t i, int pin, uint32_t freq) {
         if (i >= 3 || pin < 0) return;
         PwmConfig p; p.pin = pin; p.freqHz = freq;
         source_[i].attach(p);
     }
     void configureSolenoid(int pin, bool activeHigh) {
-        gatePin_ = pin; gateActiveHigh_ = activeHigh;
-        if (pin >= 0) pinMode(pin, OUTPUT);
+        solenoidPin_ = pin; solenoidActiveHigh_ = activeHigh;
+        if (pin < 0) return;
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, activeHigh ? LOW : HIGH);   // force CLOSED immediately (#8)
     }
-    void configureGatePwm(int pin, uint32_t freq) {
+    void configureSolenoidPwm(int pin, uint32_t freq) {
         if (pin < 0) return;
         PwmConfig p; p.pin = pin; p.freqHz = freq;
-        gate_.attach(p);
+        gatePwm_.attach(p); gatePwm_.writeRaw(0);     // closed
     }
-    void configureFlow(int pin) {
+    void configureGateServo(int pin, uint16_t minUs, uint16_t maxUs) {
+        if (pin >= 0) gateServo_.attach(pin, minUs, maxUs);
+    }
+    void configureFlowServo(int pin, uint16_t minUs, uint16_t maxUs) {
+        if (pin >= 0) flowServo_.attach(pin, minUs, maxUs);
+    }
+    void configureFlowPwm(int pin, uint32_t freq) {
         if (pin < 0) return;
-        PwmConfig p; p.pin = pin; p.freqHz = 50; p.resolution = 16;
-        flow_.attach(p);
+        PwmConfig p; p.pin = pin; p.freqHz = freq;
+        flowPwm_.attach(p);
     }
-    void configureAngle(int pin) {
-        if (pin < 0) return;
-        PwmConfig p; p.pin = pin; p.freqHz = 50; p.resolution = 16;
-        angle_.attach(p);
+    void configureAngleServo(int pin, uint16_t minUs, uint16_t maxUs) {
+        if (pin >= 0) angleServo_.attach(pin, minUs, maxUs);
     }
-    void configureSensor(int pin) { sensorPin_ = pin; }
+    void configureSensor(int pin) { sensorPin_ = pin; if (pin >= 0) pinMode(pin, INPUT); }
 
 private:
-    PwmOutput source_[3], gate_, flow_, angle_;
-    int  gatePin_ = -1, sensorPin_ = -1;
-    bool gateActiveHigh_ = true;
+    PwmOutput   source_[3];
+    PwmOutput   gatePwm_, flowPwm_;                  // solenoid PWM / proportional PWM
+    ServoOutput gateServo_, flowServo_, angleServo_; // µs-calibrated servos (#13)
+    int  solenoidPin_ = -1, sensorPin_ = -1;
+    bool solenoidActiveHigh_ = true;
 };
 
 } // namespace swc

@@ -24,6 +24,9 @@ export class MidiSocket {
     this.ws = this.socketFactory(this.url);
     this.ws.onopen = () => {
       this.open = true; this.backoff = 500; this.onStatus("open");
+      // Authenticate THIS socket first so the server binds our session to the
+      // client id, then flush any queued frames.
+      if (this.token) this._raw({ auth: this.token });
       this.flush();
     };
     this.ws.onclose = () => {
