@@ -31,6 +31,7 @@ async function doLogin(adminToken) {
     sessionStorage.setItem("session", r.session);   // session only, not the admin token
     socket.token = r.session;
     socket.close(); socket.connect();                // re-auth the WebSocket
+    await refreshConfig().catch(() => {});           // reload config now we're authed (#41)
     render();
   }
 }
@@ -49,6 +50,12 @@ const notes = new NoteRegistry((kind, m) =>
   socket.send({ type: kind, channel: m.channel, note: m.note, velocity: m.velocity ?? 100 }));
 bindLifecycleFlush(notes);
 socket.onStatus = (s) => { setConn(s === "open"); if (s !== "open") notes.allOff(); };
+// Surface server refusals sent over the WebSocket (e.g. 401 on a keyboard note)
+// instead of silently swallowing them (review item #40).
+socket.onMessage = (msg) => {
+  if (msg && msg.ok === false && msg.error)
+    toast(`${msg.error.code || "error"}: ${msg.error.message || "refused"}`, "err");
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -181,8 +188,21 @@ function numInput(val, min, max, on) {
 }
 async function finishWizard() {
   const w = state.wizard;
-  if (w.data.airPreset != null) await applyPreset(w.data.airPreset);
-  toast("Wizard complete", "ok");
+  const patch = w.buildConfigPatch();            // every collected choice (#39)
+  await guard(async () => {
+    if (patch.airPreset != null) await api.applyPreset(patch.airPreset, 0);
+    await refreshConfig();
+    // merge the wizard's instrument choices onto the (preset-filled) config
+    const inst = (state.config.instruments && state.config.instruments[0]) || {};
+    inst.enabled = true;
+    inst.name = patch.name; inst.midiChannel = patch.channel;
+    inst.noteMin = patch.noteMin; inst.noteMax = patch.noteMax;
+    inst.motion = Object.assign({}, inst.motion, patch.motion);
+    state.config.instruments[0] = inst;
+    const r = await api.putConfig(state.config);
+    if (r.restart_required) showRestart(true);
+    await refreshConfig();
+  }, "Wizard applied");
   state.tab = "diag"; render();
 }
 

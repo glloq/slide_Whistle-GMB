@@ -67,4 +67,27 @@ export class Wizard {
   motionEnum() {
     return { disabled: 0, stepper: 1, single: 2, dual: 3 }[this.data.motionType] ?? 0;
   }
+
+  // Assemble EVERY collected answer into a config patch the caller applies on
+  // finish — not just the air preset (review item #39).
+  buildConfigPatch() {
+    const d = this.data;
+    const w = d.wiring || {};
+    const motion = { type: this.motionEnum(), travelMm: d.travelMm ?? 100 };
+    if (d.motionType === "stepper")
+      motion.stepper = { stepPin: w.stepPin, dirPin: w.dirPin, enablePin: w.enablePin, endstopMin: { pin: w.endstopPin } };
+    else if (d.motionType === "single")
+      motion.servoA = { pin: w.servoAPin };
+    else if (d.motionType === "dual")
+      { motion.servoA = { pin: w.servoAPin }; motion.servoB = { pin: w.servoBPin }; }
+    return {
+      name: d.name || "Flute",
+      channel: d.channel ?? 1,
+      noteMin: d.noteMin ?? 48,
+      noteMax: d.noteMax ?? 84,
+      motion,
+      airPreset: d.airPreset ?? null,
+      midiSource: d.midiSource ?? null,
+    };
+  }
 }

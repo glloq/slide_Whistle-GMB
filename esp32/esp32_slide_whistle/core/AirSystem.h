@@ -55,6 +55,8 @@ struct GateConfig {
     int8_t     pin = -1;                  // solenoid GPIO, or servo GPIO
     PwmBackend backend = PwmBackend::Gpio;
     uint8_t    pcaChannel = 0;
+    uint16_t   servoMinUs = 1000;         // servo-gate pulse window (calibratable, #22)
+    uint16_t   servoMaxUs = 2000;
     bool     activeHigh = true;
     uint32_t openTimeoutMs = 0;          // 0 = disabled (safety)
     // solenoid pwm economiser
@@ -73,6 +75,7 @@ struct FlowConfig {
     int8_t   pin = -1;                    // flow servo / proportional valve pin
     PwmBackend backend = PwmBackend::Gpio;
     uint8_t  pcaChannel = 0;
+    uint16_t servoMinUs = 1000, servoMaxUs = 2000;   // flow-servo pulse window (#22)
     uint8_t  min = 0, nominal = 64, max = 127;
     float    rest01 = 0.0f;
     VelocityCurve curve = VelocityCurve::Linear;
@@ -85,6 +88,7 @@ struct AngleConfig {
     int8_t   pin = -1;                    // jet-angle servo pin (independent of flow)
     PwmBackend backend = PwmBackend::Gpio;
     uint8_t  pcaChannel = 0;
+    uint16_t servoMinUs = 1000, servoMaxUs = 2000;   // angle-servo pulse window (#22)
     float    rest01 = 0.5f, min01 = 0.0f, nominal01 = 0.5f, max01 = 1.0f;
     bool     useCc74 = true;
 };

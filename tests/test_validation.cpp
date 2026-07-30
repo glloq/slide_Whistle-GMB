@@ -133,3 +133,15 @@ TEST(two_instruments_conflict_detected) {
     HardwareResourceValidator v; buildClaims(v, c);
     CHECK(hasCode(v.validate(), "GPIO_CONFLICT"));
 }
+
+TEST(ledc_allocator_unique_channels) {
+    // Review #3: outputs must get distinct LEDC channels, not all channel 0.
+    LedcAllocator a(4);
+    CHECK_EQ(a.allocate(), 0);
+    CHECK_EQ(a.allocate(), 1);
+    CHECK_EQ(a.allocate(), 2);
+    CHECK_EQ(a.allocate(), 3);
+    CHECK_EQ(a.allocate(), -1);    // exhausted
+    a.reset();
+    CHECK_EQ(a.allocate(), 0);
+}

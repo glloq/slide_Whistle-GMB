@@ -139,13 +139,13 @@ private:
             case AirGateType::SolenoidSimple: air_[i].configureSolenoid(a.gate.pin, a.gate.activeHigh); break;
             case AirGateType::SolenoidPwm:    air_[i].configureSolenoidPwm(a.gate.pin, 20000); break;
             case AirGateType::None:           break;
-            default:                          air_[i].configureGateServo(a.gate.pin, 1000, 2000); break;
+            default: air_[i].configureGateServo(a.gate.pin, a.gate.servoMinUs, a.gate.servoMaxUs); break;
         }
         // flow
-        if (a.flow.type == FlowControlType::FlowServo)      air_[i].configureFlowServo(a.flow.pin, 1000, 2000);
+        if (a.flow.type == FlowControlType::FlowServo)      air_[i].configureFlowServo(a.flow.pin, a.flow.servoMinUs, a.flow.servoMaxUs);
         else if (a.flow.type != FlowControlType::None)      air_[i].configureFlowPwm(a.flow.pin, 20000);
         // angle
-        if (a.angle.enabled) air_[i].configureAngleServo(a.angle.pin, 1000, 2000);
+        if (a.angle.enabled) air_[i].configureAngleServo(a.angle.pin, a.angle.servoMinUs, a.angle.servoMaxUs);
         // sensor
         air_[i].configureSensor(a.sensor.pin);
     }
@@ -202,7 +202,7 @@ private:
         // TODO: station mode + rtpMIDI + BLE-MIDI bring-up
     }
     void startWebServer() {
-        web_.begin(&server_, &ws_, &router_, &MainApp::millisNow);
+        web_.begin(&server_, &ws_, &router_, &auth_, &MainApp::millisNow);
         server_.begin();
     }
 

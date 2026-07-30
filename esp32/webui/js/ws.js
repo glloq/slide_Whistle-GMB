@@ -9,38 +9,47 @@
 
 export class MidiSocket {
   // socketFactory(url) -> a WebSocket-like object (injectable for tests).
-  constructor(url, { socketFactory = (u) => new WebSocket(u), token = "" } = {}) {
+  constructor(url, { socketFactory = (u) => new WebSocket(u), token = "", maxQueue = 64 } = {}) {
     this.url = url;
     this.socketFactory = socketFactory;
     this.token = token;
+    this.maxQueue = maxQueue;
     this.queue = [];
     this.ws = null;
     this.open = false;
     this.backoff = 500;
+    this._timer = null;
+    this._intentional = false;
     this.onStatus = () => {};
+    this.onMessage = () => {};   // server replies (e.g. auth/command errors)
   }
 
   connect() {
+    if (this._timer) { clearTimeout(this._timer); this._timer = null; }   // no double reconnect (#42)
+    this._intentional = false;
     this.ws = this.socketFactory(this.url);
     this.ws.onopen = () => {
       this.open = true; this.backoff = 500; this.onStatus("open");
-      // Authenticate THIS socket first so the server binds our session to the
-      // client id, then flush any queued frames.
-      if (this.token) this._raw({ auth: this.token });
+      if (this.token) this._raw({ auth: this.token });   // authenticate this socket first
       this.flush();
     };
     this.ws.onclose = () => {
       this.open = false; this.onStatus("closed");
-      this._reconnectLater();
+      if (!this._intentional) this._reconnectLater();     // don't reconnect an intentional close (#42)
     };
     this.ws.onerror = () => { try { this.ws.close(); } catch { /* ignore */ } };
+    this.ws.onmessage = (ev) => {
+      let msg = null; try { msg = JSON.parse(ev.data); } catch { /* ignore */ }
+      if (msg) this.onMessage(msg);
+    };
     return this;
   }
 
   _reconnectLater() {
+    if (this._timer) return;
     const wait = this.backoff;
     this.backoff = Math.min(this.backoff * 2, 8000);
-    this._timer = setTimeout(() => this.connect(), wait);
+    this._timer = setTimeout(() => { this._timer = null; this.connect(); }, wait);
   }
 
   _priority(cmd) { return cmd.type === "noteOff" || cmd.type === "panic"; }
@@ -48,10 +57,25 @@ export class MidiSocket {
   send(cmd) {
     const frame = this.token ? { ...cmd, token: this.token } : cmd;
     if (this.open) { this._raw(frame); return true; }
-    // not connected: queue, priority to the front
+    this._enqueue(frame);
+    return false;
+  }
+
+  // Bounded outgoing queue (#43): priority frames to the front; coalesce CC on
+  // the same channel/controller; drop oldest non-priority frames when full so a
+  // long disconnect can't accumulate unbounded stale events.
+  _enqueue(frame) {
+    if (frame.type === "cc") {
+      const i = this.queue.findIndex((q) => q.type === "cc" && q.channel === frame.channel && q.a === frame.a);
+      if (i >= 0) { this.queue[i] = frame; return; }   // coalesce
+    }
     if (this._priority(frame)) this.queue.unshift(frame);
     else this.queue.push(frame);
-    return false;
+    while (this.queue.length > this.maxQueue) {
+      // drop the oldest NON-priority frame; never drop a NoteOff/panic
+      const idx = this.queue.findIndex((q) => !this._priority(q));
+      this.queue.splice(idx >= 0 ? idx : 0, 1);
+    }
   }
 
   flush() {
@@ -65,5 +89,9 @@ export class MidiSocket {
 
   _raw(frame) { this.ws.send(JSON.stringify(frame)); }
 
-  close() { if (this._timer) clearTimeout(this._timer); if (this.ws) this.ws.close(); }
+  close() {
+    this._intentional = true;
+    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+    if (this.ws) this.ws.close();
+  }
 }

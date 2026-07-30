@@ -13,13 +13,15 @@
 #include <LittleFS.h>
 #include <map>
 #include "../ApiRouter.h"
+#include "../AuthManager.h"
 
 namespace swc {
 
 class WebServerAdapter {
 public:
-    void begin(AsyncWebServer* server, AsyncWebSocket* ws, ApiRouter* router, uint32_t (*nowMs)()) {
-        server_ = server; ws_ = ws; router_ = router; now_ = nowMs;
+    void begin(AsyncWebServer* server, AsyncWebSocket* ws, ApiRouter* router,
+               AuthManager* auth, uint32_t (*nowMs)()) {
+        server_ = server; ws_ = ws; router_ = router; auth_ = auth; now_ = nowMs;
 
         // REST: register EACH concrete route (ESPAsyncWebServer matches exact
         // paths, not prefixes — a single "/api/v1" would never match the
@@ -90,8 +92,12 @@ private:
         // session token (review item #6 — per-client, not one global token).
         JsonValue j;
         if (jsonParse(frame, j, nullptr) && j.has("auth")) {
-            wsTokens_[c->id()] = j.str_or("auth", "");
-            c->text("{\"ok\":true,\"data\":{\"authed\":true}}");
+            // VERIFY the session before confirming — do not report authed:true
+            // for an invalid/expired token (review #34).
+            std::string tok = j.str_or("auth", "");
+            bool okAuth = auth_ && auth_->verifySession(tok, now_ ? now_() : 0);
+            if (okAuth) { wsTokens_[c->id()] = tok; c->text("{\"ok\":true,\"data\":{\"authed\":true}}"); }
+            else        { wsTokens_.erase(c->id()); c->text("{\"ok\":false,\"error\":{\"code\":\"UNAUTHORIZED\"}}"); }
             return;
         }
         // Otherwise it's a command; attach this client's stored token and reuse
@@ -116,6 +122,7 @@ private:
     AsyncWebServer*  server_ = nullptr;
     AsyncWebSocket*  ws_ = nullptr;
     ApiRouter*       router_ = nullptr;
+    AuthManager*     auth_ = nullptr;
     uint32_t (*now_)() = nullptr;
     std::map<uint32_t, std::string> wsTokens_;   // WS client id → session token
 public:

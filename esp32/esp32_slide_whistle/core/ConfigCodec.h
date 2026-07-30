@@ -159,6 +159,7 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     g.set("peak01", gc.peak01); g.set("peakMs", (double)gc.peakMs); g.set("hold01", gc.hold01);
     g.set("closed01", gc.closed01); g.set("open01", gc.open01);
     g.set("openDelayMs", (double)gc.openDelayMs); g.set("closeDelayMs", (double)gc.closeDelayMs);
+    g.set("servoMinUs", (int)gc.servoMinUs); g.set("servoMaxUs", (int)gc.servoMaxUs);
     a.set("gate", g);
     const auto& fc = in.air.flow;
     JsonValue f = JsonValue::makeObj();
@@ -167,6 +168,7 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     f.set("min", (int)fc.min); f.set("nominal", (int)fc.nominal); f.set("max", (int)fc.max);
     f.set("rest01", fc.rest01); f.set("curve", (int)fc.curve); f.set("expo", fc.expo);
     f.set("maxSlewPerMs", fc.maxSlewPerMs);
+    f.set("servoMinUs", (int)fc.servoMinUs); f.set("servoMaxUs", (int)fc.servoMaxUs);
     a.set("flow", f);
     const auto& ac = in.air.angle;
     JsonValue ang = JsonValue::makeObj();
@@ -175,6 +177,7 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     ang.set("rest01", ac.rest01); ang.set("min01", ac.min01);
     ang.set("nominal01", ac.nominal01); ang.set("max01", ac.max01);
     ang.set("useCc74", ac.useCc74);
+    ang.set("servoMinUs", (int)ac.servoMinUs); ang.set("servoMaxUs", (int)ac.servoMaxUs);
     a.set("angle", ang);
     const auto& sc = in.air.sensor;
     JsonValue se = JsonValue::makeObj();
@@ -309,6 +312,8 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
             gc.open01 = (float)g->num_or("open01", gc.open01);
             gc.openDelayMs = (uint32_t)g->num_or("openDelayMs", gc.openDelayMs);
             gc.closeDelayMs = (uint32_t)g->num_or("closeDelayMs", gc.closeDelayMs);
+            gc.servoMinUs = (uint16_t)g->int_or("servoMinUs", gc.servoMinUs);
+            gc.servoMaxUs = (uint16_t)g->int_or("servoMaxUs", gc.servoMaxUs);
         }
         if (auto* f = a->find("flow")) {
             auto& fc = in.air.flow;
@@ -323,6 +328,8 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
             fc.curve = (VelocityCurve)f->int_or("curve", (int)fc.curve);
             fc.expo = (float)f->num_or("expo", fc.expo);
             fc.maxSlewPerMs = (float)f->num_or("maxSlewPerMs", fc.maxSlewPerMs);
+            fc.servoMinUs = (uint16_t)f->int_or("servoMinUs", fc.servoMinUs);
+            fc.servoMaxUs = (uint16_t)f->int_or("servoMaxUs", fc.servoMaxUs);
         }
         if (auto* ang = a->find("angle")) {
             auto& ac = in.air.angle;
@@ -335,6 +342,8 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
             ac.nominal01 = (float)ang->num_or("nominal01", ac.nominal01);
             ac.max01 = (float)ang->num_or("max01", ac.max01);
             ac.useCc74 = ang->bool_or("useCc74", ac.useCc74);
+            ac.servoMinUs = (uint16_t)ang->int_or("servoMinUs", ac.servoMinUs);
+            ac.servoMaxUs = (uint16_t)ang->int_or("servoMaxUs", ac.servoMaxUs);
         }
         if (auto* se = a->find("sensor")) {
             auto& sc = in.air.sensor;

@@ -345,3 +345,20 @@ TEST(store_import_rejects_bad_checksum) {
     CHECK(!st.importJson(json, out, err));
     CHECK(err == "checksum mismatch");
 }
+
+// Review #22: air-servo pulse windows (gate/flow/angle) round-trip.
+TEST(config_air_servo_us_roundtrip) {
+    RuntimeConfig c = defaultConfig(); c.instruments[0].enabled = true;
+    auto& a = c.instruments[0].air;
+    a.gate.type = AirGateType::ServoValve; a.gate.pin = 27;
+    a.gate.servoMinUs = 800; a.gate.servoMaxUs = 2200;
+    a.flow.type = FlowControlType::FlowServo; a.flow.pin = 26;
+    a.flow.servoMinUs = 900; a.flow.servoMaxUs = 2100;
+    a.angle.enabled = true; a.angle.pin = 13; a.angle.servoMinUs = 1100; a.angle.servoMaxUs = 1900;
+    RuntimeConfig d;
+    CHECK(configFromJson(configToJson(c), d).ok);
+    CHECK_EQ(d.instruments[0].air.gate.servoMinUs, 800);
+    CHECK_EQ(d.instruments[0].air.gate.servoMaxUs, 2200);
+    CHECK_EQ(d.instruments[0].air.flow.servoMinUs, 900);
+    CHECK_EQ(d.instruments[0].air.angle.servoMaxUs, 1900);
+}
