@@ -102,19 +102,45 @@ private:
         return fs_.begin(true);
     }
 
-    // Force all configured gate/source pins to their inactive level. Runs on
-    // the loaded config regardless of validity so nothing pulses at boot (#8).
+    // Drive every GPIO-backed actuator/air output to a known-inactive level
+    // BEFORE any driver is configured, so a floating pin can't energise a pump,
+    // open a valve, or step a motor at boot (#8, extended per #3 §8 to the
+    // stepper enable/step/dir and the servo/flow/angle pins). Runs on the loaded
+    // config regardless of validity. PCA9685 channels come up off after the
+    // chip's power-on reset and stay off until we init I2C, so only the direct
+    // GPIO (backend == Gpio) pins need forcing here.
     void forceSafeOutputs(const RuntimeConfig& c) {
         for (uint8_t i = 0; i < c.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
-            const AirConfig& a = c.instruments[i].air;
+            const InstrumentConfig& ic = c.instruments[i];
+            const SlideMotionConfig& m = ic.motion;
+            // Stepper: hold the driver DISABLED and keep step/dir quiet.
+            if (m.type == SlideDriveType::StepDir) {
+                safeDisableStepper(m.stepper.enablePin, m.stepper.enableActiveHigh);
+                safeLow(m.stepper.stepPin, true);
+                safeLow(m.stepper.dirPin, true);
+            }
+            // Servos on direct GPIO: no pulse train = no commanded motion.
+            if (m.type == SlideDriveType::SingleServo || m.type == SlideDriveType::DualServo) {
+                if (m.servoA.backend == PwmBackend::Gpio) safeLow(m.servoA.pin, true);
+                if (m.servoBEnabled && m.servoB.backend == PwmBackend::Gpio) safeLow(m.servoB.pin, true);
+            }
+            const AirConfig& a = ic.air;
             safeLow(a.gate.pin, a.gate.activeHigh);
             for (uint8_t p = 0; p < MAX_PUMPS; ++p) safeLow(a.source.pin[p], true);
+            if (a.flow.backend == PwmBackend::Gpio)  safeLow(a.flow.pin, true);
+            if (a.angle.enabled && a.angle.backend == PwmBackend::Gpio) safeLow(a.angle.pin, true);
         }
     }
     static void safeLow(int pin, bool activeHigh) {
         if (pin < 0) return;
         pinMode(pin, OUTPUT);
         digitalWrite(pin, activeHigh ? LOW : HIGH);   // inactive
+    }
+    static void safeDisableStepper(int enablePin, bool enableActiveHigh) {
+        if (enablePin < 0) return;
+        pinMode(enablePin, OUTPUT);
+        // Inactive = driver DISABLED (opposite of the enable-active polarity).
+        digitalWrite(enablePin, enableActiveHigh ? LOW : HIGH);
     }
 
     void buildInstruments() {
@@ -167,6 +193,13 @@ private:
         for (uint8_t i = 0; i < instCount_; ++i) {
             auto* a = instPtrs_[i] ? instPtrs_[i]->actuator() : nullptr;
             if (a && a->fault() != FaultCode::None) return true;
+        }
+        return false;
+    }
+    bool anyAirFault() const {
+        for (uint8_t i = 0; i < instCount_; ++i) {
+            auto* air = instPtrs_[i] ? instPtrs_[i]->air() : nullptr;
+            if (air && air->fault() != FaultCode::None) return true;
         }
         return false;
     }
@@ -225,8 +258,20 @@ private:
             // move to Fault, never hang in Homing (review #12).
             if (state_ == SysState::NeedsHoming) state_ = SysState::Homing;
             else if (state_ == SysState::Homing) {
-                if (anyActuatorFault()) state_ = SysState::Fault;
-                else if (allHomed())    state_ = SysState::Ready;
+                // A homing OR air fault must move to Fault, never hang (#12, §7.2).
+                if (anyActuatorFault() || anyAirFault()) state_ = SysState::Fault;
+                else if (allHomed())                     state_ = SysState::Ready;
+            }
+            else if (state_ == SysState::Ready) {
+                // A fault developing while playing (endstop trip, air overpressure,
+                // sensor lost) drops the system out of Ready (#3 §7.2).
+                if (anyActuatorFault() || anyAirFault()) state_ = SysState::Fault;
+            }
+            else if (state_ == SysState::Fault) {
+                // Recover once a Rearm command has cleared every latched fault:
+                // re-home before returning to Ready (#3 §7.3). The Rearm handler
+                // in the RT engine clears the faults and requests homing.
+                if (!anyActuatorFault() && !anyAirFault()) state_ = SysState::NeedsHoming;
             }
             publishSnapshot();                        // lock-free telemetry (#37)
             vTaskDelayUntil(&last, period);            // deterministic cadence
