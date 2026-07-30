@@ -261,10 +261,19 @@ public:
     void idle(uint32_t nowMs) override { regulate(nowMs); }
     void update(uint32_t nowMs) override { if (!extSensor_) sensor_.update(nowMs); regulate(nowMs); }
     bool ready() const override { return regulatedReady_ && fault_ == FaultCode::None; }
-    void resetFault() override { fault_ = FaultCode::None; filling_ = false; regulatedReady_ = false; pidI_ = 0.0f; }
+    void resetFault() override { fault_ = FaultCode::None; filling_ = false; regulatedReady_ = false; pidI_ = 0.0f; havePidTime_ = false; }
 private:
     AirSensor* activeSensor() { return extSensor_ ? extSensor_ : &sensor_; }
     void regulate(uint32_t nowMs) {
+        // Time-step (seconds) since the previous regulate() so the PI integral
+        // accumulates per unit TIME, not per call — the tick rate no longer
+        // changes the effective integral gain (#3 §10.1). Clamped so a long gap
+        // (first call, or a stall) cannot wind the integral up in one step.
+        if (havePidTime_) {
+            dtS_ = float(elapsed_u32(nowMs, lastPidMs_)) / 1000.0f;
+            if (dtS_ > 0.5f) dtS_ = 0.5f;
+        } else { dtS_ = 0.0f; }
+        lastPidMs_ = nowMs; havePidTime_ = true;
         AirSensor* s = activeSensor();
         // never auto-start pumps without a working configured sensor
         if (c_.requireSensor && (!s->present())) {
@@ -295,7 +304,7 @@ private:
             float drive;
             if (c_.tankPwm) {
                 float err = c_.target - p;
-                pidI_ = clampv(pidI_ + err * c_.pidKi, -c_.max01, c_.max01);
+                pidI_ = clampv(pidI_ + err * c_.pidKi * dtS_, -c_.max01, c_.max01);
                 drive = clampv(c_.pidKp * err + pidI_, c_.min01, c_.max01);
             } else {
                 drive = c_.max01;
@@ -310,6 +319,7 @@ private:
     bool regulatedReady_ = false, filling_ = false;
     uint32_t fillStartMs_ = 0, lastOffMs_ = 0;
     float pidI_ = 0.0f;
+    uint32_t lastPidMs_ = 0; bool havePidTime_ = false; float dtS_ = 0.0f;
 };
 
 // ===========================================================================
