@@ -28,6 +28,10 @@ jobs:
           #define INPUT_PULLUP 2
           #define HIGH 1
           #define LOW 0
+          // arduino-esp32's Arduino.h defines this macro; mirror it so the
+          // syntax-check catches identifiers that collide with it (e.g. a
+          // member named bit()) that a plain native build would miss.
+          #define bit(b) (1UL << (b))
           inline void pinMode(int,int){}
           inline void digitalWrite(int,int){}
           inline int  digitalRead(int){return 0;}

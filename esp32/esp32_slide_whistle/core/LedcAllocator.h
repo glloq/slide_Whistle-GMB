@@ -22,15 +22,15 @@ public:
     // silently reused as channel 0 (review #3 §9.1).
     int allocate() {
         for (uint8_t i = 0; i < cap_; ++i)
-            if (!(mask_ & bit(i))) { mask_ |= bit(i); return int(i); }
+            if (!(mask_ & chMask(i))) { mask_ |= chMask(i); return int(i); }
         return -1;
     }
     // Return a channel to the pool so a later reconfigure can reuse it rather
     // than leaking it (review #3 §9.2). Out-of-range / double-free is a no-op.
     void release(int ch) {
-        if (ch >= 0 && ch < int(cap_)) mask_ &= ~bit(uint8_t(ch));
+        if (ch >= 0 && ch < int(cap_)) mask_ &= ~chMask(uint8_t(ch));
     }
-    bool isAllocated(uint8_t ch) const { return ch < cap_ && (mask_ & bit(ch)); }
+    bool isAllocated(uint8_t ch) const { return ch < cap_ && (mask_ & chMask(ch)); }
     void reset() { mask_ = 0; }
     uint8_t used() const { return uint8_t(__builtin_popcount(mask_)); }
     uint8_t capacity() const { return cap_; }
@@ -41,7 +41,7 @@ public:
     static LedcAllocator& global() { static LedcAllocator a(16); return a; }
 
 private:
-    static uint32_t bit(uint8_t i) { return 1u << i; }
+    static uint32_t chMask(uint8_t i) { return 1u << i; }
     static uint8_t  clampCap(uint8_t c) { return c > 32 ? 32 : c; }   // mask_ is 32-bit
     uint8_t  cap_;
     uint32_t mask_ = 0;   // bit i set = channel i in use
