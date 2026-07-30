@@ -101,6 +101,34 @@ Markers:
 Pins avoided by default: **6–11** (flash), **0/2/5/12/15** (strapping) as
 outputs, **ADC2** pins for analog input while WiFi is on.
 
+## External review response (P0/P1)
+
+| # | Item | Status |
+|---|------|--------|
+| 1 | Permanent E-stop at boot | FIXED · TESTED (clearFault/rearm/arm) |
+| 2 | CI BLE-MIDI dep + split jobs | FIXED (git tag dep; 4 CI jobs) — build not verifiable here |
+| 3 | New UI not in LittleFS | FIXED (esp32-universal/S3 data_dir → esp32/webui) |
+| 4 | REST routes not registered | FIXED (each route + 404) — REQUIRES HARDWARE |
+| 5 | Credentials unknowable | FIXED (NVS persist + Serial print + login page) — REQUIRES HARDWARE |
+| 6 | WS auth not implemented | FIXED (per-client session map) — REQUIRES HARDWARE |
+| 7 | Rate limiter can block panic/NoteOff | FIXED · TESTED (safety bypass origin/rate/auth) |
+| 8 | Outputs not safe at boot | FIXED (forceSafeOutputs + solenoid-closed + skip invalid/disabled) — REQUIRES HARDWARE |
+| 9 | Double update per cycle | FIXED (engine is single updater) |
+| 10 | No homing before READY | FIXED (NeedsHoming/Homing/Ready states) — REQUIRES HARDWARE |
+| 11 | Homing clamp + logical offset | FIXED · TESTED (generous seek bound + real MoveToOffset) |
+| 12 | Virtual position outpaces motor | PARTIAL — needs RMT/timer stepping + step-count position (REQUIRES HARDWARE) |
+| 13 | Air servo normalization wrong | FIXED · TESTED (ServoOutput → µs) |
+| 14 | Backends not wired (PCA/ToF/BLE/rtp/STA) | TODO — REQUIRES HARDWARE |
+| 15 | Air opens before source ready | FIXED · TESTED (wait actuator AND air isReady + timeout) |
+| 16 | Test air can stay active | FIXED · TESTED (server-side auto-stop) |
+| 17 | Dynamic config not applied live | FIXED · TESTED (ApplyDynamicConfig → live objects) |
+| 18 | JSON codec incomplete | FIXED · TESTED (full field-by-field round-trip) |
+| UI | Wizard not wired, no login | FIXED (login/session + wizard rendered); full screens still PARTIAL |
+
+Remaining hardware-bound work: RMT/timer step generation with step-count
+feedback (#12), PCA9685 / ToF / digital-sensor / BLE-MIDI / rtpMIDI / WiFi-STA
+bring-up (#14), and physical validation of every mount.
+
 ## How to run the software tests
 
 ```sh
