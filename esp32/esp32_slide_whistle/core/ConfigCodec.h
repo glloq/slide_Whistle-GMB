@@ -208,15 +208,17 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     cc.set("vibratoEnabled", in.cc.vibratoEnabled);
     v.set("cc", cc);
 
-    // calibration points (only calibrated entries) — full per-note air window
+    // calibration points: every ENABLED entry (calibrated or provisional) so a
+    // preset's provisional table survives a save/reload (review item #7).
     JsonValue cal = JsonValue::makeArr();
     for (int n = 0; n < MIDI_NOTE_COUNT; ++n) {
         const NoteEntry& e = in.map.entry((uint8_t)n);
-        if (!e.calibrated) continue;
+        if (!e.enabled) continue;
         JsonValue pt = JsonValue::makeObj();
         pt.set("note", n); pt.set("mm", e.positionMm);
         pt.set("tol", e.positionToleranceMm);
         pt.set("airMin", (int)e.airMin); pt.set("air", (int)e.airNominal); pt.set("airMax", (int)e.airMax);
+        pt.set("calibrated", e.calibrated);   // false = provisional / not hw-validated
         pt.set("enabled", e.enabled);
         cal.arr.push_back(pt);
     }
@@ -383,8 +385,70 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
             e.airMin = (uint8_t)pt.int_or("airMin", e.airMin);
             e.airMax = (uint8_t)pt.int_or("airMax", e.airMax);
             e.enabled = pt.bool_or("enabled", true);
+            e.calibrated = pt.bool_or("calibrated", true);  // preserve provisional status
         }
     }
+}
+
+// --- validation --------------------------------------------------------------
+inline bool enumOk(int v, int hi) { return v >= 0 && v <= hi; }
+
+// Full structural validation (review items #26/#27). Returns "" if valid, else
+// a short reason. Runs on the decoded struct before it is ever accepted.
+inline std::string validateStructural(const RuntimeConfig& c) {
+    if (!enumOk((int)c.device.board, 2)) return "bad device.board";
+    if (c.instrumentCount > MAX_INSTRUMENTS) return "instrumentCount out of range";
+    for (uint8_t idx = 0; idx < c.instrumentCount; ++idx) {
+        const InstrumentConfig& in = c.instruments[idx];
+        // enums
+        if (!enumOk((int)in.motion.type, 3)) return "bad motion.type";
+        if (!enumOk((int)in.motion.dualMode, 2)) return "bad motion.dualMode";
+        if (!enumOk((int)in.air.source.type, 4)) return "bad air.source.type";
+        if (!enumOk((int)in.air.gate.type, 5)) return "bad air.gate.type";
+        if (!enumOk((int)in.air.flow.type, 5)) return "bad air.flow.type";
+        if (!enumOk((int)in.air.sensor.type, 7)) return "bad air.sensor.type";
+        if (!enumOk((int)in.air.source.tankMode, 2)) return "bad tankMode";
+        if (!enumOk((int)in.air.flow.curve, 4)) return "bad flow.curve";
+        if (!enumOk((int)in.seq.mono, 2)) return "bad seq.mono";
+        if (!enumOk((int)in.seq.legato, 5)) return "bad seq.legato";
+        if (!enumOk((int)in.seq.vibratoUnit, 2)) return "bad vibratoUnit";
+        // ranges
+        if (in.midiChannel > 16) return "midiChannel out of 0..16";
+        if (in.noteMin > 127 || in.noteMax > 127) return "note out of 0..127";
+        if (in.noteMin > in.noteMax) return "noteMin>noteMax";
+        const auto& f = in.air.flow;
+        if (!(f.min <= f.nominal && f.nominal <= f.max)) return "flow min<=nominal<=max violated";
+        const auto& g = in.air.gate;
+        if (g.hold01 > g.peak01 + 1e-6f) return "gate hold>peak";
+        const auto& s = in.air.sensor;
+        if (s.type != AirSensorType::None) {
+            if (!(s.rawMin < s.rawMax)) return "sensor rawMin<rawMax violated";
+            if (!(s.physLo < s.physHi)) return "sensor physLo<physHi violated";
+            if (!(s.filterAlpha >= 0.f && s.filterAlpha <= 1.f)) return "filterAlpha out of 0..1";
+        }
+        const auto& so = in.air.source;
+        if (so.type == AirSourceType::PumpsDirect || so.type == AirSourceType::PumpsTank)
+            if (so.pumpCount < 1 || so.pumpCount > MAX_PUMPS) return "pumpCount out of 1..3";
+        if (so.type == AirSourceType::PumpsTank) {
+            if (!(so.lowThresh < so.highThresh)) return "tank low<high violated";
+            if (!(so.highThresh < so.safetyThresh)) return "tank high<safety violated";
+            if (!(so.target >= so.lowThresh && so.target <= so.highThresh)) return "tank target outside low..high";
+        }
+        // servo calibration must be monotonic in mm
+        for (auto* sv : { &in.motion.servoA, &in.motion.servoB }) {
+            if (sv->calCount < 2 || sv->calCount > 8) return "servo calCount invalid";
+            for (uint8_t i = 1; i < sv->calCount; ++i)
+                if (!(sv->cal[i].mm > sv->cal[i-1].mm)) return "servo calibration not monotonic";
+        }
+        // finite geometry
+        if (!(in.motion.travelMm > 0.f) || !std::isfinite(in.motion.travelMm)) return "travelMm invalid";
+        if (in.motion.softMinMm > in.motion.softMaxMm) return "softMin>softMax";
+        // note table monotonic (non-decreasing positions)
+        if (in.map.firstNonMonotonic() >= 0) return "note table not monotonic";
+    }
+    // USB MIDI is impossible on a classic WROOM
+    if (c.midi.usb && c.device.board == BoardKind::Esp32Wroom) return "USB MIDI unavailable on WROOM";
+    return "";
 }
 
 // --- top-level ---------------------------------------------------------------
@@ -439,6 +503,9 @@ inline ConfigDecodeResult configFromJson(const std::string& text, RuntimeConfig&
     }
 
     long ver = root->int_or("schemaVersion", 0);
+    // Refuse configs from a FUTURE schema rather than partially decoding an
+    // unknown structure (review item #28).
+    if (ver > (long)CONFIG_SCHEMA_VERSION) { r.error = "unsupported (future) schemaVersion"; return r; }
     RuntimeConfig cfg = defaultConfig();
     if (ver > 0 && ver < (long)CONFIG_SCHEMA_VERSION) {
         if (!migrateLegacy(*root, cfg)) { r.error = "migration failed"; return r; }
@@ -476,13 +543,9 @@ inline ConfigDecodeResult configFromJson(const std::string& text, RuntimeConfig&
                 instrumentFromJson(arr->arr[i], cfg.instruments[i]);
     }
 
-    // structural validation before accepting (transactional)
-    for (int i = 0; i < cfg.instrumentCount; ++i) {
-        InstrumentConfig& in = cfg.instruments[i];
-        if (in.noteMin > in.noteMax) { r.error = "noteMin>noteMax"; return r; }
-        if (in.air.flow.min > in.air.flow.max) { r.error = "flow min>max"; return r; }
-        if (in.air.gate.hold01 > in.air.gate.peak01 + 1e-6f) { r.error = "gate hold>peak"; return r; }
-    }
+    // full structural + enum validation before accepting (transactional)
+    std::string verr = validateStructural(cfg);
+    if (!verr.empty()) { r.error = verr; return r; }
     out = cfg;
     r.ok = true;
     return r;

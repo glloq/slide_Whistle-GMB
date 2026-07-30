@@ -37,12 +37,13 @@ public:
         Command c;
         while (budget-- && q_ && q_->pop(c)) dispatch(c, nowMs);
 
-        // Server-side test-air timeout: a TestAir never stays open waiting on
-        // the browser — it closes itself after its duration (correction #16).
-        if (testAirInst_ >= 0 && nowMs >= testAirStopMs_) {
-            if (testAirInst_ < count_ && inst_[testAirInst_] && inst_[testAirInst_]->air())
-                inst_[testAirInst_]->air()->stopNote();
-            testAirInst_ = -1;
+        // Server-side test-air timeout, PER INSTRUMENT so a second test never
+        // orphans the first (reviews #16 + #11).
+        for (uint8_t i = 0; i < count_ && i < MAX_INSTRUMENTS; ++i) {
+            if (testAirActive_[i] && nowMs >= testAirStopMs_[i]) {
+                if (inst_[i] && inst_[i]->air()) inst_[i]->air()->stopNote();
+                testAirActive_[i] = false;
+            }
         }
 
         for (uint8_t i = 0; i < count_; ++i) {
@@ -56,11 +57,14 @@ public:
 
     void panicAll(uint32_t nowMs) {
         if (q_) q_->clear();
-        testAirInst_ = -1;                 // cancel any running test
+        for (uint8_t i = 0; i < MAX_INSTRUMENTS; ++i) testAirActive_[i] = false;  // cancel all tests
         for (uint8_t i = 0; i < count_; ++i) if (inst_[i]) inst_[i]->panic(nowMs);
     }
 
-    bool testAirActive() const { return testAirInst_ >= 0; }
+    bool testAirActive() const {
+        for (uint8_t i = 0; i < MAX_INSTRUMENTS; ++i) if (testAirActive_[i]) return true;
+        return false;
+    }
 
 private:
     void dispatch(const Command& c, uint32_t nowMs) {
@@ -93,8 +97,20 @@ private:
                 panicAll(nowMs);
                 break;
             case CommandType::Home:
-                if (c.instrument < count_ && inst_[c.instrument] && inst_[c.instrument]->actuator())
+                if (c.instrument < count_ && inst_[c.instrument] && inst_[c.instrument]->actuator()) {
+                    inst_[c.instrument]->actuator()->clearFault();   // allow re-home after a fault
                     inst_[c.instrument]->actuator()->requestHoming();
+                }
+                break;
+            case CommandType::Rearm:
+                // Acknowledge fault + re-arm actuator & air, then re-home so the
+                // instrument is usable again after panic (review #9).
+                if (c.instrument < count_ && inst_[c.instrument]) {
+                    Instrument* in = inst_[c.instrument];
+                    if (in->actuator()) in->actuator()->clearFault();
+                    if (in->air())      in->air()->rearm();
+                    if (in->actuator()) in->actuator()->requestHoming();
+                }
                 break;
             case CommandType::Jog:
             case CommandType::TestActuator:
@@ -109,8 +125,10 @@ private:
                     inst_[c.instrument]->air()->startNote(r);
                     // schedule an automatic stop (i16 = ms, default 3 s)
                     uint32_t dur = c.i16 > 0 ? (uint32_t)c.i16 : 3000u;
-                    testAirInst_ = c.instrument;
-                    testAirStopMs_ = nowMs + dur;
+                    if (c.instrument < MAX_INSTRUMENTS) {
+                        testAirActive_[c.instrument] = true;
+                        testAirStopMs_[c.instrument] = nowMs + dur;
+                    }
                 }
                 break;
             case CommandType::ApplyDynamicConfig:
@@ -131,8 +149,8 @@ private:
     CommandQueue<QN>*  q_ = nullptr;
     float              bendRangeSemis_ = 2.0f;
     const RuntimeConfig* live_ = nullptr;       // for ApplyDynamicConfig
-    int                testAirInst_ = -1;      // instrument index of a running TestAir, or -1
-    uint32_t           testAirStopMs_ = 0;
+    bool               testAirActive_[MAX_INSTRUMENTS] = {false};   // per-instrument TestAir
+    uint32_t           testAirStopMs_[MAX_INSTRUMENTS] = {0};
 };
 
 } // namespace swc

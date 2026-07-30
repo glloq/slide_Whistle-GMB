@@ -39,12 +39,18 @@ jobs:
           inline void ledcWrite(uint8_t,uint32_t){}
           inline void ledcDetach(uint8_t){}
           inline void ledcDetachPin(uint8_t){}
+          typedef int portMUX_TYPE;
+          #define portMUX_INITIALIZER_UNLOCKED 0
+          inline void portENTER_CRITICAL(portMUX_TYPE*){}
+          inline void portEXIT_CRITICAL(portMUX_TYPE*){}
           EOF
-          H=esp32/esp32_slide_whistle/core/platform/EspSinks.h
-          echo "== Arduino-ESP32 3.x =="
-          g++ -std=c++17 -Wall -Wextra -DARDUINO=300 -DESP_ARDUINO_VERSION_MAJOR=3 -I/tmp/ardstub -fsyntax-only "$H"
-          echo "== Arduino-ESP32 2.x =="
-          g++ -std=c++17 -Wall -Wextra -DARDUINO=200 -I/tmp/ardstub -fsyntax-only "$H"
+          for V in "300 -DESP_ARDUINO_VERSION_MAJOR=3" "200"; do
+            echo "== Arduino-ESP32 $V =="
+            g++ -std=c++17 -Wall -Wextra -DARDUINO=$V -I/tmp/ardstub -fsyntax-only \
+              esp32/esp32_slide_whistle/core/platform/EspSinks.h
+            g++ -std=c++17 -Wall -Wextra -DARDUINO=$V -I/tmp/ardstub -fsyntax-only \
+              esp32/esp32_slide_whistle/core/CommandQueue.h
+          done
 
   json-validation:
     name: JSON assets valid
@@ -123,5 +129,7 @@ jobs:
         run: pip install platformio
       - name: Build esp32-universal (WROOM)
         run: pio run -e esp32-universal
-      - name: Build esp32-universal (S3)
-        run: pio run -e esp32-s3 || true
+      - name: Build esp32-s3 (native USB)
+        run: pio run -e esp32-s3
+      - name: Build LittleFS image (universal UI)
+        run: pio run -e esp32-universal -t buildfs

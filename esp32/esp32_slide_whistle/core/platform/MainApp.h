@@ -46,7 +46,7 @@ public:
 #if DEBUG_SERIAL
         Serial.begin(115200); delay(200);
 #endif
-        fsOk_ = fs_.begin(true);
+        fsOk_ = mountFs();
         LoadOutcome lo = LoadOutcome::Default;
         if (fsOk_) { store_.begin(&fs_); lo = store_.load(config_); }
         else       { config_ = defaultConfig(); }
@@ -70,6 +70,7 @@ public:
         else       { state_ = SysState::SafeConfigOnly; instCount_ = 0; }
 
         engine_.begin(instPtrs_, instCount_, &queue_);
+        engine_.setLiveConfig(&config_);    // so ApplyDynamicConfig actually applies (#5)
         router_.begin(&auth_, &store_, &config_, &sink_, &entropy_, &status_);
 
         startNetwork();
@@ -89,6 +90,14 @@ public:
     }
 
 private:
+    // Mount LittleFS WITHOUT auto-format first (a transient mount error must not
+    // wipe config/backup/UI, review #30). Format only as a flagged last resort.
+    bool mountFs() {
+        for (int i = 0; i < 2; ++i) { if (fs_.begin(false)) return true; delay(50); }
+        fsFormatted_ = true;                 // surfaced in status; operator is warned
+        return fs_.begin(true);
+    }
+
     // Force all configured gate/source pins to their inactive level. Runs on
     // the loaded config regardless of validity so nothing pulses at boot (#8).
     void forceSafeOutputs(const RuntimeConfig& c) {
@@ -150,6 +159,13 @@ private:
             if (instPtrs_[i] && instPtrs_[i]->actuator() && !instPtrs_[i]->actuator()->isHomed()) return false;
         return true;
     }
+    bool anyActuatorFault() const {
+        for (uint8_t i = 0; i < instCount_; ++i) {
+            auto* a = instPtrs_[i] ? instPtrs_[i]->actuator() : nullptr;
+            if (a && a->fault() != FaultCode::None) return true;
+        }
+        return false;
+    }
 
     // Persist the admin token in NVS so it survives reboots and can be shown.
     void loadOrCreateAdminToken() {
@@ -201,9 +217,13 @@ private:
             // Single owner of updates: engine_.tick() ticks each instrument's
             // actuator + air + sequencer exactly once — no second pass (#9).
             engine_.tick(ms, us, /*budget=*/32);
-            // Lifecycle: home before declaring READY (#10).
+            // Lifecycle: home before declaring READY (#10); a homing fault must
+            // move to Fault, never hang in Homing (review #12).
             if (state_ == SysState::NeedsHoming) state_ = SysState::Homing;
-            else if (state_ == SysState::Homing && allHomed()) state_ = SysState::Ready;
+            else if (state_ == SysState::Homing) {
+                if (anyActuatorFault()) state_ = SysState::Fault;
+                else if (allHomed())    state_ = SysState::Ready;
+            }
             vTaskDelayUntil(&last, period);            // deterministic cadence
         }
     }
@@ -223,13 +243,19 @@ private:
             JsonValue v = JsonValue::makeObj();
             v.set("state", int(app->state_));
             v.set("firstBoot", app->firstBoot_);
+            v.set("fsFormatted", app->fsFormatted_);
             JsonValue arr = JsonValue::makeArr();
+            // Iterate the COMPACTED instrument pointers, never rt_[] by config
+            // index (a disabled slot leaves rt_[i]==nullptr → crash, review #8).
             for (uint8_t i = 0; i < app->instCount_; ++i) {
+                Instrument* in = app->instPtrs_[i];
+                if (!in) continue;
                 JsonValue o = JsonValue::makeObj();
-                auto* a = app->rt_[i]->actuator();
+                auto* a = in->actuator();
+                o.set("id", (int)in->id());
                 o.set("pos_mm", a ? a->currentPositionMm() : 0.0);
                 o.set("homed", a ? a->isHomed() : false);
-                o.set("note", app->rt_[i]->instrument().sequencer().activeNoteOr(-1));
+                o.set("note", in->sequencer().activeNoteOr(-1));
                 arr.arr.push_back(o);
             }
             v.set("instruments", arr);
@@ -259,7 +285,7 @@ private:
     AsyncWebSocket   ws_{"/ws"};
     WebServerAdapter web_;
     std::string      apPassword_;
-    bool             fsOk_ = false, firstBoot_ = true;
+    bool             fsOk_ = false, firstBoot_ = true, fsFormatted_ = false;
     volatile SysState state_ = SysState::Boot;
 
 public:

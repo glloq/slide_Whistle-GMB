@@ -59,6 +59,7 @@ public:
     virtual void update(uint32_t nowMs) = 0;
     virtual bool ready() const = 0;          // enough air to open the gate
     virtual void safeState() = 0;
+    virtual void resetFault() {}             // clear latched internal fault on rearm (#13)
     virtual FaultCode fault() const = 0;
     virtual ~IAirSource() = default;
 };
@@ -71,6 +72,7 @@ public:
     virtual void update(uint32_t nowMs) = 0;
     virtual bool isOpen() const = 0;
     virtual void safeState() = 0;            // must truly close the air
+    virtual void resetFault() {}             // clear latched internal fault on rearm (#13)
     virtual FaultCode fault() const = 0;
     virtual ~IAirGate() = default;
 };

@@ -141,6 +141,8 @@ public:
         estopped_ = false;
         fault_ = FaultCode::None;
         safety_.reset();
+        if (src_)  src_->resetFault();     // clear latched subcomponent faults (#13)
+        if (gate_) gate_->resetFault();
         state_ = AirState::Idle;
     }
 
