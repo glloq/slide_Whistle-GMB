@@ -153,23 +153,23 @@ correct-by-construction but needs hardware to validate. TODO = not yet done
 | 14 | Stable sensor flagged stale | FIXED·TESTED (freshness = new sample) |
 | 15 | NaN → permanently absent | FIXED·TESTED (recovers; boot timeout) |
 | 16 | Pump cascade never advances | FIXED·TESTED (update-driven) |
-| 17 | Tank modes/PID not implemented | PARTIAL — hysteresis + proportional; true PID/level/position TODO |
+| 17 | Tank modes/PID not implemented | FIXED·TESTED (target-aware PI + hysteresis); level/position modes still share the sensor value |
 | 18 | Out-of-range sensor keeps pumping | FIXED·TESTED (stops pumps) |
 | 19 | FlowServoAsValve drives one servo twice | TODO — unified controller (hardware) |
 | 20 | PCA9685 configurable but not driven | TODO (hardware) |
 | 21 | ToF/digital sensors not implemented | TODO (hardware) |
 | 22 | Air servo µs hardcoded | FIXED·TESTED (configurable window) |
 | 23 | Endstops not watched while playing | TODO (hardware) |
-| 24 | Validator accepts missing required pins | TODO — required-vs-optional pin classing |
-| 25 | Resources not validated (angle/UART/I2C/I2S…) | PARTIAL — angle/pumps/PCA added; buses TODO |
+| 24 | Validator accepts missing required pins | FIXED·TESTED (PIN_REQUIRED) |
+| 25 | Resources not validated (angle/UART/I2C/I2S…) | PARTIAL — angle servo + servo-gate LEDC + pumps/PCA now claimed; UART/I2C/I2S buses TODO |
 | 26 | Enum values unvalidated | FIXED·TESTED |
 | 27 | Structural validation thin | FIXED·TESTED (ranges/monotonic/thresholds) |
 | 28 | Future schema accepted | FIXED·TESTED (refused) |
 | 29 | Bad checksum imports accepted | FIXED·TESTED (rejected) |
 | 30 | LittleFS auto-format wipes data | FIXED (mount no-format first) |
-| 31 | Rate limiter global | TODO — per-client limiter |
+| 31 | Rate limiter global | FIXED·TESTED (per-client buckets) |
 | 32 | Origin off by default | PARTIAL — enforced when set; MainApp default TODO |
-| 33 | requireAuth field not applied | TODO |
+| 33 | requireAuth field not applied | FIXED (MainApp applies it) |
 | 34 | WS confirms auth without verifying | FIXED (verifySession on auth frame) |
 | 35 | WS fragmented frames unhandled | TODO (hardware/transport) |
 | 36 | HTTP body allocated before size check | TODO (transport) |
