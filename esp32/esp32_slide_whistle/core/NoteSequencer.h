@@ -134,7 +134,12 @@ public:
                 noteOnMs_ = nowMs;
             } else if (cfg_.prepareTimeoutMs &&
                        elapsed_u32(nowMs, positionStartMs_) > cfg_.prepareTimeoutMs) {
-                // Gave up waiting: abandon the note safely, never open air late.
+                // Gave up waiting: abandon THIS note safely, never open air late.
+                // Drop it from the stack first so we don't immediately re-select
+                // and retry the same unreachable note forever (#3 §5.2).
+                int idx = find(activeNote());
+                if (idx >= 0) removeAt(idx);
+                active_ = -1;
                 cancelToStackOrRelease(nowMs);
             }
         }
@@ -199,25 +204,41 @@ private:
     }
 
     void chooseActiveAndTrigger(uint32_t nowMs, bool fromRelease) {
-        int sel = selectActive();
-        if (sel < 0) { active_ = -1; release(nowMs); return; }
-        bool sameNote = (active_ == sel);
-        active_ = sel;
-        if (sameNote && phase_ == SeqPhase::Playing && !fromRelease) return;
+        for (;;) {
+            int sel = selectActive();
+            if (sel < 0) { active_ = -1; release(nowMs); return; }
 
-        // Decide legato: keep the air across the move or cut it.
-        bool hold = legatoHold(nowMs);
-        if (air_) {
-            if (phase_ == SeqPhase::Playing && !hold) air_->stopNote();   // #2 close between notes
-            air_->prepareNote(airRequestFor(uint8_t(sel)));
-        }
-        applyPosition(nowMs);
-        if (air_ && hold && phase_ == SeqPhase::Playing) {
-            // glissando / legato-hold: air stays open, just move — stay Playing
-            noteOnMs_ = nowMs;
-        } else {
-            phase_ = SeqPhase::Positioning;   // wait for actuator + air ready in update()
-            positionStartMs_ = nowMs;
+            // Refuse a note that has no usable position mapping: proceeding to
+            // Positioning would let the actuator report "ready for air" at a
+            // stale slide position and open air on the WRONG note (#3 §5.1).
+            // Drop the unmapped note and fall back to the next one in the stack.
+            float posMm;
+            if (!map_ || !map_->positionForNote(float(sel), posMm)) {
+                int idx = find(uint8_t(sel));
+                if (idx >= 0) removeAt(idx);
+                if (active_ == sel) active_ = -1;
+                continue;
+            }
+
+            bool sameNote = (active_ == sel);
+            active_ = sel;
+            if (sameNote && phase_ == SeqPhase::Playing && !fromRelease) return;
+
+            // Decide legato: keep the air across the move or cut it.
+            bool hold = legatoHold(nowMs);
+            if (air_) {
+                if (phase_ == SeqPhase::Playing && !hold) air_->stopNote();   // #2 close between notes
+                air_->prepareNote(airRequestFor(uint8_t(sel)));
+            }
+            applyPosition(nowMs);
+            if (air_ && hold && phase_ == SeqPhase::Playing) {
+                // glissando / legato-hold: air stays open, just move — stay Playing
+                noteOnMs_ = nowMs;
+            } else {
+                phase_ = SeqPhase::Positioning;   // wait for actuator + air ready in update()
+                positionStartMs_ = nowMs;
+            }
+            return;
         }
     }
 
