@@ -8,11 +8,13 @@
  *
  * Sources :
  *   MIDI_SOURCE_SERIAL → DIN-5 via UART2 (GPIO16 RX2)
- *   MIDI_SOURCE_BLE    → BLE MIDI (lathoub/Arduino-BLE-MIDI)
+ *   MIDI_SOURCE_BLE    → BLE MIDI (max22/ESP32-BLE-MIDI)
  *
  * Bibliothèques :
  *   MIDI Library  — FortySevenEffects/Arduino-MIDI-Library
- *   BLE-MIDI      — lathoub/Arduino-BLE-MIDI
+ *   BLE-MIDI      — max22/ESP32-BLE-MIDI (fournit <BLEMidi.h> + BLEMidiServer).
+ *                   L'ancienne dépendance lathoub/Arduino-BLE-MIDI n'exposait
+ *                   PAS <BLEMidi.h> sous ce nom → build legacy cassé (review #1).
  */
 
 #ifndef MIDI_HANDLER_H

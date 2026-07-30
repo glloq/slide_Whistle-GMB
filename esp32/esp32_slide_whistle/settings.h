@@ -78,8 +78,15 @@ enum SystemState { SYS_INIT, SYS_HOMING, SYS_READY, SYS_ERROR };
 #define VIBRATO_DEPTH_MM           2.0f
 #define VIBRATO_SPEED_HZ           5.0f
 
+// These two sources can be overridden from the build system (e.g. a
+// PlatformIO `-DMIDI_SOURCE_BLE=0` flag) so a build can drop BLE without
+// editing this file. The #ifndef guards make the -D flag win.
+#ifndef MIDI_SOURCE_SERIAL
 #define MIDI_SOURCE_SERIAL         true
+#endif
+#ifndef MIDI_SOURCE_BLE
 #define MIDI_SOURCE_BLE            true
+#endif
 #define MIDI_SERIAL_BAUD           31250
 
 // ============================================================================
