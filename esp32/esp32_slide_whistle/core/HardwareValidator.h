@@ -93,12 +93,18 @@ public:
     explicit HardwareResourceValidator(BoardProfile b = BoardProfile::wroom())
         : board_(b) {}
 
-    void reset() { pins_.clear(); ranges_.clear(); pcas_.clear(); ledc_.clear(); wifiOn_ = true; }
+    void reset() { pins_.clear(); ranges_.clear(); pcas_.clear(); ledc_.clear(); required_.clear(); wifiOn_ = true; }
     void setBoard(const BoardProfile& b) { board_ = b; }
     void setWifi(bool on) { wifiOn_ = on; }
 
     void claimPin(int pin, bool output, bool adc, const std::string& field, const std::string& owner = "") {
-        if (pin < 0) return;   // unassigned pin — not claimed
+        if (pin < 0) return;   // unassigned OPTIONAL pin — not claimed
+        pins_.push_back({pin, output, adc, field, owner});
+    }
+    // Like claimPin, but the pin is MANDATORY for the selected mode: an
+    // unassigned (-1) pin is a hard error (review item #24).
+    void requirePin(int pin, bool output, bool adc, const std::string& field, const std::string& owner = "") {
+        if (pin < 0) { required_.push_back(field); return; }
         pins_.push_back({pin, output, adc, field, owner});
     }
     void claimRange(long lo, long hi, const std::string& field) { ranges_.push_back({lo, hi, field}); }
@@ -146,6 +152,9 @@ public:
         for (const auto& r : ranges_)
             if (r.lo > r.hi)
                 add(out, "RANGE_INVALID", "min (" + s(r.lo) + ") exceeds max (" + s(r.hi) + ")", r.field);
+        // 6. mandatory pins left unassigned for the selected mode (#24)
+        for (const auto& field : required_)
+            add(out, "PIN_REQUIRED", "a pin is required for the selected mode but is unassigned", field);
         return out;
     }
 
@@ -169,6 +178,7 @@ private:
     std::vector<RangeClaim> ranges_;
     std::vector<PcaClaim>   pcas_;
     std::vector<LedcClaim>  ledc_;
+    std::vector<std::string> required_;   // fields of mandatory-but-unassigned pins
 };
 
 } // namespace swc

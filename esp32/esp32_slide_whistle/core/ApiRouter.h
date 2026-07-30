@@ -94,8 +94,9 @@ public:
         // 2. Origin check for state-changing methods (safety exempt)
         if (!safety && r.method != "GET" && auth_ && !auth_->originAllowed(r.origin))
             return reply(403, apiErr("BAD_ORIGIN", "Origin not allowed", "Origin"));
-        // 3. rate limit (safety exempt)
-        if (!safety && auth_ && !auth_->allowRequest(nowMs))
+        // 3. rate limit (safety exempt), per client so one caller can't starve
+        //    the others (review #31). Key by token, else Origin, else anon.
+        if (!safety && auth_ && !auth_->allowRequestFor(clientKey(r), nowMs))
             return reply(429, apiErr("RATE_LIMITED", "too many requests"));
 
         // 4. routing
@@ -258,6 +259,12 @@ private:
         if (t == "panic" || t == "noteOff") return true;
         if (t == "cc") { long a = b.int_or("a", b.int_or("cc", -1)); return a == 120 || a == 123; }
         return false;
+    }
+
+    static std::string clientKey(const ApiRequest& r) {
+        if (!r.token.empty()) return "t:" + r.token;
+        if (!r.origin.empty()) return "o:" + r.origin;
+        return "anon";
     }
 
     bool ctJson(const ApiRequest& r) const { return r.contentType.find("application/json") != std::string::npos; }

@@ -143,6 +143,7 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     src.set("tankMode", (int)so.tankMode);
     src.set("tankPwm", so.tankPwm);
     src.set("target", so.target);
+    src.set("pidKp", so.pidKp); src.set("pidKi", so.pidKi);
     src.set("requireSensor", so.requireSensor);
     src.set("lowThresh", so.lowThresh);
     src.set("highThresh", so.highThresh);
@@ -290,6 +291,8 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in) {
             so.tankMode = (TankRegulationMode)src->int_or("tankMode", (int)so.tankMode);
             so.tankPwm = src->bool_or("tankPwm", so.tankPwm);
             so.target = (float)src->num_or("target", so.target);
+            so.pidKp = (float)src->num_or("pidKp", so.pidKp);
+            so.pidKi = (float)src->num_or("pidKi", so.pidKi);
             so.requireSensor = src->bool_or("requireSensor", so.requireSensor);
             so.lowThresh = (float)src->num_or("lowThresh", so.lowThresh);
             so.highThresh = (float)src->num_or("highThresh", so.highThresh);

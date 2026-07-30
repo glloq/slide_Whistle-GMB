@@ -128,3 +128,14 @@ TEST(ap_password_generated) {
     uint32_t e2[2] = {0x0, 0x1};
     CHECK(AuthManager::generateApPassword(e2, 10) != p);   // seed-dependent
 }
+
+TEST(auth_per_client_rate_limit) {
+    // Review #31: one client exhausting its bucket does not block another.
+    AuthManager a; a.begin();
+    a.configureRate(2, 0.0001);
+    CHECK(a.allowRequestFor("clientA", 0));
+    CHECK(a.allowRequestFor("clientA", 0));
+    CHECK(!a.allowRequestFor("clientA", 0));   // A exhausted
+    CHECK(a.allowRequestFor("clientB", 0));    // B has its own bucket
+    CHECK(a.allowRequestFor("clientB", 0));
+}

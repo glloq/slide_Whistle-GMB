@@ -41,7 +41,9 @@ struct SourceConfig {
     // tank regulation
     TankRegulationMode tankMode = TankRegulationMode::Pressure;
     bool     tankPwm    = true;          // PID (pwm) vs hysteresis (on/off)
-    float    target     = 60.0f;         // physical target
+    float    target     = 60.0f;         // physical regulation target
+    float    pidKp      = 0.02f;         // PWM drive per unit of (target - value)
+    float    pidKi      = 0.0005f;       // integral gain
     float    lowThresh  = 40.0f;
     float    highThresh = 80.0f;
     float    safetyThresh = 100.0f;      // overpressure cutoff
@@ -259,7 +261,7 @@ public:
     void idle(uint32_t nowMs) override { regulate(nowMs); }
     void update(uint32_t nowMs) override { if (!extSensor_) sensor_.update(nowMs); regulate(nowMs); }
     bool ready() const override { return regulatedReady_ && fault_ == FaultCode::None; }
-    void resetFault() override { fault_ = FaultCode::None; filling_ = false; regulatedReady_ = false; }
+    void resetFault() override { fault_ = FaultCode::None; filling_ = false; regulatedReady_ = false; pidI_ = 0.0f; }
 private:
     AirSensor* activeSensor() { return extSensor_ ? extSensor_ : &sensor_; }
     void regulate(uint32_t nowMs) {
@@ -287,9 +289,17 @@ private:
             if (elapsed_u32(nowMs, fillStartMs_) > c_.refillTimeoutMs) {   // rearmed EVERY cycle
                 fault_ = FaultCode::PumpTimeout; filling_ = false; safeState(); return;
             }
-            if (p >= c_.highThresh) { filling_ = false; lastOffMs_ = nowMs; if (sink_) setPumps(n, 0.0f); return; }
-            float drive = c_.tankPwm ? clampv((c_.highThresh - p)/(c_.highThresh - c_.lowThresh), c_.min01, c_.max01)
-                                     : c_.max01;
+            if (p >= c_.highThresh) { filling_ = false; lastOffMs_ = nowMs; pidI_ = 0.0f; if (sink_) setPumps(n, 0.0f); return; }
+            // PWM: regulate toward `target` with a PI law (uses target, review
+            // #17). On/off: run at max within the low/high hysteresis band.
+            float drive;
+            if (c_.tankPwm) {
+                float err = c_.target - p;
+                pidI_ = clampv(pidI_ + err * c_.pidKi, -c_.max01, c_.max01);
+                drive = clampv(c_.pidKp * err + pidI_, c_.min01, c_.max01);
+            } else {
+                drive = c_.max01;
+            }
             setPumps(n, drive);
         } else if (sink_) {
             setPumps(n, 0.0f);
@@ -299,6 +309,7 @@ private:
     AirSensor sensor_; AirSensor* extSensor_ = nullptr;
     bool regulatedReady_ = false, filling_ = false;
     uint32_t fillStartMs_ = 0, lastOffMs_ = 0;
+    float pidI_ = 0.0f;
 };
 
 // ===========================================================================

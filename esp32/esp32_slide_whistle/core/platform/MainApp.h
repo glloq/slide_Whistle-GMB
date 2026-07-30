@@ -59,6 +59,7 @@ public:
         // 2. admin secret: persisted in NVS so it survives reboots and can be
         //    shown; generated only on first boot, never a fixed default (#5/#22).
         auth_.begin();
+        auth_.setRequireAuth(config_.network.requireAuth);   // honour the config field (review #33)
         loadOrCreateAdminToken();
 
         // 3. validate the whole config before energising anything

@@ -145,3 +145,29 @@ TEST(ledc_allocator_unique_channels) {
     a.reset();
     CHECK_EQ(a.allocate(), 0);
 }
+
+TEST(validate_required_pins_missing) {
+    // Review #24: an enabled stepper with unassigned STEP/DIR is an error.
+    RuntimeConfig c = defaultConfig(); c.instrumentCount = 1;
+    c.instruments[0].enabled = true;
+    c.instruments[0].motion.type = SlideDriveType::StepDir;
+    c.instruments[0].motion.stepper.stepPin = -1;   // unassigned mandatory pin
+    c.instruments[0].motion.stepper.dirPin = -1;
+    HardwareResourceValidator v; buildClaims(v, c);
+    CHECK(hasCode(v.validate(), "PIN_REQUIRED"));
+    // once assigned (a preset), no PIN_REQUIRED
+    applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+    HardwareResourceValidator v2; buildClaims(v2, c);
+    CHECK(!hasCode(v2.validate(), "PIN_REQUIRED"));
+}
+
+TEST(validate_angle_servo_claimed) {
+    // Review #25: an enabled angle servo consumes a pin + a LEDC channel.
+    RuntimeConfig c = defaultConfig(); c.instrumentCount = 1;
+    c.instruments[0].enabled = true;
+    applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+    c.instruments[0].air.angle.enabled = true;
+    c.instruments[0].air.angle.pin = c.instruments[0].motion.stepper.stepPin;  // clash on purpose
+    HardwareResourceValidator v; buildClaims(v, c);
+    CHECK(hasCode(v.validate(), "GPIO_CONFLICT"));   // angle pin now participates
+}

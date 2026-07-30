@@ -21,6 +21,7 @@
 #include "Types.h"
 #include "CommandQueue.h"   // CommandType
 #include <string>
+#include <map>
 #include <cstdio>
 
 namespace swc {
@@ -128,8 +129,22 @@ public:
     }
 
     // --- rate limiting -----------------------------------------------------
+    // Global bucket (kept for simple callers/tests).
     bool allowRequest(uint32_t nowMs, float cost = 1.0f) { return limiter_.allow(nowMs, cost); }
-    void configureRate(float capacity, float refillPerSec) { limiter_.configure(capacity, refillPerSec); }
+    void configureRate(float capacity, float refillPerSec) {
+        rateCap_ = capacity; rateRefill_ = refillPerSec;
+        limiter_.configure(capacity, refillPerSec);
+        clientLimiters_.clear();
+    }
+    // Per-client bucket so one noisy client can't starve the others (review #31).
+    bool allowRequestFor(const std::string& client, uint32_t nowMs, float cost = 1.0f) {
+        auto it = clientLimiters_.find(client);
+        if (it == clientLimiters_.end()) {
+            RateLimiter rl; rl.configure(rateCap_, rateRefill_);
+            it = clientLimiters_.emplace(client, rl).first;
+        }
+        return it->second.allow(nowMs, cost);
+    }
 
 private:
     struct Session { bool active = false; std::string token; uint32_t lastMs = 0; };
@@ -159,6 +174,8 @@ private:
     bool        originStrict_ = false;
     std::string allowedOrigin_;
     RateLimiter limiter_;
+    float       rateCap_ = 20, rateRefill_ = 5;
+    std::map<std::string, RateLimiter> clientLimiters_;
 };
 
 } // namespace swc

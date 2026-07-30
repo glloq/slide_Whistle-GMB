@@ -280,3 +280,24 @@ TEST(air_rearm_clears_subcomponent_fault) {
     a.setNow(100); a.startNote(r); a.update(101);   // usable again
     CHECK(s.gateOpen);
 }
+
+// Review #17: tank PWM regulation drives harder far from target than near it.
+TEST(pump_tank_pid_targets_setpoint) {
+    FakeAirSink s; AirConfig c;
+    c.source.type = AirSourceType::PumpsTank; c.source.requireSensor = true;
+    c.source.lowThresh = 40; c.source.highThresh = 80; c.source.safetyThresh = 200;
+    c.source.target = 70; c.source.tankPwm = true; c.source.pidKp = 0.02f; c.source.pidKi = 0.0f;
+    c.source.min01 = 0.0f; c.source.max01 = 1.0f; c.source.minOffMs = 0; c.source.refillTimeoutMs = 1000000;
+    c.sensor.type = AirSensorType::PressureAnalog;
+    c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
+    c.sensor.filterAlpha = 1.0f;   // no smoothing lag for the test
+    PumpTankSource p; p.begin(c, &s);
+    s.sensorRaw = 30;                          // far below target → strong drive, starts filling
+    for (uint32_t t = 1; t < 5; ++t) p.update(t);
+    float driveFar = s.src[0];
+    s.sensorRaw = 66;                          // near target, still filling (<high)
+    for (uint32_t t = 5; t < 10; ++t) p.update(t);
+    float driveNear = s.src[0];
+    CHECK(driveFar > driveNear);               // PI uses the setpoint
+    CHECK(driveNear > 0.0f);
+}
