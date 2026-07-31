@@ -125,7 +125,12 @@ public:
     void begin(const AirConfig& cfg, IAirSink* sink) override {
         c_ = cfg.sensor; sink_ = sink; filt_ = NAN; lastRaw_ = NAN;
         configured_ = (c_.type != AirSensorType::None);
-        present_ = configured_; lastGoodMs_ = 0; lastChangeMs_ = 0; haveTime_ = false;
+        // A configured sensor starts NOT present and NOT valid until the FIRST
+        // valid measurement arrives — otherwise its initial value (0) reads as
+        // "pressure too low" and the tank regulator starts the pumps before any
+        // real reading (review #4 §P0). fault() reports SensorMissing meanwhile,
+        // which keeps the pumps off until update() gets a good sample.
+        present_ = false; lastGoodMs_ = 0; lastChangeMs_ = 0; haveTime_ = false;
         stale_ = false; inRange_ = true; frozen_ = false;
     }
     void update(uint32_t nowMs) override {

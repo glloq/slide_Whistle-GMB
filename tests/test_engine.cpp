@@ -170,7 +170,8 @@ TEST(engine_testair_auto_timeout) {
     Command t{CommandType::TestAir}; t.instrument = 0; t.b = 100; t.i16 = 50;  // 50 ms
     q.push(t);
     uint32_t k = 0;
-    eng.tick(k, k * 1000); k++;             // dispatch → air opens
+    eng.tick(k, k * 1000); k++;             // dispatch → Prepare→WaitReady
+    eng.tick(k, k * 1000); k++;             // source ready → gate opens
     CHECK(r.sink.gateOpen);
     CHECK(eng.testAirActive());
     for (; k < 80; ++k) eng.tick(k, k * 1000);   // past 50 ms
@@ -238,15 +239,17 @@ TEST(engine_two_testair_sessions_independent) {
     Instrument* insts[] = {&r0.inst, &r1.inst};
     CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q);
     Command t0{CommandType::TestAir}; t0.instrument = 0; t0.i16 = 40; q.push(t0);
-    eng.tick(0, 0);
+    eng.tick(0, 0);                         // t0 Prepare→WaitReady
+    eng.tick(1, 1000);                      // t0 source ready → opens (hold from t=1)
     Command t1{CommandType::TestAir}; t1.instrument = 1; t1.i16 = 40; q.push(t1);
-    eng.tick(5, 5000);
+    eng.tick(2, 2000);                      // t1 Prepare→WaitReady
+    eng.tick(3, 3000);                      // t1 opens (hold from t=3)
     CHECK(r0.sink.gateOpen); CHECK(r1.sink.gateOpen);
-    // advance past instrument 0's timeout (started at t=0, dur 40) but before 1's
-    for (uint32_t k = 6; k <= 44; ++k) eng.tick(k, k * 1000);
+    // past instrument 0's hold (t=1 + 40) but before 1's (t=3 + 40)
+    for (uint32_t k = 4; k <= 42; ++k) eng.tick(k, k * 1000);
     CHECK(!r0.sink.gateOpen);               // #0 auto-closed on its own timer
     CHECK(r1.sink.gateOpen);                // #1 still running
-    for (uint32_t k = 45; k <= 60; ++k) eng.tick(k, k * 1000);
+    for (uint32_t k = 43; k <= 60; ++k) eng.tick(k, k * 1000);
     CHECK(!r1.sink.gateOpen);               // #1 auto-closed
 }
 
@@ -325,11 +328,12 @@ TEST(engine_direct_command_routes_by_stable_id) {
     Instrument* insts[] = {&a.inst, &b.inst};
     CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q);
     Command t{CommandType::TestAir}; t.instrument = 3; t.i16 = 50; q.push(t);
-    eng.tick(0, 0);
+    eng.tick(0, 0);                         // Prepare→WaitReady
+    eng.tick(1, 1000);                      // source ready → opens
     CHECK(a.sink.gateOpen);                 // routed to id 3 correctly
     CHECK(!b.sink.gateOpen);
-    // And the auto-stop timer is keyed by id 3 too — it closes on timeout.
-    for (uint32_t k = 1; k <= 60; ++k) eng.tick(k, k * 1000);
+    // And the FSM is keyed by id 3 too — it auto-closes after the hold.
+    for (uint32_t k = 2; k <= 70; ++k) eng.tick(k, k * 1000);
     CHECK(!a.sink.gateOpen);
 }
 
@@ -410,4 +414,52 @@ TEST(engine_safe_restart_reaches_safe_state) {
     CHECK(eng.safeRestartDone());                 // RT reached safe state
     CHECK(!a.sink.gateOpen);                       // air closed
     CHECK(eng.lastExec().result == ExecResult::Accepted);
+}
+
+// Controllable air stub to exercise the TestAir state machine directly.
+struct StubAir : IAirSystem {
+    bool ready_ = false; int started_ = 0; bool gate_ = false; FaultCode fault_ = FaultCode::None;
+    bool begin(const AirConfig&, IAirSink*) override { return true; }
+    void update(uint32_t) override {}
+    void prepareNote(const AirNoteRequest&) override {}
+    void startNote(const AirNoteRequest&) override { started_++; gate_ = true; }
+    void updateExpression(const AirExpression&) override {}
+    void stopNote() override { gate_ = false; }
+    void emergencyStop() override { gate_ = false; }
+    void rearm() override {}
+    void applyDynamic(const AirConfig&) override {}
+    bool isReady() const override { return ready_; }
+    AirState state() const override { return gate_ ? AirState::Playing : AirState::Idle; }
+    FaultCode fault() const override { return fault_; }
+};
+
+// Review #4 §P0: TestAir opens the gate ONLY after the source reports ready —
+// never a blind immediate open.
+TEST(engine_testair_waits_for_source_ready) {
+    DisabledSlideActuator act; SlideMotionConfig mc; mc.type = SlideDriveType::Disabled; act.begin(mc);
+    StubAir air; NoteMap map; Instrument in; in.begin(0, &act, &air, &map, icfg(1, 48, 84));
+    Instrument* insts[] = {&in};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    Command t{CommandType::TestAir}; t.instrument = 0; t.i16 = 1000; q.push(t);
+    for (int k = 0; k < 5; ++k) eng.tick(k, k * 1000);
+    CHECK_EQ(air.started_, 0);              // source not ready → gate never opened
+    CHECK(!air.gate_);
+    air.ready_ = true;
+    eng.tick(6, 6000);
+    CHECK_EQ(air.started_, 1);              // now it opens
+    CHECK(air.gate_);
+}
+
+// Review #4 §P0: TestAir on a faulted air system is Rejected (not falsely
+// Accepted while the request is ignored).
+TEST(engine_testair_rejected_when_air_faulted) {
+    DisabledSlideActuator act; SlideMotionConfig mc; mc.type = SlideDriveType::Disabled; act.begin(mc);
+    StubAir air; air.fault_ = FaultCode::Overpressure;
+    NoteMap map; Instrument in; in.begin(0, &act, &air, &map, icfg(1, 48, 84));
+    Instrument* insts[] = {&in};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    Command t{CommandType::TestAir}; t.instrument = 0; t.seq = 5; q.push(t);
+    eng.tick(0, 0);
+    CHECK(eng.lastExec().result == ExecResult::Rejected);
+    CHECK_EQ(air.started_, 0);
 }

@@ -114,6 +114,25 @@ TEST(pump_tank_fills_and_stops) {
     CHECK(p.ready());
 }
 
+// Review #4 §P0: the tank must not start pumping on the sensor's initial value
+// (0) — it waits for the FIRST valid measurement (present=false until then).
+TEST(pump_tank_waits_for_first_valid_measurement) {
+    FakeAirSink s; AirConfig c;
+    c.source.type = AirSourceType::PumpsTank; c.source.requireSensor = true;
+    c.source.lowThresh = 40; c.source.highThresh = 80; c.source.safetyThresh = 200;
+    c.source.tankPwm = false; c.source.minOffMs = 0; c.source.refillTimeoutMs = 100000;
+    c.sensor.type = AirSensorType::PressureAnalog;
+    c.sensor.rawMin = 0; c.sensor.rawMax = 100; c.sensor.physMin = 0; c.sensor.physMax = 100; c.sensor.physHi = 200;
+    PumpTankSource p; p.begin(c, &s);
+    s.sensorRaw = NAN;                     // no valid reading yet
+    for (uint32_t t = 1; t <= 5; ++t) p.update(t);
+    CHECK_NEAR(s.src[0], 0.0f, 1e-3);      // pumps OFF — never regulate on the initial 0
+    CHECK(!p.ready());
+    s.sensorRaw = 20;                      // first valid measurement, below low
+    for (uint32_t t = 6; t <= 12; ++t) p.update(t);
+    CHECK(s.src[0] > 0.0f);                // now it may fill
+}
+
 TEST(pump_tank_overpressure) {
     FakeAirSink s; AirConfig c;
     c.source.type = AirSourceType::PumpsTank; c.source.requireSensor = true;
