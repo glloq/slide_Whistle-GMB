@@ -17,6 +17,7 @@
 #include "Instrument.h"
 #include "CommandQueue.h"
 #include "RuntimeConfig.h"
+#include <atomic>
 
 namespace swc {
 
@@ -93,7 +94,9 @@ public:
     // Set once the RT task has brought everything to a safe state in response to
     // a SafeRestart command; the (network) task polls this before rebooting so
     // the reboot is never issued while the RT task still owns the actuators.
-    bool safeRestartDone() const { return safeRestartDone_; }
+    // Atomic because it is written on the RT core and read on the network core
+    // (review #5 §P0.5).
+    bool safeRestartDone() const { return safeRestartDone_.load(std::memory_order_acquire); }
 
 private:
     void ack(const Command& c, ExecResult r) { lastAck_ = ExecAck{ c.seq, c.type, r }; }
@@ -201,8 +204,10 @@ private:
                 // The RT task (sole owner of the actuators) brings everything to
                 // a safe state; the network task waits for safeRestartDone() and
                 // only then reboots — no cross-core actuator access (review #4 §P0).
+                // Refuse any further actuation once a restart is in flight (§P0.5).
+                blocked_ = true;
                 panicAll(nowMs);
-                safeRestartDone_ = true;
+                safeRestartDone_.store(true, std::memory_order_release);
                 ack(c, ExecResult::Accepted);
                 break;
             case CommandType::Home: {
@@ -281,7 +286,7 @@ private:
     TestAirState       testAir_[MAX_INSTRUMENTS];                   // per-instrument TestAir FSM
     ExecAck            lastAck_{};                                  // last direct-command ack
     bool               blocked_ = false;                           // global-fault command gate
-    bool               safeRestartDone_ = false;                   // RT reached safe state for reboot
+    std::atomic<bool>  safeRestartDone_{false};                    // RT reached safe state for reboot
 };
 
 } // namespace swc

@@ -49,7 +49,10 @@ struct Command {
 };
 
 inline bool isPriority(CommandType t) {
-    return t == CommandType::NoteOff || t == CommandType::Panic;
+    // SafeRestart is a safety action too — it must never be dropped by a full
+    // queue and must jump ahead of a backlog (review #5 §P0.5).
+    return t == CommandType::NoteOff || t == CommandType::Panic ||
+           t == CommandType::SafeRestart;
 }
 
 template <uint16_t N>

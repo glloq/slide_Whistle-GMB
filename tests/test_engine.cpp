@@ -414,6 +414,19 @@ TEST(engine_safe_restart_reaches_safe_state) {
     CHECK(eng.safeRestartDone());                 // RT reached safe state
     CHECK(!a.sink.gateOpen);                       // air closed
     CHECK(eng.lastExec().result == ExecResult::Accepted);
+    CHECK(eng.commandsBlocked());                 // no further actuation once restarting
+}
+
+// Review #5 §P0.5: SafeRestart is a priority command — a full queue admits it
+// (evicting a non-priority command) and it jumps to the front.
+TEST(queue_saferestart_is_priority) {
+    CommandQueue<2> q;
+    Command a{CommandType::NoteOn}; a.a = 60; q.push(a);
+    Command b{CommandType::NoteOn}; b.a = 61; q.push(b);   // queue full of non-priority
+    Command sr{}; sr.type = CommandType::SafeRestart;
+    CHECK(q.push(sr));                            // admitted despite full
+    Command out; CHECK(q.pop(out));
+    CHECK(out.type == CommandType::SafeRestart);  // jumped ahead of the notes
 }
 
 // Controllable air stub to exercise the TestAir state machine directly.

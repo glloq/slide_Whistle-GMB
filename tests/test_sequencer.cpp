@@ -178,6 +178,33 @@ TEST(seq_legato_release_fallback_not_silent) {
     CHECK_EQ(r.seq.activeNoteOr(-1), 60);
 }
 
+// Review #5 §P0.3/§9: a note whose mapped position is outside the soft-limits
+// is refused by the actuator; the sequencer must NOT open air and must abandon
+// the note (the actuator also latches Fault).
+TEST(seq_refuses_note_beyond_soft_limits) {
+    FakeMotionSink m;
+    StepDirSlideActuator act(&m);
+    SlideMotionConfig mc; mc.type = SlideDriveType::StepDir; mc.travelMm = 100;
+    mc.softMinMm = 0; mc.softMaxMm = 100; mc.maxSpeedMmS = 200; mc.accelMmS2 = 2000;
+    mc.stepper.stepsPerMm = 80; mc.stepper.homingFastMmS = 200;
+    mc.stepper.phaseTimeoutMs = 5000; mc.stepper.homeBackoffMm = 2;
+    act.begin(mc);
+    act.requestHoming();
+    for (int k = 0; k < 3000 && !act.isHomed(); ++k) act.update(k * 1000);
+    CHECK(act.isHomed());
+    AirSystem air; FakeAirSink2 sink; air.begin(simpleAir(), &sink);
+    NoteMap map; map.setTravelMm(100);
+    for (int n = 48; n <= 84; ++n) map.setPoint((uint8_t)n, (n - 48) * 2.0f, 60);  // in range
+    map.setPoint(72, 150.0f, 60);                                                  // beyond soft max
+    NoteSequencer seq; seq.begin(&act, &air, &map, {});
+    uint32_t t = 0;
+    seq.noteOn(72, 100, t);
+    for (int k = 0; k < 6; ++k) { t++; act.update(t * 1000); air.setNow(t); air.update(t); seq.update(t, t * 1000); }
+    CHECK(!sink.gateOpen);                     // air never opened for the bad target
+    CHECK(seq.phase() != SeqPhase::Playing);
+    CHECK(act.state() == MotionState::Fault);  // actuator latched the fault
+}
+
 TEST(seq_legato_always_close_cuts_air) {
     Rig r; SequencerConfig cfg; cfg.legato = LegatoPolicy::AlwaysClose; r.begin(cfg);
     uint32_t t = 0;

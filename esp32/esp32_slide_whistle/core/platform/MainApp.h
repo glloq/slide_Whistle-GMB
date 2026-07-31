@@ -96,13 +96,16 @@ public:
     void loop() {
         ws_.cleanupClients();
         router_.servicePending();   // retry a queued-full dynamic apply (#4 §P1)
-        // Restart is owned by the RT task: enqueue a SafeRestart command once,
-        // then wait for the RT task to reach a safe state before rebooting — the
+        // Restart is owned by the RT task: enqueue a SafeRestart command, then
+        // wait for the RT task to reach a safe state before rebooting — the
         // network task never touches the actuators directly (review #4 §P0).
+        // Only latch "enqueued" when push() actually succeeds; retry otherwise so
+        // a momentarily-full queue can't strand the restart forever. SafeRestart
+        // is a priority command, so it is never dropped for lack of space
+        // (review #5 §P0.5).
         if (router_.restartRequested() && !safeRestartEnqueued_) {
             Command c{}; c.type = CommandType::SafeRestart;
-            queue_.push(c);
-            safeRestartEnqueued_ = true;
+            if (queue_.push(c)) safeRestartEnqueued_ = true;
         }
         if (safeRestartEnqueued_ && engine_.safeRestartDone()) {
             delay(200);          // let the safe-state writes settle / clients flush
@@ -274,6 +277,7 @@ private:
             engine_.tick(ms, us, /*budget=*/32);
             // Lifecycle: home before declaring READY (#10); a homing fault must
             // move to Fault, never hang in Homing (review #12).
+            SysState prev = state_;
             if (state_ == SysState::NeedsHoming) state_ = SysState::Homing;
             else if (state_ == SysState::Homing) {
                 // A homing OR air fault must move to Fault, never hang (#12, §7.2).
@@ -291,6 +295,11 @@ private:
                 // in the RT engine clears the faults and requests homing.
                 if (!anyActuatorFault() && !anyAirFault()) state_ = SysState::NeedsHoming;
             }
+            // Entering Fault is a GLOBAL physical stop, not just a command gate:
+            // panicAll() closes every gate, zeroes the sources and stops the
+            // motors so an already-playing note cannot continue (review #5 §P0.3).
+            if (state_ == SysState::Fault && prev != SysState::Fault)
+                engine_.panicAll(ms);
             // Keep the command gate consistent with the announced state: in Fault
             // the engine refuses actuation commands (review #4 §P0).
             engine_.setCommandsBlocked(state_ == SysState::Fault);

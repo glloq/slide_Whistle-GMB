@@ -53,7 +53,14 @@ public:
         if (state_ == MotionState::EStopped || state_ == MotionState::Fault) return false;
         if (!homed_ && cfg_.type == SlideDriveType::StepDir) return false;
         if (positionMm < cfg_.softMinMm - 1e-3f || positionMm > cfg_.softMaxMm + 1e-3f) {
+            // An out-of-range target is a real fault, not a soft no-op: latch
+            // Fault, stop, and de-energise the driver so update() halts and
+            // isReadyForAir() reports not-ready (review #5 §P0.3). The caller
+            // (sequencer) also closes the air on the false return.
             fault_ = FaultCode::TargetOutOfRange;
+            state_ = MotionState::Fault;
+            vel_ = 0.0f; target_ = pos_;
+            if (sink_) sink_->enableDriver(false);
             return false;
         }
         target_ = clampv(positionMm, cfg_.softMinMm, cfg_.softMaxMm);

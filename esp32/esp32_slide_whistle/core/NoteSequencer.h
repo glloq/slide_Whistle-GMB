@@ -230,7 +230,16 @@ private:
                 if (phase_ == SeqPhase::Playing && !hold) air_->stopNote();   // #2 close between notes
                 air_->prepareNote(airRequestFor(uint8_t(sel)));
             }
-            applyPosition(nowMs);
+            // If the actuator REFUSES the move (out of soft-limits, not homed,
+            // faulted), never open air — close it and abandon this note, even
+            // under a legato-hold policy (review #5 §P0.3 / §9).
+            if (!applyPosition(nowMs)) {
+                if (air_) air_->stopNote();
+                int idx = find(uint8_t(sel));
+                if (idx >= 0) removeAt(idx);
+                active_ = -1;
+                continue;
+            }
             if (air_ && hold && phase_ == SeqPhase::Playing) {
                 // glissando / legato-hold: air stays open, just move — stay Playing
                 noteOnMs_ = nowMs;
@@ -275,11 +284,14 @@ private:
         return n;
     }
 
-    void applyPosition(uint32_t nowMs) {
-        if (active_ < 0 || !act_ || !map_) return;
+    // Returns true if a target position was accepted by the actuator. A false
+    // means either no mapping or the actuator refused the move (soft-limit /
+    // fault / not homed) — callers on the trigger path must then NOT open air.
+    bool applyPosition(uint32_t nowMs) {
+        if (active_ < 0 || !act_ || !map_) return false;
         float mm;
-        if (map_->positionForNote(fractionalActiveNote(nowMs), mm))
-            act_->requestPositionMm(mm);
+        if (!map_->positionForNote(fractionalActiveNote(nowMs), mm)) return false;
+        return act_->requestPositionMm(mm);
     }
 
     AirNoteRequest airRequestFor(uint8_t note) const {
