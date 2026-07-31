@@ -72,10 +72,11 @@ public:
             cancelToStackOrRelease(nowMs);
             return;
         }
-        // min-note duration: defer release if the note was too short.
+        // min-note duration: defer release if the note was too short. The wait
+        // is measured from noteOnMs_ in update() (rollover-safe), so no absolute
+        // release timestamp is stored.
         if (cfg_.minNoteMs && elapsed_u32(nowMs, noteOnMs_) < cfg_.minNoteMs) {
             pendingRelease_ = true;
-            releaseAtMs_ = noteOnMs_ + cfg_.minNoteMs;
             return;
         }
         cancelToStackOrRelease(nowMs);
@@ -143,11 +144,22 @@ public:
                 cancelToStackOrRelease(nowMs);
             }
         }
+        // Rollover-safe: measure elapsed time from the note's onset with
+        // elapsed_u32 (modular subtraction) rather than an absolute
+        // `now >= releaseAt` comparison that breaks across the millis() wrap
+        // (review #5 §14).
         if (pendingRelease_ && !sustainHeld_ && cfg_.minNoteMs &&
-            elapsed_u32(nowMs, releaseAtMs_) < 0x80000000u && nowMs >= releaseAtMs_) {
+            elapsed_u32(nowMs, noteOnMs_) >= cfg_.minNoteMs) {
             pendingRelease_ = false;
             cancelToStackOrRelease(nowMs);
         }
+        // Complete the release: once the air has actually closed (gate + source
+        // idle) with no note pending, settle to Idle instead of lingering in
+        // Releasing forever, so telemetry and future decisions are accurate
+        // (review #5 §15).
+        if (phase_ == SeqPhase::Releasing && active_ < 0 && !pendingRelease_ &&
+            (!air_ || air_->state() == AirState::Idle))
+            phase_ = SeqPhase::Idle;
         (void)nowUs;
     }
 
@@ -344,7 +356,7 @@ private:
     SeqPhase phase_ = SeqPhase::Idle;
 
     bool     sustainHeld_ = false, pendingRelease_ = false;
-    uint32_t noteOnMs_ = 0, releaseAtMs_ = 0, positionStartMs_ = 0;
+    uint32_t noteOnMs_ = 0, positionStartMs_ = 0;
     float    pitchBend_ = 0.0f, vibratoDepth_ = 0.0f;
 };
 
