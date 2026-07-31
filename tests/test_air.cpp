@@ -243,6 +243,21 @@ TEST(airsystem_valve_timeout_safety) {
     CHECK(a.state() == AirState::Fault);
 }
 
+// Review #6 §10: a live applyDynamic() change to valveOpenTimeoutMs must reach
+// the safety controller, not just cfg_. Start with a long timeout, shorten it
+// live, and confirm the shorter timeout now trips the valve safety.
+TEST(airsystem_valve_timeout_applied_dynamically) {
+    FakeAirSink s; auto c = solenoidFlowPreset(); c.valveOpenTimeoutMs = 10000;
+    AirSystem a; a.begin(c, &s);
+    auto c2 = c; c2.valveOpenTimeoutMs = 100;   // shorten the timeout live
+    a.applyDynamic(c2);
+    AirNoteRequest r; r.velocity = 100;
+    a.setNow(0); a.startNote(r); CHECK(s.gateOpen);
+    for (uint32_t t = 1; t <= 150; ++t) a.update(t);
+    CHECK(a.fault() == FaultCode::ValveTimeout);   // new (short) timeout honored
+    CHECK(a.state() == AirState::Fault);
+}
+
 // Review #14: a perfectly stable sensor reading is NOT stale.
 TEST(sensor_stable_value_not_stale) {
     FakeAirSink s; s.sensorRaw = 50;

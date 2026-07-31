@@ -35,6 +35,10 @@ public:
         return tripped_;
     }
     void reset() { tripped_ = false; fault_ = FaultCode::None; gateOpen_ = false; }
+    // Live update of the tunable safety timing without disturbing the current
+    // trip/gate state (the hardware selection stays begin()-only). Without this,
+    // a dynamic valveOpenTimeoutMs change was silently ignored until reboot (#10).
+    void applyDynamic(const AirConfig& cfg) { c_.valveOpenTimeoutMs = cfg.valveOpenTimeoutMs; }
     bool tripped() const { return tripped_; }
     FaultCode fault() const { return fault_; }
 private:
@@ -156,6 +160,7 @@ public:
         flow_impl_.applyDynamic(c.flow);
         cfg_.valveOpenTimeoutMs = c.valveOpenTimeoutMs;
         cfg_.minNoteMs = c.minNoteMs;
+        safety_.applyDynamic(cfg_);   // keep the safety controller's copy in sync (#10)
     }
 
     bool isReady() const override {
