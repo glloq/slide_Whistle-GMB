@@ -77,7 +77,11 @@ public:
     void emergencyStop() override {
         vel_ = 0.0f; target_ = pos_;
         state_ = MotionState::EStopped;
-        fault_ = FaultCode::EmergencyStop;
+        // Preserve the ROOT cause: an e-stop triggered BY an existing fault
+        // (Overpressure, HomingTimeout, TargetOutOfRange, …) must not overwrite
+        // it — the EStopped state already records the safety action, and fault()
+        // should still report why (review #6 §19).
+        if (fault_ == FaultCode::None) fault_ = FaultCode::EmergencyStop;
         if (sink_) sink_->enableDriver(false);
     }
 

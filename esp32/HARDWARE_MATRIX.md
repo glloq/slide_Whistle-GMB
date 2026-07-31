@@ -293,6 +293,40 @@ fields, HTTP size-check-before-buffer + WS fragmentation, a formally-safe
 snapshot, and the Phase-4/5 backends + UI (PCA9685/ToF/digital sensors, MIDI
 transports, OTA, full wizard/calibration screens, config-driven keyboard).
 
+## Sixth review response (safety, config, UI)
+
+Review #6 re-raised the prior P0/P1 list. Several items were already fixed in
+earlier batches; the software-provable remainder was closed here, each with a
+test that fails without the change:
+
+| Item | Status |
+|------|--------|
+| §6 Ready with zero built instruments | FIXED·TESTED (runnable requires instCount>0 && ==enabledCount; else SafeConfigOnly) |
+| §7 Commands only blocked in Fault; Home didn't enter Homing | FIXED·TESTED (setCommandsBlocked when not Ready; rtTask re-enters Homing when not allHomed) |
+| §10 Live valveOpenTimeoutMs ignored by safety | FIXED·TESTED (AirSafetyController::applyDynamic refreshes the tunable timing) |
+| §12 Diagnostics (Home/Jog/Test*) not exclusive | FIXED·TESTED (instrumentBusy() → ack Rejected while a note/testAir is active) |
+| §13 Transpose clamped → stuck notes | FIXED·TESTED (transposedOrDrop drops out-of-range; releases all on live transpose change) |
+| §14 Permissive JSON enums/counts | FIXED·TESTED (checkedInt range-checks every enum; instrumentCount/board rejected, not clamped) |
+| §17 pendingRelease global, not per-note | FIXED·TESTED (cleared on each NoteOn so a deferred release can't outlive its note) |
+| §18 FanSource stop delay not rollover-safe | FIXED·TESTED (idleStartMs_ + elapsed_u32 instead of absolute stopAtMs_) |
+| §19 Root fault overwritten by EmergencyStop | FIXED·TESTED (StepDir/AirEngine keep the first non-None fault) |
+| UI: wizard MIDI source not exclusive | FIXED·TESTED (applyWizardPatch clears all transports before enabling the chosen one) |
+| §2 endstopMax not configurable | FIXED·TESTED (endstopMin/endstopMax both round-trip in ConfigCodec) |
+
+Still open from review #6 — the genuine hardware/integration blockers that make
+this **firmware beta / hardware alpha** and cannot be honestly closed without a
+bench: §1 RMT/GPTimer stepper with an authoritative executed-step counter and
+air-gating on the executed position; §2 continuous dual-endstop monitoring
+*during play* (config is done, runtime supervision is not); §4 PWM/source
+polarity propagation (SolenoidPwm/fans/pumps still assume active-high); §5
+propagating sink `attach()` failures into the startup validator; §8 a real
+`watchdogMs` producer-timeout with per-source note ownership; §9 a genuine
+LittleFS recovery UI page; §11 versioned/generation-tagged atomic dynamic
+config; §15 HTTP size-check-before-buffer + WS fragmentation handling; §16 the
+Origin allow-list on the WebSocket handshake (the HTTP POST path is already
+gated); plus the Phase-4/5 backends and UI (PCA9685/ToF/digital sensors, MIDI
+transports, OTA, full wizard/calibration screens, config-driven keyboard).
+
 ## How to run the software tests
 
 ```sh

@@ -105,11 +105,11 @@ public:
 private:
     void ack(const Command& c, ExecResult r) { lastAck_ = ExecAck{ c.seq, c.type, r }; }
 
-    // Apply the global transpose, clamped to a valid MIDI note.
-    uint8_t transposed(uint8_t note) const {
+    // Apply the global transpose; return -1 when the result falls outside the
+    // valid MIDI range so the caller drops the note instead of clamping it.
+    int transposedOrDrop(uint8_t note) const {
         int n = int(note) + transpose_;
-        if (n < 0) n = 0; else if (n > 127) n = 127;
-        return uint8_t(n);
+        return (n < 0 || n > 127) ? -1 : n;
     }
 
     // Non-blocking TestAir state machine, one per instrument.
@@ -174,6 +174,17 @@ private:
         return nullptr;
     }
 
+    // Diagnostics (Home/Jog/TestActuator/TestAir) are EXCLUSIVE: they must not
+    // disturb an active musical note or run concurrently with another test on
+    // the same instrument (review #6 §12). A busy target rejects the command.
+    bool instrumentBusy(Instrument* in) {
+        if (!in) return false;
+        if (in->sequencer().activeNoteOr(-1) >= 0 || in->sequencer().heldCount() > 0) return true;
+        uint8_t slot = in->id();
+        if (slot < MAX_INSTRUMENTS && testAir_[slot].phase != TestAirPhase::Idle) return true;
+        return false;
+    }
+
     void dispatch(const Command& c, uint32_t nowMs) {
         // Global fault: refuse actuation, but let safety/recovery through so the
         // system can still be stopped and re-armed (review #4 §P0).
@@ -185,17 +196,21 @@ private:
         }
         switch (c.type) {
             case CommandType::NoteOn: {
-                uint8_t note = transposed(c.a);
+                // A note transposed out of 0..127 is DROPPED, not clamped — a
+                // clamp would merge several source notes onto 0/127 (#6 §13).
+                int note = transposedOrDrop(c.a);
+                if (note < 0) break;
                 for (uint8_t i = 0; i < count_; ++i)
-                    if (inst_[i] && inst_[i]->acceptsChannel(c.channel) && inst_[i]->acceptsNote(note))
-                        inst_[i]->noteOn(note, c.b, nowMs);
+                    if (inst_[i] && inst_[i]->acceptsChannel(c.channel) && inst_[i]->acceptsNote(uint8_t(note)))
+                        inst_[i]->noteOn(uint8_t(note), c.b, nowMs);
                 break;
             }
             case CommandType::NoteOff: {
-                uint8_t note = transposed(c.a);
+                int note = transposedOrDrop(c.a);
+                if (note < 0) break;
                 for (uint8_t i = 0; i < count_; ++i)
                     if (inst_[i] && inst_[i]->acceptsChannel(c.channel))
-                        inst_[i]->noteOff(note, nowMs);
+                        inst_[i]->noteOff(uint8_t(note), nowMs);
                 break;
             }
             case CommandType::ControlChange:
@@ -230,6 +245,7 @@ private:
                 // compact array index — otherwise a "home flute 2" reaches the
                 // wrong physical flute once disabled ones are compacted (#3 §6).
                 Instrument* in = byId(c.instrument);
+                if (in && instrumentBusy(in)) { ack(c, ExecResult::Rejected); break; }
                 if (in && in->actuator()) { in->actuator()->clearFault(); in->actuator()->requestHoming(); ack(c, ExecResult::Accepted); }
                 else ack(c, ExecResult::Rejected);
                 break;
@@ -253,6 +269,7 @@ private:
                 // move refused for soft-limit/not-homed/fault must NOT ack
                 // Accepted (review #5 §9).
                 Instrument* in = byId(c.instrument);
+                if (in && instrumentBusy(in)) { ack(c, ExecResult::Rejected); break; }
                 if (in && in->actuator()) {
                     bool ok = in->actuator()->requestPositionMm(in->actuator()->currentPositionMm() + float(c.i16));
                     ack(c, ok ? ExecResult::Accepted : ExecResult::Rejected);
@@ -262,6 +279,7 @@ private:
             case CommandType::TestActuator: {
                 // absolute test position (mm) in `a`; single-instrument only (#13)
                 Instrument* in = byId(c.instrument);
+                if (in && instrumentBusy(in)) { ack(c, ExecResult::Rejected); break; }
                 if (in && in->actuator()) {
                     bool ok = in->actuator()->requestPositionMm(float(c.a));
                     ack(c, ok ? ExecResult::Accepted : ExecResult::Rejected);
@@ -271,9 +289,11 @@ private:
             case CommandType::TestAir: {
                 // Start the non-blocking test only if the air system exists AND
                 // is not faulted/e-stopped — otherwise the request would be
-                // ignored yet reported Accepted (review #4 §P0).
+                // ignored yet reported Accepted (review #4 §P0). Diagnostics are
+                // exclusive: a busy instrument (note active) rejects it (#6 §12).
                 Instrument* in = byId(c.instrument);
                 uint8_t slot = in ? in->id() : 0xFF;
+                if (in && instrumentBusy(in)) { ack(c, ExecResult::Rejected); break; }
                 if (in && in->air() && in->air()->fault() == FaultCode::None && slot < MAX_INSTRUMENTS) {
                     TestAirState& ts = testAir_[slot];
                     ts.req = AirNoteRequest{}; ts.req.velocity = c.b ? c.b : 100;
@@ -290,6 +310,12 @@ private:
                 // so the API's "applied" claim is truthful (correction #17).
                 // Config is indexed by the instrument's stable id().
                 if (live_) {
+                    // A transpose change would otherwise leave notes whose ON was
+                    // transposed by the old amount unmatchable by their OFF (a
+                    // stuck note) — release everything first (#6 §13).
+                    if (live_->midi.transpose != transpose_)
+                        for (uint8_t i = 0; i < count_; ++i)
+                            if (inst_[i]) inst_[i]->allNotesOff(nowMs);
                     transpose_ = live_->midi.transpose;   // global transpose is dynamic (#5 §12)
                     for (uint8_t i = 0; i < count_; ++i)
                         if (inst_[i] && inst_[i]->id() < live_->instrumentCount)

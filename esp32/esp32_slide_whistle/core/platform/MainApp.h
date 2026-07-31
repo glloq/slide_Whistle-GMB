@@ -80,8 +80,17 @@ public:
         if (fsRecovery_) cfgOk = false;
 
         // 4. build ONLY on a valid config; invalid → serve config UI only (#8)
-        if (cfgOk) { state_ = SysState::Initializing; buildInstruments(); }
-        else       { state_ = SysState::SafeConfigOnly; instCount_ = 0; }
+        uint8_t enabledCount = 0;
+        for (uint8_t i = 0; i < config_.instrumentCount && i < MAX_INSTRUMENTS; ++i)
+            if (config_.instruments[i].enabled) ++enabledCount;
+        if (cfgOk) buildInstruments();
+        else       instCount_ = 0;
+        // Ready requires at least one active instrument AND that EVERY enabled
+        // instrument actually built — a config of only disabled instruments, or a
+        // partial build failure, must stay SafeConfigOnly, never reach Ready
+        // (review #6 §6/§5).
+        bool runnable = cfgOk && instCount_ > 0 && instCount_ == enabledCount;
+        state_ = runnable ? SysState::Initializing : SysState::SafeConfigOnly;
 
         engine_.begin(instPtrs_, instCount_, &queue_);
         engine_.setLiveConfig(&config_);    // so ApplyDynamicConfig actually applies (#5)
@@ -92,8 +101,9 @@ public:
         startWebServer();
         printCredentials();                 // Serial: AP password + admin token (#5)
 
-        // 5. valid config → home before declaring READY (#10)
-        if (cfgOk) { requestHomingAll(); state_ = SysState::NeedsHoming; }
+        // 5. runnable config → home before declaring READY (#10). If not
+        // runnable we stay SafeConfigOnly (no actuators) — never home nothing.
+        if (state_ == SysState::Initializing) { requestHomingAll(); state_ = SysState::NeedsHoming; }
 
         xTaskCreatePinnedToCore(rtTaskThunk, "rt",  16384, this, 5, nullptr, 1);
     }
@@ -295,6 +305,9 @@ private:
                 // A fault developing while playing (endstop trip, air overpressure,
                 // sensor lost) drops the system out of Ready (#3 §7.2).
                 if (anyActuatorFault() || anyAirFault()) state_ = SysState::Fault;
+                // A Home command issued from Ready sets an actuator back to
+                // Homing — the lifecycle must follow it out of Ready (#6 §7).
+                else if (!allHomed()) state_ = SysState::Homing;
             }
             else if (state_ == SysState::Fault) {
                 // Recover once a Rearm command has cleared every latched fault:
@@ -307,9 +320,11 @@ private:
             // motors so an already-playing note cannot continue (review #5 §P0.3).
             if (state_ == SysState::Fault && prev != SysState::Fault)
                 engine_.panicAll(ms);
-            // Keep the command gate consistent with the announced state: in Fault
-            // the engine refuses actuation commands (review #4 §P0).
-            engine_.setCommandsBlocked(state_ == SysState::Fault);
+            // Actuation is allowed ONLY in Ready: block NoteOn/CC/Jog/Test during
+            // Boot/Initializing/NeedsHoming/Homing/SafeConfigOnly/Fault so e.g. a
+            // TestAir can't run mid-homing (review #6 §7). Safety/recovery
+            // commands (Panic/NoteOff/Home/Rearm) bypass the gate regardless.
+            engine_.setCommandsBlocked(state_ != SysState::Ready);
             publishSnapshot();                        // lock-free telemetry (#37)
             vTaskDelayUntil(&last, period);            // deterministic cadence
         }

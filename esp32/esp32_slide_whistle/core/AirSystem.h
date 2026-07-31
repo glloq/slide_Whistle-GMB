@@ -214,17 +214,20 @@ public:
         float lvl = lerp(c_.min01, c_.max01, r.velocity / 127.0f);
         if (sink_) sink_->setSourceLevel(0, lvl);
     }
-    void idle(uint32_t nowMs) override { stopAtMs_ = nowMs + c_.stopDelayMs; idling_ = true; }
+    void idle(uint32_t nowMs) override { idleStartMs_ = nowMs; idling_ = true; }
     void update(uint32_t nowMs) override {
         if (running_ && !ready_ && elapsed_u32(nowMs, preparedMs_) >= c_.spinUpMs) ready_ = true;
-        if (idling_ && nowMs >= stopAtMs_) {
+        // Rollover-safe: measure the stop delay with elapsed_u32 from the idle
+        // start rather than an absolute `now >= stopAt` that breaks across the
+        // millis() wrap (review #6 §18).
+        if (idling_ && elapsed_u32(nowMs, idleStartMs_) >= c_.stopDelayMs) {
             if (sink_) sink_->setSourceLevel(0, c_.idle01);
             idling_ = false; running_ = c_.idle01 > 0.0f; ready_ = running_;
         }
     }
     bool ready() const override { return ready_; }
 private:
-    uint32_t preparedMs_ = 0, stopAtMs_ = 0;
+    uint32_t preparedMs_ = 0, idleStartMs_ = 0;
     bool running_ = false, idling_ = false, ready_ = false;
 };
 

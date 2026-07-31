@@ -192,6 +192,23 @@ TEST(emergency_stop_disables_and_blocks) {
     CHECK(!act.requestPositionMm(10.0f));    // no motion after e-stop
 }
 
+// Review #6 §19: an e-stop triggered by an existing fault must preserve the root
+// cause in fault(), not overwrite it with EmergencyStop.
+TEST(estop_preserves_root_fault) {
+    FakeSink sink; sink.endstopAtMm = 0.0f;
+    StepDirSlideActuator act(&sink);
+    act.begin(stepperCfg()); act.requestHoming(); pump(act, 0, 3000);
+    CHECK(!act.requestPositionMm(150.0f));        // out of range → TargetOutOfRange
+    CHECK(act.fault() == FaultCode::TargetOutOfRange);
+    act.emergencyStop();
+    CHECK(act.state() == MotionState::EStopped);
+    CHECK(act.fault() == FaultCode::TargetOutOfRange);   // root cause kept
+    // A clean actuator e-stopped still reports EmergencyStop.
+    StepDirSlideActuator act2(&sink); act2.begin(stepperCfg());
+    act2.emergencyStop();
+    CHECK(act2.fault() == FaultCode::EmergencyStop);
+}
+
 TEST(disabled_actuator_always_ready) {
     DisabledSlideActuator act;
     SlideMotionConfig c; c.type = SlideDriveType::Disabled;

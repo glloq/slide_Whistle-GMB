@@ -55,6 +55,12 @@ public:
     // ---- MIDI events (already routed to this instrument) ------------------
     void noteOn(uint8_t note, uint8_t vel, uint32_t nowMs) {
         if (vel == 0) { noteOff(note, nowMs); return; }          // running-status NoteOn/0
+        // A deferred release (sustain or the min-note guard) belongs to the note
+        // that was active when it was requested. Pressing a fresh key supersedes
+        // that note, so the pending release is moot — clear it, otherwise update()
+        // would later fire it against noteOnMs_ and tear down THIS new note, and a
+        // pedal-up would release a note that is actually still held (review #6 §17).
+        pendingRelease_ = false;
         pushOrUpdate(note, vel);
         chooseActiveAndTrigger(nowMs, /*fromRelease=*/false);
     }

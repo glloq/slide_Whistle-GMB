@@ -509,3 +509,34 @@ TEST(engine_jog_rejected_when_move_refused) {
     eng.tick(0, 0);
     CHECK(eng.lastExec().result == ExecResult::Rejected);
 }
+
+// Review #6 §13: a note transposed outside 0..127 is DROPPED, not clamped onto
+// the 0/127 boundary (which would merge distinct source notes).
+TEST(engine_transpose_drops_out_of_range) {
+    InstRig a; a.begin(0, icfg(1, 0, 127));
+    Instrument* insts[] = {&a.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    eng.setTranspose(70);
+    Command on{CommandType::NoteOn}; on.channel = 1; on.a = 100; on.b = 100; q.push(on);  // 170 > 127
+    for (int k = 0; k < 4; ++k) eng.tick(k, k * 1000);
+    CHECK(!a.sink.gateOpen);                    // dropped, nothing played
+    CHECK_EQ(a.inst.sequencer().heldCount(), 0);
+}
+
+// Review #6 §12: diagnostics are exclusive — a Jog/TestAir aimed at an
+// instrument with an active note is Rejected, never disturbing the note.
+TEST(engine_diagnostics_rejected_while_note_active) {
+    InstRig a; a.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&a.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    Command on{CommandType::NoteOn}; on.channel = 1; on.a = 60; on.b = 100; q.push(on);
+    for (int k = 0; k < 4; ++k) eng.tick(k, k * 1000);
+    CHECK(a.sink.gateOpen);                     // note playing
+    Command t{CommandType::TestAir}; t.instrument = 0; t.seq = 5; q.push(t);
+    eng.tick(5, 5000);
+    CHECK(eng.lastExec().result == ExecResult::Rejected);
+    Command j{CommandType::Jog}; j.instrument = 0; j.i16 = 5; j.seq = 6; q.push(j);
+    eng.tick(6, 6000);
+    CHECK(eng.lastExec().result == ExecResult::Rejected);
+    CHECK(a.sink.gateOpen);                     // note still undisturbed
+}
