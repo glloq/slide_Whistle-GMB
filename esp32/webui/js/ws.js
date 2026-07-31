@@ -35,7 +35,10 @@ export class MidiSocket {
     };
     this.ws.onclose = () => {
       this.open = false; this.onStatus("closed");
-      if (!this._intentional) this._reconnectLater();     // don't reconnect an intentional close (#42)
+      if (!this._intentional) {
+        this._reconnected = true;        // next flush() must start clean (#5 §18)
+        this._reconnectLater();          // don't reconnect an intentional close (#42)
+      }
     };
     this.ws.onerror = () => { try { this.ws.close(); } catch { /* ignore */ } };
     this.ws.onmessage = (ev) => {
@@ -79,7 +82,18 @@ export class MidiSocket {
   }
 
   flush() {
-    // send priority frames first, preserving order within each class
+    // After a dropped connection the queue is stale: replaying a queued NoteOn
+    // whose NoteOff also queued would reorder to NoteOff→NoteOn and restart a
+    // note the user already released. Start clean with a Panic (All Notes Off)
+    // and discard the backlog instead (review #5 §18). The app re-asserts any
+    // still-held keys from its own note registry.
+    if (this._reconnected) {
+      this._reconnected = false;
+      this.queue = [];
+      this._raw(this.token ? { type: "panic", token: this.token } : { type: "panic" });
+      return;
+    }
+    // Normal (first) connect: send priority frames first, order preserved.
     const prio = this.queue.filter((c) => this._priority(c));
     const rest = this.queue.filter((c) => !this._priority(c));
     this.queue = [];

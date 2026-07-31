@@ -123,6 +123,22 @@ test("ws: coalesces CC on same channel/controller (#43)", () => {
   assert.equal(ccs[0].b, 99);
 });
 
+test("ws: reconnect discards stale queue and sends Panic (#5 §18)", () => {
+  let ws;
+  const sock = new MidiSocket("ws://x", { socketFactory: () => (ws = new FakeWS()) });
+  sock.connect();
+  ws.onopen();                          // first open (normal)
+  ws.onclose();                         // connection DROPPED (unintentional) → stale
+  // queue a NoteOn and its NoteOff while disconnected
+  sock.send({ type: "noteOn", channel: 1, note: 60, velocity: 100 });
+  sock.send({ type: "noteOff", channel: 1, note: 60 });
+  ws.sent = [];
+  ws.onopen();                          // reconnect flush → clean slate
+  const kinds = ws.sent.map((s) => JSON.parse(s).type);
+  assert.deepEqual(kinds, ["panic"]);   // no replayed NoteOn; just an All-Notes-Off
+  if (sock._timer) { clearTimeout(sock._timer); sock._timer = null; }
+});
+
 test("ws: intentional close does not schedule a reconnect (#42)", () => {
   let count = 0;
   const sock = new MidiSocket("ws://x", { socketFactory: () => { count++; return new FakeWS(); } });
@@ -300,7 +316,8 @@ test("config: applyWizardPatch carries motion deep-merge + midiSource (#14.3/#14
   const out = applyWizardPatch(config, patch);
   assert.equal(out.instruments[0].name, "Alto");
   assert.equal(out.instruments[0].enabled, true);
-  assert.equal(out.instruments[0].midiChannel, 4);
+  assert.equal(out.instruments[0].channel, 4);       // firmware schema key (#5 §17)
+  assert.equal(out.instruments[0].midiChannel, undefined);
   assert.equal(out.instruments[0].motion.type, 1);
   assert.equal(out.instruments[0].motion.travelMm, 100);            // preset field kept
   assert.equal(out.instruments[0].motion.stepper.stepPin, 21);      // wizard override
