@@ -75,12 +75,17 @@ public:
         HardwareResourceValidator v; buildClaims(v, config_);
         bool cfgOk = !HardwareResourceValidator::hasErrors(v.validate());
 
+        // In FS recovery, never energise actuators — serve the config/recovery UI
+        // only until the operator explicitly reformats (review #5 §23).
+        if (fsRecovery_) cfgOk = false;
+
         // 4. build ONLY on a valid config; invalid → serve config UI only (#8)
         if (cfgOk) { state_ = SysState::Initializing; buildInstruments(); }
         else       { state_ = SysState::SafeConfigOnly; instCount_ = 0; }
 
         engine_.begin(instPtrs_, instCount_, &queue_);
         engine_.setLiveConfig(&config_);    // so ApplyDynamicConfig actually applies (#5)
+        engine_.setTranspose(config_.midi.transpose);   // global transpose actually applied (#5 §12)
         router_.begin(&auth_, &store_, &config_, &sink_, &entropy_, &status_);
 
         startNetwork();
@@ -96,13 +101,16 @@ public:
     void loop() {
         ws_.cleanupClients();
         router_.servicePending();   // retry a queued-full dynamic apply (#4 §P1)
-        // Restart is owned by the RT task: enqueue a SafeRestart command once,
-        // then wait for the RT task to reach a safe state before rebooting — the
+        // Restart is owned by the RT task: enqueue a SafeRestart command, then
+        // wait for the RT task to reach a safe state before rebooting — the
         // network task never touches the actuators directly (review #4 §P0).
+        // Only latch "enqueued" when push() actually succeeds; retry otherwise so
+        // a momentarily-full queue can't strand the restart forever. SafeRestart
+        // is a priority command, so it is never dropped for lack of space
+        // (review #5 §P0.5).
         if (router_.restartRequested() && !safeRestartEnqueued_) {
             Command c{}; c.type = CommandType::SafeRestart;
-            queue_.push(c);
-            safeRestartEnqueued_ = true;
+            if (queue_.push(c)) safeRestartEnqueued_ = true;
         }
         if (safeRestartEnqueued_ && engine_.safeRestartDone()) {
             delay(200);          // let the safe-state writes settle / clients flush
@@ -112,12 +120,14 @@ public:
     }
 
 private:
-    // Mount LittleFS WITHOUT auto-format first (a transient mount error must not
-    // wipe config/backup/UI, review #30). Format only as a flagged last resort.
+    // Mount LittleFS WITHOUT ever auto-formatting: a transient mount error must
+    // never wipe config/backup/UI (review #30, hardened per #5 §23). On failure
+    // we enter recovery — run from defaults in RAM with NO actuators — and wait
+    // for an explicit operator format command; we never call fs_.begin(true).
     bool mountFs() {
-        for (int i = 0; i < 2; ++i) { if (fs_.begin(false)) return true; delay(50); }
-        fsFormatted_ = true;                 // surfaced in status; operator is warned
-        return fs_.begin(true);
+        for (int i = 0; i < 3; ++i) { if (fs_.begin(false)) return true; delay(50); }
+        fsRecovery_ = true;                  // surfaced in status; operator is warned
+        return false;
     }
 
     // Drive every GPIO-backed actuator/air output to a known-inactive level
@@ -274,6 +284,7 @@ private:
             engine_.tick(ms, us, /*budget=*/32);
             // Lifecycle: home before declaring READY (#10); a homing fault must
             // move to Fault, never hang in Homing (review #12).
+            SysState prev = state_;
             if (state_ == SysState::NeedsHoming) state_ = SysState::Homing;
             else if (state_ == SysState::Homing) {
                 // A homing OR air fault must move to Fault, never hang (#12, §7.2).
@@ -291,6 +302,11 @@ private:
                 // in the RT engine clears the faults and requests homing.
                 if (!anyActuatorFault() && !anyAirFault()) state_ = SysState::NeedsHoming;
             }
+            // Entering Fault is a GLOBAL physical stop, not just a command gate:
+            // panicAll() closes every gate, zeroes the sources and stops the
+            // motors so an already-playing note cannot continue (review #5 §P0.3).
+            if (state_ == SysState::Fault && prev != SysState::Fault)
+                engine_.panicAll(ms);
             // Keep the command gate consistent with the announced state: in Fault
             // the engine refuses actuation commands (review #4 §P0).
             engine_.setCommandsBlocked(state_ == SysState::Fault);
@@ -348,6 +364,7 @@ private:
             v.set("lastAck", ack);
             v.set("firstBoot", app->firstBoot_);
             v.set("fsFormatted", app->fsFormatted_);
+            v.set("fsRecovery", app->fsRecovery_);   // FS unmountable → recovery, no actuators
             JsonValue arr = JsonValue::makeArr();
             for (uint8_t i = 0; i < s.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
                 const InstrumentStatus& is = s.instruments[i];
@@ -388,7 +405,7 @@ private:
     AsyncWebSocket   ws_{"/ws"};
     WebServerAdapter web_;
     std::string      apPassword_;
-    bool             fsOk_ = false, firstBoot_ = true, fsFormatted_ = false;
+    bool             fsOk_ = false, firstBoot_ = true, fsFormatted_ = false, fsRecovery_ = false;
     volatile SysState state_ = SysState::Boot;
     bool     safeRestartEnqueued_ = false;
 

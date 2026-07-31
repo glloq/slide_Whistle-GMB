@@ -414,6 +414,19 @@ TEST(engine_safe_restart_reaches_safe_state) {
     CHECK(eng.safeRestartDone());                 // RT reached safe state
     CHECK(!a.sink.gateOpen);                       // air closed
     CHECK(eng.lastExec().result == ExecResult::Accepted);
+    CHECK(eng.commandsBlocked());                 // no further actuation once restarting
+}
+
+// Review #5 §P0.5: SafeRestart is a priority command — a full queue admits it
+// (evicting a non-priority command) and it jumps to the front.
+TEST(queue_saferestart_is_priority) {
+    CommandQueue<2> q;
+    Command a{CommandType::NoteOn}; a.a = 60; q.push(a);
+    Command b{CommandType::NoteOn}; b.a = 61; q.push(b);   // queue full of non-priority
+    Command sr{}; sr.type = CommandType::SafeRestart;
+    CHECK(q.push(sr));                            // admitted despite full
+    Command out; CHECK(q.pop(out));
+    CHECK(out.type == CommandType::SafeRestart);  // jumped ahead of the notes
 }
 
 // Controllable air stub to exercise the TestAir state machine directly.
@@ -462,4 +475,37 @@ TEST(engine_testair_rejected_when_air_faulted) {
     eng.tick(0, 0);
     CHECK(eng.lastExec().result == ExecResult::Rejected);
     CHECK_EQ(air.started_, 0);
+}
+
+// Review #5 §12: the global MIDI transpose is applied on the real command path
+// (queue → engine), shifting the note that reaches the instrument.
+TEST(engine_global_transpose_applied) {
+    InstRig a; a.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&a.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    eng.setTranspose(12);
+    Command on{CommandType::NoteOn}; on.channel = 1; on.a = 60; on.b = 100; q.push(on);
+    for (int k = 0; k < 4; ++k) eng.tick(k, k * 1000);
+    // note 60 + 12 = 72 → map position (72-48)*2 = 48 mm (24 mm without transpose)
+    CHECK_NEAR(a.act.currentPositionMm(), 48.0f, 1e-3);
+}
+
+// Review #5 §9: a Jog the actuator refuses (here: not homed) acks Rejected,
+// not a blind Accepted.
+TEST(engine_jog_rejected_when_move_refused) {
+    struct MSink : IMotionSink {
+        void writeStepperMm(float) override {} void writeServoUs(uint8_t, uint16_t) override {}
+        void enableDriver(bool) override {} bool readEndstop(bool) override { return false; }
+    } m;
+    StepDirSlideActuator act(&m);
+    SlideMotionConfig mc; mc.type = SlideDriveType::StepDir; mc.travelMm = 100; mc.softMaxMm = 100;
+    mc.maxSpeedMmS = 200; mc.accelMmS2 = 2000; mc.stepper.stepsPerMm = 80;
+    act.begin(mc);   // NOT homed → any move is refused
+    AirSystem air; FASink s; air.begin(air2(), &s);
+    NoteMap map; Instrument in; in.begin(0, &act, &air, &map, icfg(1, 48, 84));
+    Instrument* insts[] = {&in};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    Command jog{CommandType::Jog}; jog.instrument = 0; jog.i16 = 10; jog.seq = 3; q.push(jog);
+    eng.tick(0, 0);
+    CHECK(eng.lastExec().result == ExecResult::Rejected);
 }

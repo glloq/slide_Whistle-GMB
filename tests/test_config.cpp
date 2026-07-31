@@ -129,6 +129,15 @@ TEST(config_rejects_out_of_range_normalized) {
     CHECK(!configFromJson(configToJson(c), d).ok);
 }
 
+// Review #5 §21: servo pulse-width fields are range-checked before narrowing.
+TEST(config_rejects_out_of_range_servo_pulse) {
+    RuntimeConfig c = defaultConfig();
+    c.instruments[0].motion.type = SlideDriveType::SingleServo;
+    c.instruments[0].motion.servoA.restUs = 5000;    // out of 100..3000
+    RuntimeConfig d;
+    CHECK(!configFromJson(configToJson(c), d).ok);
+}
+
 TEST(config_rejects_transpose_overflow) {
     RuntimeConfig c = defaultConfig();
     std::string json = configToJson(c);

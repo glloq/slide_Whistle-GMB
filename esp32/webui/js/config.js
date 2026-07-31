@@ -15,12 +15,12 @@ const HW_PATHS = [
   "motion.type",
   "motion.stepper.stepPin", "motion.stepper.dirPin", "motion.stepper.enablePin",
   "motion.stepper.endstopMin.pin", "motion.stepper.endstopMax.pin",
-  "motion.servoA.pin", "motion.servoA.backend", "motion.servoA.pcaChannel",
-  "motion.servoB.pin", "motion.servoB.backend", "motion.servoB.pcaChannel",
+  "motion.servoA.pin", "motion.servoA.backend", "motion.servoA.pca",
+  "motion.servoB.pin", "motion.servoB.backend", "motion.servoB.pca",
   "air.source.type", "air.source.pumpCount",
-  "air.gate.type", "air.gate.pin", "air.gate.backend", "air.gate.pcaChannel",
-  "air.flow.type", "air.flow.pin", "air.flow.backend", "air.flow.pcaChannel",
-  "air.angle.enabled", "air.angle.pin", "air.angle.backend", "air.angle.pcaChannel",
+  "air.gate.type", "air.gate.pin", "air.gate.backend", "air.gate.pca",
+  "air.flow.type", "air.flow.pin", "air.flow.backend", "air.flow.pca",
+  "air.angle.enabled", "air.angle.pin", "air.angle.backend", "air.angle.pca",
   "air.sensor.type", "air.sensor.pin",
 ];
 
@@ -96,7 +96,10 @@ export function applyWizardPatch(config, patch) {
   const inst = { ...prev };
   inst.enabled = true;
   inst.name = patch.name;
-  inst.midiChannel = patch.channel;
+  // The firmware config schema keys the MIDI channel as "channel" (decoded into
+  // midiChannel); writing "midiChannel" here would be silently dropped on decode
+  // and the old channel would stay (review #5 §17).
+  inst.channel = patch.channel;
   inst.noteMin = patch.noteMin;
   inst.noteMax = patch.noteMax;
   inst.motion = deepMerge(prev.motion || {}, patch.motion || {});

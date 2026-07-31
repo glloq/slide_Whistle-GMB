@@ -83,17 +83,19 @@ inline void servoFromJson(const JsonValue& v, ServoMotionConfig& s, bool& ok) {
     s.minUs = (uint16_t)checkedInt(v, "minUs", s.minUs, 100, 3000, ok);
     s.maxUs = (uint16_t)checkedInt(v, "maxUs", s.maxUs, 100, 3000, ok);
     s.invert = v.bool_or("invert", s.invert);
-    s.restUs = (uint16_t)v.int_or("restUs", s.restUs);
-    s.safeUs = (uint16_t)v.int_or("safeUs", s.safeUs);
-    s.trimUs = (int16_t)v.int_or("trimUs", s.trimUs);
-    s.offsetUs = (int16_t)v.int_or("offsetUs", s.offsetUs);
+    // Pulse-width fields are range-checked BEFORE narrowing so an out-of-range
+    // value can't be silently truncated into a plausible one (review #5 §21).
+    s.restUs = (uint16_t)checkedInt(v, "restUs", s.restUs, 100, 3000, ok);
+    s.safeUs = (uint16_t)checkedInt(v, "safeUs", s.safeUs, 100, 3000, ok);
+    s.trimUs = (int16_t)checkedInt(v, "trimUs", s.trimUs, -1000, 1000, ok);
+    s.offsetUs = (int16_t)checkedInt(v, "offsetUs", s.offsetUs, -1000, 1000, ok);
     s.detachIdleMs = (uint32_t)v.num_or("detachIdleMs", s.detachIdleMs);
     if (auto* cal = v.find("cal")) {
         uint8_t n = 0;
         for (const auto& p : cal->arr) {
             if (n >= 8) break;
             s.cal[n].mm = (float)p.num_or("mm", 0);
-            s.cal[n].us = (uint16_t)p.int_or("us", 1500);
+            s.cal[n].us = (uint16_t)checkedInt(p, "us", 1500, 100, 3000, ok);
             n++;
         }
         if (n >= 2) s.calCount = n;
@@ -410,11 +412,13 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
         for (const auto& pt : cal->arr) {
             int note = (int)pt.int_or("note", -1);
             if (note < 0 || note >= MIDI_NOTE_COUNT) continue;
-            in.map.setPoint((uint8_t)note, (float)pt.num_or("mm", 0), (uint8_t)pt.int_or("air", 0));
+            // Air levels are 0..127; range-check before narrowing (review #5 §21).
+            uint8_t airNom = (uint8_t)checkedInt(pt, "air", 0, 0, 127, ok);
+            in.map.setPoint((uint8_t)note, (float)pt.num_or("mm", 0), airNom);
             NoteEntry& e = in.map.entry((uint8_t)note);
             e.positionToleranceMm = (float)pt.num_or("tol", e.positionToleranceMm);
-            e.airMin = (uint8_t)pt.int_or("airMin", e.airMin);
-            e.airMax = (uint8_t)pt.int_or("airMax", e.airMax);
+            e.airMin = (uint8_t)checkedInt(pt, "airMin", e.airMin, 0, 127, ok);
+            e.airMax = (uint8_t)checkedInt(pt, "airMax", e.airMax, 0, 127, ok);
             e.enabled = pt.bool_or("enabled", true);
             e.calibrated = pt.bool_or("calibrated", true);  // preserve provisional status
         }

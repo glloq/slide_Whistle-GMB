@@ -123,6 +123,11 @@ TEST(stepper_move_respects_limits) {
     act.requestHoming(); pump(act, 0, 3000);
     CHECK(!act.requestPositionMm(150.0f));       // beyond soft max → rejected
     CHECK(act.fault() == FaultCode::TargetOutOfRange);
+    // …and it is a real latched fault now: state Fault, driver off, not ready
+    // for air (review #5 §P0.3).
+    CHECK(act.state() == MotionState::Fault);
+    CHECK(!act.isReadyForAir());
+    CHECK(!sink.driverOn);
     // valid move
     StepDirSlideActuator act2(&sink);
     act2.begin(stepperCfg()); act2.requestHoming(); pump(act2, 0, 3000);

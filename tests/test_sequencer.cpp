@@ -41,7 +41,7 @@ static NoteMap makeMap() {
 }
 
 // Harness with a Disabled actuator (always ready) → air opens on next update.
-struct Rig {
+struct SeqRig {
     DisabledSlideActuator act;
     AirSystem air; FakeAirSink2 sink; NoteMap map = makeMap();
     NoteSequencer seq;
@@ -54,7 +54,7 @@ struct Rig {
 };
 
 TEST(seq_basic_note_on_off) {
-    Rig r; r.begin();
+    SeqRig r; r.begin();
     uint32_t t = 0;
     r.seq.noteOn(60, 100, t); r.tick(t);
     CHECK(r.seq.phase() == SeqPhase::Playing);
@@ -66,7 +66,7 @@ TEST(seq_basic_note_on_off) {
 
 TEST(seq_mono_last_note_returns_to_previous) {
     // Mandatory case: NoteOn C, NoteOn E, NoteOff E → back to C.
-    Rig r; SequencerConfig cfg; cfg.mono = MonoPolicy::LastNote; r.begin(cfg);
+    SeqRig r; SequencerConfig cfg; cfg.mono = MonoPolicy::LastNote; r.begin(cfg);
     uint32_t t = 0;
     r.seq.noteOn(60, 100, t); r.tick(t);   // C
     r.seq.noteOn(64, 100, t); r.tick(t);   // E
@@ -77,13 +77,13 @@ TEST(seq_mono_last_note_returns_to_previous) {
 }
 
 TEST(seq_mono_highest_lowest) {
-    { Rig r; SequencerConfig cfg; cfg.mono = MonoPolicy::HighestNote; r.begin(cfg);
+    { SeqRig r; SequencerConfig cfg; cfg.mono = MonoPolicy::HighestNote; r.begin(cfg);
       uint32_t t = 0;
       r.seq.noteOn(60, 100, t); r.tick(t);
       r.seq.noteOn(72, 100, t); r.tick(t);
       r.seq.noteOn(65, 100, t); r.tick(t);
       CHECK_EQ(r.seq.activeNoteOr(), 72); }
-    { Rig r; SequencerConfig cfg; cfg.mono = MonoPolicy::LowestNote; r.begin(cfg);
+    { SeqRig r; SequencerConfig cfg; cfg.mono = MonoPolicy::LowestNote; r.begin(cfg);
       uint32_t t = 0;
       r.seq.noteOn(60, 100, t); r.tick(t);
       r.seq.noteOn(72, 100, t); r.tick(t);
@@ -92,7 +92,7 @@ TEST(seq_mono_highest_lowest) {
 }
 
 TEST(seq_duplicate_note_on) {
-    Rig r; r.begin();
+    SeqRig r; r.begin();
     uint32_t t = 0;
     r.seq.noteOn(60, 100, t); r.tick(t);
     r.seq.noteOn(60, 120, t); r.tick(t);   // duplicate refresh, no extra held note
@@ -101,7 +101,7 @@ TEST(seq_duplicate_note_on) {
 }
 
 TEST(seq_stale_note_off_ignored) {
-    Rig r; r.begin();
+    SeqRig r; r.begin();
     uint32_t t = 0;
     r.seq.noteOn(60, 100, t); r.tick(t);
     r.seq.noteOff(48, t); r.tick(t);       // never pressed → ignore
@@ -110,7 +110,7 @@ TEST(seq_stale_note_off_ignored) {
 }
 
 TEST(seq_sustain_defers_release) {
-    Rig r; r.begin();
+    SeqRig r; r.begin();
     uint32_t t = 0;
     r.seq.noteOn(60, 100, t); r.tick(t);
     r.seq.setSustain(true, t);
@@ -149,7 +149,7 @@ TEST(seq_note_off_during_positioning_cancels_air) {
 }
 
 TEST(seq_legato_glissando_keeps_air) {
-    Rig r; SequencerConfig cfg; cfg.legato = LegatoPolicy::Glissando; r.begin(cfg);
+    SeqRig r; SequencerConfig cfg; cfg.legato = LegatoPolicy::Glissando; r.begin(cfg);
     uint32_t t = 0;
     r.seq.noteOn(60, 100, t); r.tick(t);
     CHECK(r.sink.gateOpen);
@@ -162,7 +162,7 @@ TEST(seq_legato_glissando_keeps_air) {
 // fall back to it and KEEP the air open under a legato-hold policy — not close
 // it and leave a silent, still-"Playing" note.
 TEST(seq_legato_release_fallback_not_silent) {
-    Rig r; SequencerConfig cfg; cfg.mono = MonoPolicy::LastNote; cfg.legato = LegatoPolicy::Glissando; r.begin(cfg);
+    SeqRig r; SequencerConfig cfg; cfg.mono = MonoPolicy::LastNote; cfg.legato = LegatoPolicy::Glissando; r.begin(cfg);
     uint32_t t = 0;
     r.seq.noteOn(60, 100, t);
     for (int k = 0; k < 3; ++k) r.tick(t);
@@ -178,8 +178,35 @@ TEST(seq_legato_release_fallback_not_silent) {
     CHECK_EQ(r.seq.activeNoteOr(-1), 60);
 }
 
+// Review #5 §P0.3/§9: a note whose mapped position is outside the soft-limits
+// is refused by the actuator; the sequencer must NOT open air and must abandon
+// the note (the actuator also latches Fault).
+TEST(seq_refuses_note_beyond_soft_limits) {
+    FakeMotionSink m;
+    StepDirSlideActuator act(&m);
+    SlideMotionConfig mc; mc.type = SlideDriveType::StepDir; mc.travelMm = 100;
+    mc.softMinMm = 0; mc.softMaxMm = 100; mc.maxSpeedMmS = 200; mc.accelMmS2 = 2000;
+    mc.stepper.stepsPerMm = 80; mc.stepper.homingFastMmS = 200;
+    mc.stepper.phaseTimeoutMs = 5000; mc.stepper.homeBackoffMm = 2;
+    act.begin(mc);
+    act.requestHoming();
+    for (int k = 0; k < 3000 && !act.isHomed(); ++k) act.update(k * 1000);
+    CHECK(act.isHomed());
+    AirSystem air; FakeAirSink2 sink; air.begin(simpleAir(), &sink);
+    NoteMap map; map.setTravelMm(100);
+    for (int n = 48; n <= 84; ++n) map.setPoint((uint8_t)n, (n - 48) * 2.0f, 60);  // in range
+    map.setPoint(72, 150.0f, 60);                                                  // beyond soft max
+    NoteSequencer seq; seq.begin(&act, &air, &map, {});
+    uint32_t t = 0;
+    seq.noteOn(72, 100, t);
+    for (int k = 0; k < 6; ++k) { t++; act.update(t * 1000); air.setNow(t); air.update(t); seq.update(t, t * 1000); }
+    CHECK(!sink.gateOpen);                     // air never opened for the bad target
+    CHECK(seq.phase() != SeqPhase::Playing);
+    CHECK(act.state() == MotionState::Fault);  // actuator latched the fault
+}
+
 TEST(seq_legato_always_close_cuts_air) {
-    Rig r; SequencerConfig cfg; cfg.legato = LegatoPolicy::AlwaysClose; r.begin(cfg);
+    SeqRig r; SequencerConfig cfg; cfg.legato = LegatoPolicy::AlwaysClose; r.begin(cfg);
     uint32_t t = 0;
     r.seq.noteOn(60, 100, t); r.tick(t);
     // On the second note-on the air is explicitly closed before repositioning.
@@ -192,7 +219,7 @@ TEST(seq_legato_always_close_cuts_air) {
 }
 
 TEST(seq_panic_clears_everything) {
-    Rig r; r.begin();
+    SeqRig r; r.begin();
     uint32_t t = 0;
     r.seq.noteOn(60, 100, t); r.tick(t);
     r.seq.setSustain(true, t);
@@ -204,7 +231,7 @@ TEST(seq_panic_clears_everything) {
 }
 
 TEST(seq_min_note_duration) {
-    Rig r; SequencerConfig cfg; cfg.minNoteMs = 50; r.begin(cfg);
+    SeqRig r; SequencerConfig cfg; cfg.minNoteMs = 50; r.begin(cfg);
     uint32_t t = 0;
     r.seq.noteOn(60, 100, t); r.tick(t);    // t≈1
     r.seq.noteOff(60, t); r.tick(t);        // released almost immediately
@@ -214,7 +241,7 @@ TEST(seq_min_note_duration) {
 }
 
 TEST(seq_millis_rollover) {
-    Rig r; r.begin();
+    SeqRig r; r.begin();
     uint32_t t = 0xFFFFFF00u;               // near wrap
     r.seq.noteOn(60, 100, t); r.tick(t);
     CHECK(r.sink.gateOpen);
@@ -223,6 +250,34 @@ TEST(seq_millis_rollover) {
     CHECK(r.seq.phase() == SeqPhase::Playing); // still playing, no spurious release
     r.seq.noteOff(60, t); r.tick(t);
     CHECK(!r.sink.gateOpen);
+}
+
+// Review #5 §14: a min-note deferred release whose window straddles the millis()
+// wrap fires at the correct time — not prematurely and not never.
+TEST(seq_min_note_rollover_safe) {
+    SeqRig r; SequencerConfig cfg; cfg.minNoteMs = 50; r.begin(cfg);
+    uint32_t t = 0xFFFFFFE0u;                 // onset ~32 ms before the wrap
+    r.seq.noteOn(60, 100, t); r.tick(t);
+    r.seq.noteOff(60, t); r.tick(t);          // released early → deferred
+    CHECK(r.sink.gateOpen);
+    for (int i = 0; i < 30; ++i) r.tick(t);   // < 50 ms from onset, crossing the wrap
+    CHECK(r.sink.gateOpen);                    // NOT released prematurely across wrap
+    for (int i = 0; i < 40; ++i) r.tick(t);   // now > 50 ms from onset
+    CHECK(!r.sink.gateOpen);                    // released at the right time
+}
+
+// Review #5 §15: after a release completes (air idle, no note pending) the
+// sequencer settles to Idle instead of lingering in Releasing.
+TEST(seq_settles_to_idle_after_release) {
+    SeqRig r; r.begin();
+    uint32_t t = 0;
+    r.seq.noteOn(60, 100, t);
+    for (int i = 0; i < 3; ++i) r.tick(t);
+    CHECK(r.seq.phase() == SeqPhase::Playing);
+    r.seq.noteOff(60, t);
+    for (int i = 0; i < 10; ++i) r.tick(t);   // air closes + source idles
+    CHECK(!r.sink.gateOpen);
+    CHECK(r.seq.phase() == SeqPhase::Idle);    // settled, not stuck in Releasing
 }
 
 // --- CommandQueue -----------------------------------------------------------

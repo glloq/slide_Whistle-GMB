@@ -184,7 +184,7 @@ correct-by-construction but needs hardware to validate. TODO = not yet done
 | 45 | Calibration UI / OTA missing | TODO |
 
 Net: the real-time/config/air correctness defects that can be proven off-device
-are fixed and covered by tests (163 C++ cases + 26 node cases total). The remainder are
+are fixed and covered by tests (171 C++ cases + 27 node cases total). The remainder are
 hardware-transport bound (RMT stepping, PCA9685, ToF, BLE/rtp/DIN, WS transport
 edge cases) or larger UI build-out, and are listed here honestly rather than
 marked done.
@@ -260,6 +260,38 @@ claim), the Phase-4 transports/backends, and the Phase-5 UI (wizard steps,
 Expert forms, calibration, config-driven keyboard, WS reconnect Panic, OTA). The
 legacy v3 sketch compiles but stays **deprecated** — its fixed AP password, pin
 collisions, blocking loops and unqueued HTTP writes are documented, not fixed.
+
+## Fifth review response (safety, config, UI)
+
+| Item | Status |
+|------|--------|
+| §P0.3 Out-of-range move didn't fault | FIXED·TESTED (StepDir latches Fault + disables driver; sequencer closes air on refused move) |
+| §P0.3 Entering Fault wasn't a physical stop | FIXED (MainApp panicAll() on transition into Fault) — compiles in CI |
+| §P0.5 SafeRestart could strand / race | FIXED·TESTED (priority command; push-result checked; atomic done-flag; blocks further actuation) |
+| §9 Jog/TestActuator acked Accepted on refusal | FIXED·TESTED (ack the actuator's real result) |
+| §12 Global transpose never applied | FIXED·TESTED (engine applies it on NoteOn/NoteOff; live via ApplyDynamicConfig) |
+| §14 min-note release not rollover-safe | FIXED·TESTED (single elapsed_u32 check; removed write-only releaseAtMs_) |
+| §15 Sequencer stuck in Releasing | FIXED·TESTED (settles to Idle once air idle) |
+| §17 Wizard wrote wrong schema keys | FIXED·TESTED (channel not midiChannel; pca not pcaChannel) |
+| §18 WS reconnect replayed stale NoteOn | FIXED·TESTED (reconnect discards backlog, sends Panic) |
+| §21 Servo/cal values narrowed pre-validation | FIXED·TESTED (restUs/safeUs/trimUs/offsetUs/cal us/air*/ range-checked) |
+| §22 Bad checksum accepted by POST /config | FIXED·TESTED (applyCandidate enforces dec.checksumOk) |
+| §23 LittleFS still auto-formatted | FIXED (recovery mode, no actuators; never fs.begin(true)) — compiles in CI |
+| ops: `pio run` built legacy | FIXED (default_envs = esp32-universal) |
+| legacy deprecation not explicit | FIXED (banner in the v3 sketch) |
+| test-infra ODR (`struct Rig` ×2) | FIXED (renamed to SeqRig; suite ASan/UBSan-clean) |
+
+Still open from review #5 (P0 hardware + integration): the RMT/GPTimer stepper
+with an authoritative executed-step counter and air-gating on the executed
+position (the core blocker), continuous dual-endstop monitoring during play,
+per-source note ownership + a real watchdogMs producer-timeout, PWM/source
+polarity propagation (SolenoidPwm/fans/pumps assume active-high), propagating
+sink attach() failures into the startup validator + refusing Ready with zero
+built instruments, exclusive diagnostic mode, richer completion/history acks,
+versioned/generation-tagged dynamic config, the remaining unapplied applyDynamic
+fields, HTTP size-check-before-buffer + WS fragmentation, a formally-safe
+snapshot, and the Phase-4/5 backends + UI (PCA9685/ToF/digital sensors, MIDI
+transports, OTA, full wizard/calibration screens, config-driven keyboard).
 
 ## How to run the software tests
 
