@@ -110,9 +110,17 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
                 v.requirePin(s.stepPin, true, false, base + ".motion.stepper.stepPin", own + " step");  // mandatory
                 v.requirePin(s.dirPin, true, false, base + ".motion.stepper.dirPin", own + " dir");     // mandatory
                 v.claimPin(s.enablePin, true, false, base + ".motion.stepper.enablePin", own + " enable");  // optional
-                v.claimPin(s.endstopMin.pin, false, false, base + ".motion.stepper.endstopMin.pin", own + " endstop");
-                if (s.endstopMax.present)
-                    v.claimPin(s.endstopMax.pin, false, false, base + ".motion.stepper.endstopMax.pin", own + " endstop2");
+                // The endstop on the HOMING side is mandatory — homing reads it,
+                // and continuous supervision needs it (review #7 §3). The other
+                // endstop stays optional.
+                if (s.homeTowardZero) {
+                    v.requirePin(s.endstopMin.pin, false, false, base + ".motion.stepper.endstopMin.pin", own + " endstop");
+                    if (s.endstopMax.present)
+                        v.claimPin(s.endstopMax.pin, false, false, base + ".motion.stepper.endstopMax.pin", own + " endstop2");
+                } else {
+                    v.requirePin(s.endstopMax.pin, false, false, base + ".motion.stepper.endstopMax.pin", own + " endstop2");
+                    v.claimPin(s.endstopMin.pin, false, false, base + ".motion.stepper.endstopMin.pin", own + " endstop");
+                }
                 break;
             }
             case SlideDriveType::SingleServo:
@@ -130,7 +138,9 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
             const auto& src = in.air.source;
             if (src.type == AirSourceType::FanOnOff || src.type == AirSourceType::FanPwm) {
                 v.requirePin(src.pin[0], true, false, base + ".air.source.fanPin", own + " fan");
-                if (src.type == AirSourceType::FanPwm) v.claimLedc(base + ".air.source.fanLedc");
+                // Both fan modes drive the pin through LEDC in the Esp air sink,
+                // so both consume a channel — not only FanPwm (review #7 §14).
+                v.claimLedc(base + ".air.source.fanLedc");
             } else if (src.type == AirSourceType::PumpsDirect || src.type == AirSourceType::PumpsTank) {
                 for (uint8_t p = 0; p < src.pumpCount && p < MAX_PUMPS; ++p) {
                     v.requirePin(src.pin[p], true, false, base + ".air.source.pump[" + std::to_string(p) + "]", own + " pump");
@@ -147,7 +157,7 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
         if (in.air.gate.type != AirGateType::None &&
             in.air.gate.type != AirGateType::FlowServoAsValve) {
             if (in.air.gate.backend == PwmBackend::Pca9685)
-                v.claimPca(0x40, in.air.gate.pcaChannel, base + ".air.gate.pcaChannel");
+                v.markUnsupported(base + ".air.gate.backend", "PCA9685 gate output");
             else {
                 v.requirePin(in.air.gate.pin, true, false, base + ".air.gate.pin", own + " gate");
                 // solenoid PWM AND every servo gate (valve/diverter) need a LEDC
@@ -160,7 +170,7 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
         // --- jet-angle servo (independent output, review #25) ---
         if (in.air.angle.enabled) {
             if (in.air.angle.backend == PwmBackend::Pca9685)
-                v.claimPca(0x40, in.air.angle.pcaChannel, base + ".air.angle.pcaChannel");
+                v.markUnsupported(base + ".air.angle.backend", "PCA9685 angle servo");
             else {
                 v.requirePin(in.air.angle.pin, true, false, base + ".air.angle.pin", own + " angle");
                 v.claimLedc(base + ".air.angle.ledc");
@@ -170,9 +180,11 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
         // --- flow pin ---
         if (in.air.flow.type != FlowControlType::None) {
             if (in.air.flow.backend == PwmBackend::Pca9685)
-                v.claimPca(0x40, in.air.flow.pcaChannel, base + ".air.flow.pcaChannel");
-            else if (in.air.flow.pin >= 0) {
-                v.claimPin(in.air.flow.pin, true, false, base + ".air.flow.pin", own + " flow");
+                v.markUnsupported(base + ".air.flow.backend", "PCA9685 flow output");
+            else {
+                // A GPIO flow output needs a pin — a -1 pin silently drove nothing
+                // (review #7 §14). requirePin turns an unassigned pin into an error.
+                v.requirePin(in.air.flow.pin, true, false, base + ".air.flow.pin", own + " flow");
                 v.claimLedc(base + ".air.flow.ledc");
             }
             v.claimRange(in.air.flow.min, in.air.flow.max, base + ".air.flow.range");
@@ -187,18 +199,23 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
             else
                 v.claimPin(in.air.sensor.pin, false, true, base + ".air.sensor.pin", own + " sensor");
             v.claimRange((long)in.air.sensor.physLo, (long)in.air.sensor.physHi, base + ".air.sensor.range");
+        } else if (in.air.sensor.type == AirSensorType::TofVL53L0X ||
+                   in.air.sensor.type == AirSensorType::TofVL6180X) {
+            // I2C ToF ranging is not implemented — the air sink only does analogRead.
+            v.markUnsupported(base + ".air.sensor.type", "ToF distance sensor");
         } else if (in.air.sensor.type == AirSensorType::EndstopMechanical ||
                    in.air.sensor.type == AirSensorType::EndstopOptical ||
                    in.air.sensor.type == AirSensorType::DigitalLevel) {
-            v.claimPin(in.air.sensor.pin, false, false, base + ".air.sensor.pin", own + " sensor");
+            // No digital-read sensor backend exists yet (readSensorRaw is analog).
+            v.markUnsupported(base + ".air.sensor.type", "digital level/endstop sensor");
         }
 
-        // --- servo backends via PCA9685 ---
+        // --- servo backends via PCA9685 (not implemented — GPIO/LEDC only) ---
         if (in.motion.type == SlideDriveType::SingleServo || in.motion.type == SlideDriveType::DualServo) {
             if (in.motion.servoA.backend == PwmBackend::Pca9685)
-                v.claimPca(0x40, in.motion.servoA.pcaChannel, base + ".motion.servoA.pcaChannel");
+                v.markUnsupported(base + ".motion.servoA.backend", "PCA9685 servo output");
             if (in.motion.type == SlideDriveType::DualServo && in.motion.servoB.backend == PwmBackend::Pca9685)
-                v.claimPca(0x40, in.motion.servoB.pcaChannel, base + ".motion.servoB.pcaChannel");
+                v.markUnsupported(base + ".motion.servoB.backend", "PCA9685 servo output");
         }
     }
 }

@@ -113,6 +113,7 @@ inline void applyPreset(InstrumentConfig& i, PresetId p) {
             i.air.source.type = AirSourceType::PumpsDirect; i.air.source.pumpCount = 2;
             i.air.source.pin[0] = pins::PUMP0; i.air.source.pin[1] = pins::PUMP1;
             i.air.gate.type   = AirGateType::SolenoidSimple; i.air.gate.pin = pins::GATE;
+            i.air.flow.type   = FlowControlType::None;   // no dedicated flow output
             break;
         case PresetId::StepperPumpsTankSensor:
             configureStepper(i);
@@ -121,17 +122,20 @@ inline void applyPreset(InstrumentConfig& i, PresetId p) {
             i.air.source.requireSensor = true;
             i.air.sensor.type = AirSensorType::PressureAnalog; i.air.sensor.pin = pins::SENSOR;
             i.air.gate.type   = AirGateType::SolenoidSimple; i.air.gate.pin = pins::GATE;
+            i.air.flow.type   = FlowControlType::None;   // no dedicated flow output
             break;
         case PresetId::SingleServoMinimalAir:
             i.motion.type = SlideDriveType::SingleServo;
             i.motion.servoA.backend = PwmBackend::Gpio; i.motion.servoA.pin = pins::SERVO_A;
             i.air.gate.type = AirGateType::SolenoidSimple; i.air.gate.pin = pins::GATE;
+            i.air.flow.type = FlowControlType::None;      // minimal air: gate only
             break;
         case PresetId::DualServoMinimalAir:
             i.motion.type = SlideDriveType::DualServo; i.motion.dualMode = DualSyncMode::Opposite;
             i.motion.servoA.backend = PwmBackend::Gpio; i.motion.servoA.pin = pins::SERVO_A;
             i.motion.servoB.backend = PwmBackend::Gpio; i.motion.servoB.pin = pins::SERVO_B;
             i.air.gate.type = AirGateType::SolenoidSimple; i.air.gate.pin = pins::GATE;
+            i.air.flow.type = FlowControlType::None;      // minimal air: gate only
             break;
         case PresetId::FullyCustom:
         default:
@@ -139,6 +143,7 @@ inline void applyPreset(InstrumentConfig& i, PresetId p) {
             i.motion.stepper.stepPin = i.motion.stepper.dirPin = -1;
             i.air.source.type = AirSourceType::ExternalPassive;
             i.air.gate.type = AirGateType::None;
+            i.air.flow.type = FlowControlType::None;      // custom: nothing wired yet
             break;
     }
     // provisional linear calibration so the instrument is playable pre-tuning

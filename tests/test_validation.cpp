@@ -197,3 +197,84 @@ TEST(validate_angle_servo_claimed) {
     HardwareResourceValidator v; buildClaims(v, c);
     CHECK(hasCode(v.validate(), "GPIO_CONFLICT"));   // angle pin now participates
 }
+
+// Review #7 §7: backends the firmware cannot drive must be rejected, not
+// silently accepted. A PCA9685 servo/gate/flow output and a ToF or digital
+// level sensor all produce UNSUPPORTED_BACKEND.
+TEST(validate_unsupported_pca_and_sensor_backends) {
+    {   RuntimeConfig c = defaultConfig(); c.instrumentCount = 1;
+        c.instruments[0].enabled = true;
+        applyPreset(c.instruments[0], PresetId::SingleServoMinimalAir);
+        c.instruments[0].motion.servoA.backend = PwmBackend::Pca9685;
+        HardwareResourceValidator v; buildClaims(v, c);
+        CHECK(hasCode(v.validate(), "UNSUPPORTED_BACKEND")); }
+    {   RuntimeConfig c = defaultConfig(); c.instrumentCount = 1;
+        c.instruments[0].enabled = true;
+        applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+        c.instruments[0].air.gate.backend = PwmBackend::Pca9685;
+        HardwareResourceValidator v; buildClaims(v, c);
+        CHECK(hasCode(v.validate(), "UNSUPPORTED_BACKEND")); }
+    {   RuntimeConfig c = defaultConfig(); c.instrumentCount = 1;
+        c.instruments[0].enabled = true;
+        applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+        c.instruments[0].air.sensor.type = AirSensorType::TofVL53L0X;
+        c.instruments[0].air.sensor.pin = 39;
+        HardwareResourceValidator v; buildClaims(v, c);
+        CHECK(hasCode(v.validate(), "UNSUPPORTED_BACKEND")); }
+    {   RuntimeConfig c = defaultConfig(); c.instrumentCount = 1;
+        c.instruments[0].enabled = true;
+        applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+        c.instruments[0].air.sensor.type = AirSensorType::DigitalLevel;
+        c.instruments[0].air.sensor.pin = 39;
+        HardwareResourceValidator v; buildClaims(v, c);
+        CHECK(hasCode(v.validate(), "UNSUPPORTED_BACKEND")); }
+}
+
+// Review #7 §3/§14: the endstop on the homing side and an active GPIO flow
+// output are mandatory — an unassigned pin is a hard error.
+TEST(validate_homing_endstop_and_flow_pin_required) {
+    // Homing toward zero with no min endstop → PIN_REQUIRED.
+    RuntimeConfig c = defaultConfig(); c.instrumentCount = 1;
+    c.instruments[0].enabled = true;
+    applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+    c.instruments[0].motion.stepper.homeTowardZero = true;
+    c.instruments[0].motion.stepper.endstopMin.pin = -1;   // homing side unassigned
+    HardwareResourceValidator v; buildClaims(v, c);
+    CHECK(hasCode(v.validate(), "PIN_REQUIRED"));
+    // A FlowServo output with no pin is also required.
+    RuntimeConfig c2 = defaultConfig(); c2.instrumentCount = 1;
+    c2.instruments[0].enabled = true;
+    applyPreset(c2.instruments[0], PresetId::StepperSolenoidOnly);
+    c2.instruments[0].air.flow.type = FlowControlType::FlowServo;
+    c2.instruments[0].air.flow.backend = PwmBackend::Gpio;
+    c2.instruments[0].air.flow.pin = -1;                    // no flow pin
+    HardwareResourceValidator v2; buildClaims(v2, c2);
+    CHECK(hasCode(v2.validate(), "PIN_REQUIRED"));
+}
+
+// Review #7 §14: a FanOnOff source consumes a LEDC channel (it is driven via
+// PWM in the air sink), not only FanPwm.
+TEST(validate_fan_onoff_claims_ledc) {
+    // Four S3 instruments (8 LEDC channels) each with fan + angle + flow servo
+    // = 3 LEDC → 12 > 8 with the fan; 2 → 8 (not over) once the fan is removed.
+    auto build = [](AirSourceType src) {
+        RuntimeConfig c = defaultConfig();
+        c.device.board = BoardKind::Esp32S3; c.instrumentCount = 4;
+        for (uint8_t n = 0; n < 4; ++n) {
+            InstrumentConfig& in = c.instruments[n];
+            in = InstrumentConfig{};
+            in.enabled = true; in.midiChannel = n + 1;
+            in.motion.type = SlideDriveType::Disabled;
+            in.air.source.type = src; in.air.source.pin[0] = 10 + n;
+            in.air.gate.type = AirGateType::None;
+            in.air.flow.type = FlowControlType::FlowServo;
+            in.air.flow.backend = PwmBackend::Gpio; in.air.flow.pin = 14 + n;
+            in.air.angle.enabled = true; in.air.angle.backend = PwmBackend::Gpio; in.air.angle.pin = 18 + n;
+            in.air.sensor.type = AirSensorType::None;
+        }
+        HardwareResourceValidator v; buildClaims(v, c);
+        return v.validate();
+    };
+    CHECK(hasCode(build(AirSourceType::FanOnOff), "LEDC_EXHAUSTED"));       // 12 > 8
+    CHECK(!hasCode(build(AirSourceType::ExternalPassive), "LEDC_EXHAUSTED")); // 8, fan removed
+}
