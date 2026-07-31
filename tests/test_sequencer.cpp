@@ -14,8 +14,9 @@ using namespace swc;
 
 struct FakeAirSink2 : IAirSink {
     bool gateOpen = false; float flow = 0, gatePwm = 0, angle = 0; float src = 0;
+    int gateCloses = 0;   // count 1→0 transitions to catch spurious re-triggers
     void setSourceLevel(uint8_t, float v) override { src = v; }
-    void setGateOpen(bool o) override { gateOpen = o; }
+    void setGateOpen(bool o) override { if (gateOpen && !o) ++gateCloses; gateOpen = o; }
     void setGatePwm(float v) override { gatePwm = v; }
     void setFlow(float v) override { flow = v; }
     void setAngle(float v) override { angle = v; }
@@ -264,6 +265,40 @@ TEST(seq_min_note_rollover_safe) {
     CHECK(r.sink.gateOpen);                    // NOT released prematurely across wrap
     for (int i = 0; i < 40; ++i) r.tick(t);   // now > 50 ms from onset
     CHECK(!r.sink.gateOpen);                    // released at the right time
+}
+
+// Review #6 §17: a min-note deferred release belongs to the note that was
+// active when it was requested. Pressing a NEW note before it fires must not let
+// the stale release tear down the fresh note.
+TEST(seq_min_note_deferred_release_superseded_by_new_note) {
+    SeqRig r; SequencerConfig cfg; cfg.minNoteMs = 50; r.begin(cfg);
+    uint32_t t = 0;
+    r.seq.noteOn(60, 100, t); r.tick(t);      // A pressed
+    r.seq.noteOff(60, t); r.tick(t);          // A released early → deferred (guard)
+    r.seq.noteOn(64, 100, t); r.tick(t);      // B pressed before the guard elapses
+    CHECK_EQ(r.seq.activeNoteOr(), 64);
+    CHECK(r.sink.gateOpen);
+    int closesBefore = r.sink.gateCloses;
+    for (int i = 0; i < 60; ++i) r.tick(t);   // past A's min-note window
+    CHECK_EQ(r.seq.activeNoteOr(), 64);       // B still active, not torn down
+    CHECK(r.sink.gateOpen);                    // and still sounding
+    CHECK_EQ(r.sink.gateCloses, closesBefore); // A's stale guard never cut B's gate
+}
+
+// Review #6 §17: under sustain, releasing the active note defers it; pressing a
+// new note supersedes it. Pedal-up must then NOT release the new note, which is
+// still physically held.
+TEST(seq_sustain_deferred_release_superseded_by_new_note) {
+    SeqRig r; r.begin();
+    uint32_t t = 0;
+    r.seq.noteOn(60, 100, t); r.tick(t);
+    r.seq.setSustain(true, t);
+    r.seq.noteOff(60, t); r.tick(t);          // A held by pedal (deferred)
+    r.seq.noteOn(64, 100, t); r.tick(t);      // B pressed → supersedes A
+    CHECK_EQ(r.seq.activeNoteOr(), 64);
+    r.seq.setSustain(false, t);               // pedal up — no tick: observe immediately
+    CHECK(r.sink.gateOpen);                    // B uninterrupted (stale defer would cut it)
+    CHECK_EQ(r.seq.activeNoteOr(), 64);        // B still held → keeps sounding
 }
 
 // Review #5 §15: after a release completes (air idle, no note pending) the
