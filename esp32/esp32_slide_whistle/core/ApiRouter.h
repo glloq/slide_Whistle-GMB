@@ -96,7 +96,7 @@ public:
             return reply(403, apiErr("BAD_ORIGIN", "Origin not allowed", "Origin"));
         // 3. rate limit (safety exempt), per client so one caller can't starve
         //    the others (review #31). Key by token, else Origin, else anon.
-        if (!safety && auth_ && !auth_->allowRequestFor(clientKey(r), nowMs))
+        if (!safety && auth_ && !auth_->allowRequestFor(clientKey(r, nowMs), nowMs))
             return reply(429, apiErr("RATE_LIMITED", "too many requests"));
 
         // 4. routing
@@ -284,10 +284,14 @@ private:
         return false;
     }
 
-    static std::string clientKey(const ApiRequest& r) {
-        if (!r.token.empty()) return "t:" + r.token;
+    // Only a VERIFIED token is a trustworthy per-client rate-limit key —
+    // otherwise an attacker rotates fake tokens for unlimited buckets, both
+    // bypassing the limit and growing the map without bound. Everything
+    // unverified shares one bucket per origin (review #4 network security).
+    std::string clientKey(const ApiRequest& r, uint32_t nowMs) const {
+        if (!r.token.empty() && auth_ && auth_->isKnownToken(r.token, nowMs)) return "t:" + r.token;
         if (!r.origin.empty()) return "o:" + r.origin;
-        return "anon";
+        return "unauth";
     }
 
     bool ctJson(const ApiRequest& r) const { return r.contentType.find("application/json") != std::string::npos; }

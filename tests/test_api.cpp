@@ -222,6 +222,20 @@ TEST(api_unknown_route_404) {
     CHECK_EQ(r.status, 404);
 }
 
+// Review #4 network security: an attacker cannot escape the rate limit by
+// rotating a fresh (invalid) token per request — unverified tokens share one
+// bucket instead of each minting its own.
+TEST(api_rate_limit_not_bypassed_by_fake_tokens) {
+    Rig g; g.begin();
+    g.auth.configureRate(2, 0.0001);   // ~2 tokens, negligible refill
+    // Two requests with distinct bogus tokens consume the shared unauth budget
+    // (invalid token → 401, but the rate bucket is charged first).
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"note\":60}", "faketok1").status, 401);
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"note\":60}", "faketok2").status, 401);
+    // A third distinct fake token is RATE-LIMITED, not handed a fresh bucket.
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"note\":60}", "faketok3").status, 429);
+}
+
 // Review #7: safety commands bypass the rate limiter; notes do not.
 TEST(api_rate_limit_exempts_safety) {
     Rig g; g.begin();

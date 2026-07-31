@@ -49,6 +49,13 @@ public:
         if (tokens_ >= cost) { tokens_ -= cost; return true; }
         return false;
     }
+    // A bucket that has refilled to capacity as of nowMs carries no state worth
+    // keeping — it can be evicted and recreated identically (review #4).
+    bool isFull(uint32_t nowMs) const {
+        if (!haveTime_) return true;
+        float t = tokens_ + float(elapsed_u32(nowMs, lastMs_)) * 1e-3f * refill_;
+        return t >= cap_;
+    }
 private:
     float cap_ = 20, refill_ = 5, tokens_ = 20;
     uint32_t lastMs_ = 0; bool haveTime_ = false;
@@ -105,6 +112,15 @@ public:
             if (s.active && ctEqual(s.token, token)) { s.lastMs = nowMs; return true; }
         return false;
     }
+    // Peek whether a token is currently valid WITHOUT refreshing its TTL — used
+    // to decide whether it is a trustworthy rate-limit key (review #4). A raw,
+    // unverified token must never become its own bucket.
+    bool isKnownToken(const std::string& token, uint32_t nowMs) const {
+        if (checkAdmin(token)) return true;
+        for (auto& s : sessions_)
+            if (s.active && elapsed_u32(nowMs, s.lastMs) <= ttlMs_ && ctEqual(s.token, token)) return true;
+        return false;
+    }
     void closeSession(const std::string& token) {
         for (auto& s : sessions_) if (s.active && ctEqual(s.token, token)) s = Session{};
     }
@@ -137,9 +153,15 @@ public:
         clientLimiters_.clear();
     }
     // Per-client bucket so one noisy client can't starve the others (review #31).
+    // The map is bounded (review #4): callers key verified clients by token and
+    // group everything unverified under a shared key, so it can't grow per fake
+    // token; this cap is a hard safety net that evicts full (idle) buckets — a
+    // recreated bucket is identical to a full one, so eviction is lossless.
+    static constexpr size_t kMaxClients = 64;
     bool allowRequestFor(const std::string& client, uint32_t nowMs, float cost = 1.0f) {
         auto it = clientLimiters_.find(client);
         if (it == clientLimiters_.end()) {
+            if (clientLimiters_.size() >= kMaxClients) evictOneBucket(nowMs);
             RateLimiter rl; rl.configure(rateCap_, rateRefill_);
             it = clientLimiters_.emplace(client, rl).first;
         }
@@ -148,6 +170,14 @@ public:
 
 private:
     struct Session { bool active = false; std::string token; uint32_t lastMs = 0; };
+
+    // Drop one bucket to stay under the cap — prefer a full/idle one (lossless);
+    // otherwise the front entry. Keeps rate-limit memory bounded under attack.
+    void evictOneBucket(uint32_t nowMs) {
+        for (auto it = clientLimiters_.begin(); it != clientLimiters_.end(); ++it)
+            if (it->second.isFull(nowMs)) { clientLimiters_.erase(it); return; }
+        if (!clientLimiters_.empty()) clientLimiters_.erase(clientLimiters_.begin());
+    }
 
     void pruneExpired(uint32_t nowMs) {
         for (auto& s : sessions_)

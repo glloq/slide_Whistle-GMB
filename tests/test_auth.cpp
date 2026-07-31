@@ -49,6 +49,23 @@ TEST(auth_admin_token_generated_not_fixed) {
     CHECK_EQ((long)t1.size(), 32);
 }
 
+// Review #4 network security: isKnownToken accepts only the admin token or a
+// live session — never an arbitrary client-supplied token — so it is safe as a
+// rate-limit key, and it does NOT refresh the session TTL.
+TEST(auth_is_known_token_only_verified) {
+    AuthManager a; a.begin();
+    uint32_t e[4] = {1,2,3,4}; a.regenerateAdminToken(e);
+    CHECK(a.isKnownToken(a.adminToken(), 0));
+    CHECK(!a.isKnownToken("deadbeefdeadbeefdeadbeefdeadbeef", 0));
+    CHECK(!a.isKnownToken("", 0));
+    uint32_t s[2] = {9, 10};
+    std::string sess = a.openSession(a.adminToken(), s, 0);
+    CHECK(!sess.empty());
+    CHECK(a.isKnownToken(sess, 1000));
+    // a bogus token is still unknown even alongside a live session
+    CHECK(!a.isKnownToken("00000000000000000000000000000000", 1000));
+}
+
 TEST(auth_gate_public_vs_protected) {
     AuthManager a; a.begin();
     uint32_t e[4] = {1,2,3,4}; a.regenerateAdminToken(e);
