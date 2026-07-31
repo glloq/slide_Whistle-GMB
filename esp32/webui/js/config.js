@@ -8,16 +8,29 @@
  * client feedback.
  */
 
-// Fields whose change needs a hardware restart.
+// Per-instrument fields whose change needs a hardware restart (mirror of the
+// firmware's configNeedsRestart — keep the two in sync, review #4 §P1).
 const HW_PATHS = [
-  "device.board",
+  "enabled",
   "motion.type",
   "motion.stepper.stepPin", "motion.stepper.dirPin", "motion.stepper.enablePin",
-  "motion.stepper.endstopMin.pin",
+  "motion.stepper.endstopMin.pin", "motion.stepper.endstopMax.pin",
   "motion.servoA.pin", "motion.servoA.backend", "motion.servoA.pcaChannel",
   "motion.servoB.pin", "motion.servoB.backend", "motion.servoB.pcaChannel",
-  "air.source.type", "air.gate.type", "air.gate.pin", "air.gate.backend",
-  "air.flow.pin", "air.flow.backend", "air.sensor.type", "air.sensor.pin",
+  "air.source.type", "air.source.pumpCount",
+  "air.gate.type", "air.gate.pin", "air.gate.backend", "air.gate.pcaChannel",
+  "air.flow.type", "air.flow.pin", "air.flow.backend", "air.flow.pcaChannel",
+  "air.angle.enabled", "air.angle.pin", "air.angle.backend", "air.angle.pcaChannel",
+  "air.sensor.type", "air.sensor.pin",
+];
+
+// Device/config-level fields (outside the per-instrument array) needing restart:
+// network + auth re-init and MIDI transport bring-up (transpose stays dynamic).
+const CONFIG_HW_PATHS = [
+  "device.board",
+  "network.apEnabled", "network.apSsid", "network.requireAuth",
+  "network.disableApWhenConnected", "network.allowedOrigin",
+  "midi.din", "midi.ble", "midi.rtp", "midi.usb", "midi.webKeyboard",
 ];
 
 function get(obj, path) {
@@ -27,16 +40,16 @@ function get(obj, path) {
 export function instrumentNeedsRestart(oldInst, newInst) {
   if (!oldInst || !newInst) return true;
   for (const p of HW_PATHS) {
-    const a = p.startsWith("device.") ? undefined : get(oldInst, p);
-    const b = p.startsWith("device.") ? undefined : get(newInst, p);
-    if (JSON.stringify(a) !== JSON.stringify(b)) return true;
+    if (JSON.stringify(get(oldInst, p)) !== JSON.stringify(get(newInst, p))) return true;
   }
   return false;
 }
 
 export function configNeedsRestart(oldCfg, newCfg) {
   if (!oldCfg || !newCfg) return true;
-  if (get(oldCfg, "device.board") !== get(newCfg, "device.board")) return true;
+  for (const p of CONFIG_HW_PATHS) {
+    if (JSON.stringify(get(oldCfg, p)) !== JSON.stringify(get(newCfg, p))) return true;
+  }
   if (oldCfg.instrumentCount !== newCfg.instrumentCount) return true;
   const n = newCfg.instrumentCount || (newCfg.instruments || []).length;
   for (let i = 0; i < n; i++) {

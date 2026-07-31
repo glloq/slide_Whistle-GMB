@@ -220,6 +220,22 @@ test("config: hardware change → restart, dynamic change → not", () => {
   const hw = JSON.parse(JSON.stringify(base)); hw.instruments[0].motion.stepper.stepPin = 14;
   assert.equal(configNeedsRestart(base, hw), true);
 });
+
+test("config: network / MIDI-transport / angle changes need restart (#4)", () => {
+  const base = { device: { board: 0 }, network: { requireAuth: true, apEnabled: true }, midi: { ble: false },
+    instrumentCount: 1, instruments: [{ motion: {}, air: { source: {}, gate: {}, flow: {}, angle: { enabled: false }, sensor: {} } }] };
+  const net = JSON.parse(JSON.stringify(base)); net.network.requireAuth = false;
+  assert.equal(configNeedsRestart(base, net), true);
+  const ble = JSON.parse(JSON.stringify(base)); ble.midi.ble = true;
+  assert.equal(configNeedsRestart(base, ble), true);
+  const ang = JSON.parse(JSON.stringify(base)); ang.instruments[0].air.angle.enabled = true;
+  assert.equal(configNeedsRestart(base, ang), true);
+  const flowt = JSON.parse(JSON.stringify(base)); flowt.instruments[0].air.flow.type = 2;
+  assert.equal(configNeedsRestart(base, flowt), true);
+  // a pure tuning change stays dynamic
+  const tune = JSON.parse(JSON.stringify(base)); tune.midi.transpose = 3;
+  assert.equal(configNeedsRestart(base, tune), false);
+});
 test("config: unsaved tracker", () => {
   const t = new UnsavedTracker({ a: 1 });
   assert.equal(t.isDirty({ a: 1 }), false);

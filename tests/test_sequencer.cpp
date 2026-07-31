@@ -158,6 +158,26 @@ TEST(seq_legato_glissando_keeps_air) {
     CHECK(r.sink.gateOpen);
 }
 
+// Review #4 §P1: releasing the top note while a lower one is still held must
+// fall back to it and KEEP the air open under a legato-hold policy — not close
+// it and leave a silent, still-"Playing" note.
+TEST(seq_legato_release_fallback_not_silent) {
+    Rig r; SequencerConfig cfg; cfg.mono = MonoPolicy::LastNote; cfg.legato = LegatoPolicy::Glissando; r.begin(cfg);
+    uint32_t t = 0;
+    r.seq.noteOn(60, 100, t);
+    for (int k = 0; k < 3; ++k) r.tick(t);
+    CHECK(r.seq.phase() == SeqPhase::Playing);
+    CHECK(r.sink.gateOpen);
+    r.seq.noteOn(67, 100, t);                 // higher note, glissando keeps air
+    for (int k = 0; k < 3; ++k) r.tick(t);
+    CHECK(r.sink.gateOpen);
+    r.seq.noteOff(67, t);                     // release top → fall back to 60
+    for (int k = 0; k < 3; ++k) r.tick(t);
+    CHECK(r.seq.phase() == SeqPhase::Playing);
+    CHECK(r.sink.gateOpen);                    // must stay sounding, not go silent
+    CHECK_EQ(r.seq.activeNoteOr(-1), 60);
+}
+
 TEST(seq_legato_always_close_cuts_air) {
     Rig r; SequencerConfig cfg; cfg.legato = LegatoPolicy::AlwaysClose; r.begin(cfg);
     uint32_t t = 0;

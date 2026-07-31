@@ -48,17 +48,14 @@ public:
         Command c;
         while (budget-- && q_ && q_->pop(c)) dispatch(c, nowMs);
 
-        // Server-side test-air timeout, PER INSTRUMENT so a second test never
-        // orphans the first (reviews #16 + #11). Keyed by stable id() to match
-        // the dispatch above (#3 §6).
+        // Drive the per-instrument TestAir state machine (review #4 §P0): the
+        // test opens the gate only AFTER the source reports ready, holds for the
+        // requested duration, then closes — never a blind immediate open.
         for (uint8_t i = 0; i < count_; ++i) {
             Instrument* in = inst_[i];
             if (!in) continue;
             uint8_t slot = in->id();
-            if (slot < MAX_INSTRUMENTS && testAirActive_[slot] && nowMs >= testAirStopMs_[slot]) {
-                if (in->air()) in->air()->stopNote();
-                testAirActive_[slot] = false;
-            }
+            if (slot < MAX_INSTRUMENTS) driveTestAir(slot, in->air(), nowMs);
         }
 
         for (uint8_t i = 0; i < count_; ++i) {
@@ -72,12 +69,12 @@ public:
 
     void panicAll(uint32_t nowMs) {
         if (q_) q_->clear();
-        for (uint8_t i = 0; i < MAX_INSTRUMENTS; ++i) testAirActive_[i] = false;  // cancel all tests
+        for (uint8_t i = 0; i < MAX_INSTRUMENTS; ++i) testAir_[i].phase = TestAirPhase::Idle;  // cancel all tests
         for (uint8_t i = 0; i < count_; ++i) if (inst_[i]) inst_[i]->panic(nowMs);
     }
 
     bool testAirActive() const {
-        for (uint8_t i = 0; i < MAX_INSTRUMENTS; ++i) if (testAirActive_[i]) return true;
+        for (uint8_t i = 0; i < MAX_INSTRUMENTS; ++i) if (testAir_[i].phase != TestAirPhase::Idle) return true;
         return false;
     }
 
@@ -85,8 +82,74 @@ public:
     // enqueued a command with a given seq can confirm execution by matching it.
     const ExecAck& lastExec() const { return lastAck_; }
 
+    // Global fault gate (review #4 §P0). When set, the engine refuses every
+    // actuation command (NoteOn/CC/PitchBend/Jog/TestActuator/TestAir); only
+    // safety/recovery commands (Panic, NoteOff, Home, Rearm, SafeRestart,
+    // config/calibration) still pass — so the announced Fault state and the real
+    // behaviour agree. MainApp drives this from the system state.
+    void setCommandsBlocked(bool b) { blocked_ = b; }
+    bool commandsBlocked() const { return blocked_; }
+
+    // Set once the RT task has brought everything to a safe state in response to
+    // a SafeRestart command; the (network) task polls this before rebooting so
+    // the reboot is never issued while the RT task still owns the actuators.
+    bool safeRestartDone() const { return safeRestartDone_; }
+
 private:
     void ack(const Command& c, ExecResult r) { lastAck_ = ExecAck{ c.seq, c.type, r }; }
+
+    // Non-blocking TestAir state machine, one per instrument.
+    enum class TestAirPhase : uint8_t { Idle = 0, Prepare, WaitReady, Hold };
+    struct TestAirState {
+        TestAirPhase   phase = TestAirPhase::Idle;
+        AirNoteRequest req;
+        uint32_t       startMs = 0;   // when Prepare/WaitReady began (ready timeout)
+        uint32_t       holdMs = 0;    // when Hold (gate open) began
+        uint32_t       durMs = 3000;
+    };
+    static constexpr uint32_t kTestReadyTimeoutMs = 5000;   // give up if source never readies
+
+    void driveTestAir(uint8_t slot, IAirSystem* air, uint32_t nowMs) {
+        TestAirState& ts = testAir_[slot];
+        if (ts.phase == TestAirPhase::Idle) return;
+        // Abort the test if the air system faults mid-sequence.
+        if (!air || air->fault() != FaultCode::None) {
+            if (air) air->stopNote();
+            ts.phase = TestAirPhase::Idle;
+            return;
+        }
+        switch (ts.phase) {
+            case TestAirPhase::Prepare:
+                // prepareNote() was issued on dispatch; move to waiting for ready.
+                ts.startMs = nowMs;
+                ts.phase = TestAirPhase::WaitReady;
+                break;
+            case TestAirPhase::WaitReady:
+                if (air->isReady()) {                       // source spun up / tank ready
+                    air->startNote(ts.req);
+                    ts.holdMs = nowMs;
+                    ts.phase = TestAirPhase::Hold;
+                } else if (elapsed_u32(nowMs, ts.startMs) > kTestReadyTimeoutMs) {
+                    air->stopNote();                         // never opened; give up
+                    ts.phase = TestAirPhase::Idle;
+                }
+                break;
+            case TestAirPhase::Hold:
+                if (elapsed_u32(nowMs, ts.holdMs) >= ts.durMs) {
+                    air->stopNote();
+                    ts.phase = TestAirPhase::Idle;
+                }
+                break;
+            default: break;
+        }
+    }
+
+    // Actuation commands that must be refused while a global fault is latched.
+    static bool isActuation(CommandType t) {
+        return t == CommandType::NoteOn || t == CommandType::ControlChange ||
+               t == CommandType::PitchBend || t == CommandType::Jog ||
+               t == CommandType::TestActuator || t == CommandType::TestAir;
+    }
 
     // Resolve a direct command's target by the instrument's STABLE id(), so
     // commands keep addressing the same physical flute even when the live set
@@ -98,6 +161,14 @@ private:
     }
 
     void dispatch(const Command& c, uint32_t nowMs) {
+        // Global fault: refuse actuation, but let safety/recovery through so the
+        // system can still be stopped and re-armed (review #4 §P0).
+        if (blocked_ && isActuation(c.type)) {
+            if (c.type != CommandType::NoteOn && c.type != CommandType::ControlChange &&
+                c.type != CommandType::PitchBend)
+                ack(c, ExecResult::Rejected);   // direct commands get a rejection ack
+            return;
+        }
         switch (c.type) {
             case CommandType::NoteOn:
                 for (uint8_t i = 0; i < count_; ++i)
@@ -125,6 +196,14 @@ private:
             }
             case CommandType::Panic:
                 panicAll(nowMs);
+                break;
+            case CommandType::SafeRestart:
+                // The RT task (sole owner of the actuators) brings everything to
+                // a safe state; the network task waits for safeRestartDone() and
+                // only then reboots — no cross-core actuator access (review #4 §P0).
+                panicAll(nowMs);
+                safeRestartDone_ = true;
+                ack(c, ExecResult::Accepted);
                 break;
             case CommandType::Home: {
                 // Direct commands address instruments by STABLE id(), not the
@@ -165,18 +244,18 @@ private:
                 break;
             }
             case CommandType::TestAir: {
+                // Start the non-blocking test only if the air system exists AND
+                // is not faulted/e-stopped — otherwise the request would be
+                // ignored yet reported Accepted (review #4 §P0).
                 Instrument* in = byId(c.instrument);
-                if (in && in->air()) {
-                    AirNoteRequest r; r.velocity = c.b ? c.b : 100;
-                    in->air()->prepareNote(r);
-                    in->air()->startNote(r);
-                    // schedule an automatic stop (i16 = duration ms, default 3 s)
-                    uint32_t dur = c.i16 > 0 ? (uint32_t)c.i16 : 3000u;
-                    uint8_t slot = in->id();
-                    if (slot < MAX_INSTRUMENTS) {
-                        testAirActive_[slot] = true;
-                        testAirStopMs_[slot] = nowMs + dur;
-                    }
+                uint8_t slot = in ? in->id() : 0xFF;
+                if (in && in->air() && in->air()->fault() == FaultCode::None && slot < MAX_INSTRUMENTS) {
+                    TestAirState& ts = testAir_[slot];
+                    ts.req = AirNoteRequest{}; ts.req.velocity = c.b ? c.b : 100;
+                    ts.durMs = c.i16 > 0 ? (uint32_t)c.i16 : 3000u;
+                    ts.startMs = nowMs;
+                    ts.phase = TestAirPhase::Prepare;
+                    in->air()->prepareNote(ts.req);
                     ack(c, ExecResult::Accepted);
                 } else ack(c, ExecResult::Rejected);
                 break;
@@ -199,9 +278,10 @@ private:
     CommandQueue<QN>*  q_ = nullptr;
     float              bendRangeSemis_ = 2.0f;
     const RuntimeConfig* live_ = nullptr;       // for ApplyDynamicConfig
-    bool               testAirActive_[MAX_INSTRUMENTS] = {false};   // per-instrument TestAir
-    uint32_t           testAirStopMs_[MAX_INSTRUMENTS] = {0};
+    TestAirState       testAir_[MAX_INSTRUMENTS];                   // per-instrument TestAir FSM
     ExecAck            lastAck_{};                                  // last direct-command ack
+    bool               blocked_ = false;                           // global-fault command gate
+    bool               safeRestartDone_ = false;                   // RT reached safe state for reboot
 };
 
 } // namespace swc

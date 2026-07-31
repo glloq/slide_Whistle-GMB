@@ -15,6 +15,8 @@
 #ifndef SWC_CORE_APIROUTER_H
 #define SWC_CORE_APIROUTER_H
 
+#include <cstring>
+
 #include "ApiResponse.h"
 #include "AuthManager.h"
 #include "ConfigStore.h"
@@ -50,6 +52,17 @@ struct QueueSink : ICommandSink {
 inline bool configNeedsRestart(const RuntimeConfig& oo, const RuntimeConfig& nn) {
     if (oo.device.board != nn.device.board) return true;
     if (oo.instrumentCount != nn.instrumentCount) return true;
+    // Network + auth changes re-init the WiFi/AP/session stack, which
+    // applyDynamic() does NOT do — so they need a reboot (review #4 §P1).
+    const auto& on = oo.network; const auto& nnw = nn.network;
+    if (on.apEnabled != nnw.apEnabled || on.requireAuth != nnw.requireAuth ||
+        on.disableApWhenConnected != nnw.disableApWhenConnected ||
+        std::strcmp(on.apSsid, nnw.apSsid) != 0 ||
+        std::strcmp(on.allowedOrigin, nnw.allowedOrigin) != 0) return true;
+    // MIDI TRANSPORT enable flags need bring-up at boot (transpose stays dynamic).
+    const auto& om = oo.midi; const auto& nm = nn.midi;
+    if (om.din != nm.din || om.ble != nm.ble || om.rtp != nm.rtp ||
+        om.usb != nm.usb || om.webKeyboard != nm.webKeyboard) return true;
     for (uint8_t i = 0; i < nn.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
         const InstrumentConfig& a = oo.instruments[i];
         const InstrumentConfig& b = nn.instruments[i];
@@ -57,16 +70,22 @@ inline bool configNeedsRestart(const RuntimeConfig& oo, const RuntimeConfig& nn)
         if (a.motion.type != b.motion.type) return true;
         const auto& as = a.motion.stepper; const auto& bs = b.motion.stepper;
         if (as.stepPin != bs.stepPin || as.dirPin != bs.dirPin || as.enablePin != bs.enablePin ||
-            as.endstopMin.pin != bs.endstopMin.pin) return true;
+            as.endstopMin.pin != bs.endstopMin.pin || as.endstopMax.pin != bs.endstopMax.pin) return true;
         if (a.motion.servoA.pin != b.motion.servoA.pin || a.motion.servoA.backend != b.motion.servoA.backend ||
             a.motion.servoA.pcaChannel != b.motion.servoA.pcaChannel) return true;
         if (a.motion.servoB.pin != b.motion.servoB.pin || a.motion.servoB.backend != b.motion.servoB.backend ||
             a.motion.servoB.pcaChannel != b.motion.servoB.pcaChannel) return true;
-        if (a.air.source.type != b.air.source.type) return true;
+        if (a.air.source.type != b.air.source.type || a.air.source.pumpCount != b.air.source.pumpCount) return true;
         for (int p = 0; p < MAX_PUMPS; ++p) if (a.air.source.pin[p] != b.air.source.pin[p]) return true;
         if (a.air.gate.type != b.air.gate.type || a.air.gate.pin != b.air.gate.pin ||
-            a.air.gate.backend != b.air.gate.backend) return true;
-        if (a.air.flow.pin != b.air.flow.pin || a.air.flow.backend != b.air.flow.backend) return true;
+            a.air.gate.backend != b.air.gate.backend || a.air.gate.pcaChannel != b.air.gate.pcaChannel) return true;
+        // Flow control TYPE (and its backend/pca) changes the driver, not just a
+        // tuning parameter → restart.
+        if (a.air.flow.type != b.air.flow.type || a.air.flow.pin != b.air.flow.pin ||
+            a.air.flow.backend != b.air.flow.backend || a.air.flow.pcaChannel != b.air.flow.pcaChannel) return true;
+        // Jet-angle servo attach/pin/backend/channel.
+        if (a.air.angle.enabled != b.air.angle.enabled || a.air.angle.pin != b.air.angle.pin ||
+            a.air.angle.backend != b.air.angle.backend || a.air.angle.pcaChannel != b.air.angle.pcaChannel) return true;
         if (a.air.sensor.type != b.air.sensor.type || a.air.sensor.pin != b.air.sensor.pin) return true;
     }
     return false;
@@ -83,7 +102,19 @@ public:
     bool restartRequested() const { return restartRequested_; }
     void clearRestartRequested() { restartRequested_ = false; }
 
+    // Retry a dynamic-config apply that couldn't be queued earlier (queue full).
+    // Called from the network loop AND at the start of every request so the
+    // "apply_pending" state is real, not cosmetic (review #4 §P1).
+    void servicePending() {
+        if (dynApplyPending_ && sink_) {
+            Command c{}; c.type = CommandType::ApplyDynamicConfig;
+            if (sink_->push(c)) dynApplyPending_ = false;
+        }
+    }
+    bool applyPending() const { return dynApplyPending_; }
+
     ApiReply handle(const ApiRequest& r, uint32_t nowMs) {
+        servicePending();
         // Safety commands (panic, Note Off, All Notes/Sound Off) must ALWAYS get
         // through: they are exempt from Origin and rate-limit checks so a stop
         // can never be starved by a burst of notes/CC (correction #7).
@@ -96,7 +127,7 @@ public:
             return reply(403, apiErr("BAD_ORIGIN", "Origin not allowed", "Origin"));
         // 3. rate limit (safety exempt), per client so one caller can't starve
         //    the others (review #31). Key by token, else Origin, else anon.
-        if (!safety && auth_ && !auth_->allowRequestFor(clientKey(r), nowMs))
+        if (!safety && auth_ && !auth_->allowRequestFor(clientKey(r, nowMs), nowMs))
             return reply(429, apiErr("RATE_LIMITED", "too many requests"));
 
         // 4. routing
@@ -190,14 +221,19 @@ private:
         } else if (sink_) {
             // Dynamic-only change: tell the RT task to apply it. Only claim it is
             // applied if it actually made it onto the queue (review #5).
-            Command c{CommandType::ApplyDynamicConfig};
+            Command c{}; c.type = CommandType::ApplyDynamicConfig;
             dynQueued = sink_->push(c);
+            // Queue full → record a REAL pending apply that servicePending()
+            // retries, instead of a fake apply_pending that never applies
+            // (review #4 §P1). The saved config is already the live struct, so a
+            // later ApplyDynamicConfig will push it into the objects.
+            if (!dynQueued) dynApplyPending_ = true;
         }
         JsonValue data = JsonValue::makeObj();
         data.set("restart_required", rr);
         data.set("saved", true);
         data.set("applied", rr ? false : dynQueued);   // truthful
-        if (!rr && !dynQueued) data.set("apply_pending", true);   // saved, will apply when queue drains
+        if (!rr && !dynQueued) data.set("apply_pending", true);   // saved, retried by servicePending()
         return reply(200, apiFromValidationOk(issues, data));
     }
 
@@ -218,16 +254,31 @@ private:
         else if (type == "rearm")        c.type = CommandType::Rearm;
         else return reply(400, apiErr("BAD_COMMAND", "unknown command type", "type"));
 
-        c.channel    = (uint8_t)body.int_or("channel", 1);
-        c.a          = (uint8_t)body.int_or("a", body.int_or("note", body.int_or("cc", 0)));
-        c.b          = (uint8_t)body.int_or("b", body.int_or("velocity", body.int_or("value", 0)));
-        c.instrument = (uint8_t)body.int_or("instrument", 0);
+        // Validate raw integer ranges BEFORE narrowing to the small Command
+        // fields — otherwise channel 256→0, note 300→44, instrument 256→0 and a
+        // >32767 ms duration→negative all slip through as plausible values
+        // (review #4 §P1 command validation).
+        long channel = body.int_or("channel", 1);
+        long a       = body.int_or("a", body.int_or("note", body.int_or("cc", 0)));
+        long b       = body.int_or("b", body.int_or("velocity", body.int_or("value", 0)));
+        long inst    = body.int_or("instrument", 0);
+        if (channel < 0 || channel > 16)          return reply(400, apiErr("BAD_RANGE", "channel out of 0..16", "channel"));
+        if (a < 0 || a > 127)                     return reply(400, apiErr("BAD_RANGE", "note/cc out of 0..127", "a"));
+        if (b < 0 || b > 127)                     return reply(400, apiErr("BAD_RANGE", "value out of 0..127", "b"));
+        if (inst < 0 || inst >= MAX_INSTRUMENTS)  return reply(400, apiErr("BAD_INSTRUMENT", "instrument out of range", "instrument"));
+        c.channel    = (uint8_t)channel;
+        c.a          = (uint8_t)a;
+        c.b          = (uint8_t)b;
+        c.instrument = (uint8_t)inst;
         // i16 is a typed payload whose meaning depends on the command: signed
         // pitch-bend for pitch, signed jog delta (mm) for jog, and the auto-stop
         // duration (ms) for testAir — each read from its own key (#3 §7.4).
-        if      (c.type == CommandType::Jog)     c.i16 = (int16_t)body.int_or("delta", body.int_or("deltaMm", 0));
-        else if (c.type == CommandType::TestAir) c.i16 = (int16_t)body.int_or("ms", body.int_or("durationMs", 3000));
-        else                                     c.i16 = (int16_t)body.int_or("bend", 0);
+        long i16;
+        if      (c.type == CommandType::Jog)     i16 = body.int_or("delta", body.int_or("deltaMm", 0));
+        else if (c.type == CommandType::TestAir) i16 = body.int_or("ms", body.int_or("durationMs", 3000));
+        else                                     i16 = body.int_or("bend", 0);
+        if (i16 < -32768 || i16 > 32767)          return reply(400, apiErr("BAD_RANGE", "payload out of int16 range", "value"));
+        c.i16 = (int16_t)i16;
 
         // Safety commands (panic, Note Off, All Notes/Sound Off) always pass —
         // they need no token so a release/stop can never be blocked (#7).
@@ -269,10 +320,14 @@ private:
         return false;
     }
 
-    static std::string clientKey(const ApiRequest& r) {
-        if (!r.token.empty()) return "t:" + r.token;
+    // Only a VERIFIED token is a trustworthy per-client rate-limit key —
+    // otherwise an attacker rotates fake tokens for unlimited buckets, both
+    // bypassing the limit and growing the map without bound. Everything
+    // unverified shares one bucket per origin (review #4 network security).
+    std::string clientKey(const ApiRequest& r, uint32_t nowMs) const {
+        if (!r.token.empty() && auth_ && auth_->isKnownToken(r.token, nowMs)) return "t:" + r.token;
         if (!r.origin.empty()) return "o:" + r.origin;
-        return "anon";
+        return "unauth";
     }
 
     bool ctJson(const ApiRequest& r) const { return r.contentType.find("application/json") != std::string::npos; }
@@ -289,6 +344,7 @@ private:
     size_t         maxBody_ = 16384;
     bool           restartRequired_ = false;
     bool           restartRequested_ = false;
+    bool           dynApplyPending_ = false;   // a dynamic apply awaiting queue space
     uint32_t       cmdSeq_ = 0;     // monotonic id stamped on each enqueued command
 };
 

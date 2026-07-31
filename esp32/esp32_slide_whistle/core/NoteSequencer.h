@@ -243,10 +243,15 @@ private:
     }
 
     void cancelToStackOrRelease(uint32_t nowMs) {
-        if (air_) air_->stopNote();
         if (stackN_ > 0) {
-            chooseActiveAndTrigger(nowMs, /*fromRelease=*/true);   // fall back to previous note
+            // Fall back to the previous held note. chooseActiveAndTrigger owns
+            // the air: it keeps it open for a legato-hold, or closes+reopens via
+            // Positioning otherwise. We must NOT pre-close here — a legato-hold
+            // fallback would then keep phase Playing with the air shut, i.e. a
+            // silent note (review #4 §P1).
+            chooseActiveAndTrigger(nowMs, /*fromRelease=*/true);
         } else {
+            if (air_) air_->stopNote();
             active_ = -1;
             release(nowMs);
         }

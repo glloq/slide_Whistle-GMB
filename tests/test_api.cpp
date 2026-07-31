@@ -120,6 +120,20 @@ TEST(api_command_stamps_incrementing_seq) {
     CHECK(Rig::parse(a.body).find("data")->num_or("seq", 0) >= 1.0);
 }
 
+TEST(api_command_rejects_out_of_range_fields) {
+    Rig g; g.begin();
+    // channel 256 would wrap to 0 (OMNI) if narrowed before validation (#4 §P1).
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"channel\":256,\"note\":60}", g.adminTok).status, 400);
+    // note 300 would wrap to 44.
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"note\":300}", g.adminTok).status, 400);
+    // instrument 256 would wrap to 0.
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"home\",\"instrument\":256}", g.adminTok).status, 400);
+    // testAir duration beyond int16 would wrap negative.
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"testAir\",\"instrument\":0,\"ms\":40000}", g.adminTok).status, 400);
+    // a valid one still passes.
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"channel\":1,\"note\":60}", g.adminTok).status, 202);
+}
+
 TEST(api_command_protected_needs_auth) {
     Rig g; g.begin();
     ApiReply r = g.req("POST", "/api/v1/command", "{\"type\":\"home\",\"instrument\":0}");
@@ -194,6 +208,42 @@ TEST(api_factory_reset) {
     CHECK(!g.live.instruments[0].enabled);   // back to safe default
 }
 
+// Review #4 §P1: a dynamic apply that can't be queued (queue full) becomes a
+// REAL pending state that servicePending() retries — not a cosmetic flag.
+TEST(api_dynamic_apply_pending_is_retried) {
+    Rig g; g.begin();
+    g.sink.full = true;                             // queue full
+    std::string body = configToJson(g.live);        // valid, dynamic-only (no diff)
+    ApiReply r = g.req("POST", "/api/v1/config", body, g.adminTok);
+    CHECK_EQ(r.status, 200);
+    CHECK(g.api.applyPending());                     // genuinely pending
+    CHECK(g.sink.cmds.empty());                      // nothing applied yet
+    // queue drains; the retry actually enqueues the ApplyDynamicConfig.
+    g.sink.full = false;
+    g.api.servicePending();
+    CHECK(!g.api.applyPending());
+    CHECK(!g.sink.cmds.empty());
+    CHECK(g.sink.cmds.back().type == CommandType::ApplyDynamicConfig);
+}
+
+// Review #4 §P1: configNeedsRestart must flag network/auth/MIDI-transport and
+// angle/flow-type/endstop-max/pump-count changes (applyDynamic can't do those),
+// while a pure tuning change (transpose) stays dynamic.
+TEST(config_needs_restart_covers_more_fields) {
+    RuntimeConfig a = defaultConfig();
+    CHECK(!configNeedsRestart(a, a));                       // identical
+    { RuntimeConfig b = a; b.network.requireAuth = !a.network.requireAuth; CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.network.apEnabled = !a.network.apEnabled;     CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; std::snprintf(b.network.allowedOrigin, sizeof(b.network.allowedOrigin), "http://x"); CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.midi.ble = !a.midi.ble;        CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.angle.enabled = !a.instruments[0].air.angle.enabled; CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.flow.type = FlowControlType::FanPwm; CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.source.pumpCount = (uint8_t)(a.instruments[0].air.source.pumpCount + 1); CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].motion.stepper.endstopMax.pin = 39; CHECK(configNeedsRestart(a, b)); }
+    // transpose is a live tuning parameter — no restart.
+    { RuntimeConfig b = a; b.midi.transpose = (int8_t)(a.midi.transpose + 1); CHECK(!configNeedsRestart(a, b)); }
+}
+
 TEST(api_restart_flag) {
     Rig g; g.begin();
     CHECK(!g.api.restartRequested());
@@ -206,6 +256,20 @@ TEST(api_unknown_route_404) {
     Rig g; g.begin();
     ApiReply r = g.req("GET", "/api/v1/nope");
     CHECK_EQ(r.status, 404);
+}
+
+// Review #4 network security: an attacker cannot escape the rate limit by
+// rotating a fresh (invalid) token per request — unverified tokens share one
+// bucket instead of each minting its own.
+TEST(api_rate_limit_not_bypassed_by_fake_tokens) {
+    Rig g; g.begin();
+    g.auth.configureRate(2, 0.0001);   // ~2 tokens, negligible refill
+    // Two requests with distinct bogus tokens consume the shared unauth budget
+    // (invalid token → 401, but the rate bucket is charged first).
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"note\":60}", "faketok1").status, 401);
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"note\":60}", "faketok2").status, 401);
+    // A third distinct fake token is RATE-LIMITED, not handed a fresh bucket.
+    CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"noteOn\",\"note\":60}", "faketok3").status, 429);
 }
 
 // Review #7: safety commands bypass the rate limiter; notes do not.
