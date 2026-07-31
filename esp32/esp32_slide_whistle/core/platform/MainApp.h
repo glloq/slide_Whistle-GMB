@@ -75,6 +75,10 @@ public:
         HardwareResourceValidator v; buildClaims(v, config_);
         bool cfgOk = !HardwareResourceValidator::hasErrors(v.validate());
 
+        // In FS recovery, never energise actuators — serve the config/recovery UI
+        // only until the operator explicitly reformats (review #5 §23).
+        if (fsRecovery_) cfgOk = false;
+
         // 4. build ONLY on a valid config; invalid → serve config UI only (#8)
         if (cfgOk) { state_ = SysState::Initializing; buildInstruments(); }
         else       { state_ = SysState::SafeConfigOnly; instCount_ = 0; }
@@ -116,12 +120,14 @@ public:
     }
 
 private:
-    // Mount LittleFS WITHOUT auto-format first (a transient mount error must not
-    // wipe config/backup/UI, review #30). Format only as a flagged last resort.
+    // Mount LittleFS WITHOUT ever auto-formatting: a transient mount error must
+    // never wipe config/backup/UI (review #30, hardened per #5 §23). On failure
+    // we enter recovery — run from defaults in RAM with NO actuators — and wait
+    // for an explicit operator format command; we never call fs_.begin(true).
     bool mountFs() {
-        for (int i = 0; i < 2; ++i) { if (fs_.begin(false)) return true; delay(50); }
-        fsFormatted_ = true;                 // surfaced in status; operator is warned
-        return fs_.begin(true);
+        for (int i = 0; i < 3; ++i) { if (fs_.begin(false)) return true; delay(50); }
+        fsRecovery_ = true;                  // surfaced in status; operator is warned
+        return false;
     }
 
     // Drive every GPIO-backed actuator/air output to a known-inactive level
@@ -358,6 +364,7 @@ private:
             v.set("lastAck", ack);
             v.set("firstBoot", app->firstBoot_);
             v.set("fsFormatted", app->fsFormatted_);
+            v.set("fsRecovery", app->fsRecovery_);   // FS unmountable → recovery, no actuators
             JsonValue arr = JsonValue::makeArr();
             for (uint8_t i = 0; i < s.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
                 const InstrumentStatus& is = s.instruments[i];
@@ -398,7 +405,7 @@ private:
     AsyncWebSocket   ws_{"/ws"};
     WebServerAdapter web_;
     std::string      apPassword_;
-    bool             fsOk_ = false, firstBoot_ = true, fsFormatted_ = false;
+    bool             fsOk_ = false, firstBoot_ = true, fsFormatted_ = false, fsRecovery_ = false;
     volatile SysState state_ = SysState::Boot;
     bool     safeRestartEnqueued_ = false;
 

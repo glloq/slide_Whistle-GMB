@@ -1,4 +1,12 @@
 /*
+ * ============================================================================
+ *  LEGACY — DEPRECATED — DO NOT USE FOR NEW HARDWARE
+ *  Kept only as a historical reference / migration aid. Known issues remain by
+ *  design (fixed AP password, pin collisions in the multi-flute presets,
+ *  blocking loops, no deterministic RT period, HTTP callbacks that touch the
+ *  hardware directly). Use the UNIVERSAL firmware (universal_main.cpp) instead.
+ * ============================================================================
+ *
  * esp32_slide_whistle.ino — MIDI Slide Flute Controller (ESP32) v3
  *
  * Architecture multi-flûtes + module pression :
