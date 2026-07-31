@@ -107,7 +107,11 @@ export function applyWizardPatch(config, patch) {
   cfg.instruments = insts;
   if (!cfg.instrumentCount || cfg.instrumentCount < 1) cfg.instrumentCount = insts.length;
   if (patch.midiSource != null && patch.midiSource !== "")
-    cfg.midi = { ...(cfg.midi || {}), ...midiFlagsFor(patch.midiSource) };
+    // The wizard picks ONE MIDI source: clear the other transports first so
+    // choosing e.g. BLE doesn't leave DIN/RTP/WebKeyboard on (review #6 UI).
+    cfg.midi = { ...(cfg.midi || {}),
+                 din: false, ble: false, rtp: false, usb: false, webKeyboard: false,
+                 ...midiFlagsFor(patch.midiSource) };
   return cfg;
 }
 

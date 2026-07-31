@@ -326,3 +326,24 @@ test("config: applyWizardPatch carries motion deep-merge + midiSource (#14.3/#14
   assert.equal(out.instruments[0].air.source.type, 3);              // untouched
   assert.equal(out.midi.ble, true);                                 // MIDI source applied
 });
+
+test("config: applyWizardPatch makes the MIDI source exclusive (#6 UI)", () => {
+  // Start with several transports already on: choosing one source in the wizard
+  // must turn the others OFF, not just OR-in the new one.
+  const config = {
+    instrumentCount: 1,
+    midi: { din: true, ble: false, rtp: true, usb: true, webKeyboard: true },
+    instruments: [{ motion: {}, air: {} }],
+  };
+  const out = applyWizardPatch(config, { name: "X", channel: 1, midiSource: "ble" });
+  assert.equal(out.midi.ble, true);          // chosen source on
+  assert.equal(out.midi.din, false);         // others cleared
+  assert.equal(out.midi.rtp, false);
+  assert.equal(out.midi.usb, false);
+  assert.equal(out.midi.webKeyboard, false);
+
+  // An empty/omitted source leaves the transport flags untouched.
+  const keep = applyWizardPatch(config, { name: "X", channel: 1, midiSource: "" });
+  assert.equal(keep.midi.din, true);
+  assert.equal(keep.midi.rtp, true);
+});
