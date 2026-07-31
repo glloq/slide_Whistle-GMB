@@ -81,6 +81,7 @@ public:
 
         engine_.begin(instPtrs_, instCount_, &queue_);
         engine_.setLiveConfig(&config_);    // so ApplyDynamicConfig actually applies (#5)
+        engine_.setTranspose(config_.midi.transpose);   // global transpose actually applied (#5 §12)
         router_.begin(&auth_, &store_, &config_, &sink_, &entropy_, &status_);
 
         startNetwork();

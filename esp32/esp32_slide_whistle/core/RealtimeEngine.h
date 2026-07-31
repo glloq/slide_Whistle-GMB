@@ -40,6 +40,10 @@ public:
         bendRangeSemis_ = 2.0f;
     }
     void setPitchBendRange(float semis) { bendRangeSemis_ = semis; }
+    // Global MIDI transpose (semitones). Applied to NoteOn/NoteOff at the single
+    // convergence point for every source, since the real path is the command
+    // queue, not MidiRouter (review #5 §12). MainApp sets it from config.midi.
+    void setTranspose(int8_t semis) { transpose_ = semis; }
     // Live config source for ApplyDynamicConfig (indexed by Instrument::id()).
     void setLiveConfig(const RuntimeConfig* cfg) { live_ = cfg; }
 
@@ -100,6 +104,13 @@ public:
 
 private:
     void ack(const Command& c, ExecResult r) { lastAck_ = ExecAck{ c.seq, c.type, r }; }
+
+    // Apply the global transpose, clamped to a valid MIDI note.
+    uint8_t transposed(uint8_t note) const {
+        int n = int(note) + transpose_;
+        if (n < 0) n = 0; else if (n > 127) n = 127;
+        return uint8_t(n);
+    }
 
     // Non-blocking TestAir state machine, one per instrument.
     enum class TestAirPhase : uint8_t { Idle = 0, Prepare, WaitReady, Hold };
@@ -173,16 +184,20 @@ private:
             return;
         }
         switch (c.type) {
-            case CommandType::NoteOn:
+            case CommandType::NoteOn: {
+                uint8_t note = transposed(c.a);
                 for (uint8_t i = 0; i < count_; ++i)
-                    if (inst_[i] && inst_[i]->acceptsChannel(c.channel) && inst_[i]->acceptsNote(c.a))
-                        inst_[i]->noteOn(c.a, c.b, nowMs);
+                    if (inst_[i] && inst_[i]->acceptsChannel(c.channel) && inst_[i]->acceptsNote(note))
+                        inst_[i]->noteOn(note, c.b, nowMs);
                 break;
-            case CommandType::NoteOff:
+            }
+            case CommandType::NoteOff: {
+                uint8_t note = transposed(c.a);
                 for (uint8_t i = 0; i < count_; ++i)
                     if (inst_[i] && inst_[i]->acceptsChannel(c.channel))
-                        inst_[i]->noteOff(c.a, nowMs);
+                        inst_[i]->noteOff(note, nowMs);
                 break;
+            }
             case CommandType::ControlChange:
                 for (uint8_t i = 0; i < count_; ++i)
                     if (inst_[i] && inst_[i]->acceptsChannel(c.channel)) {
@@ -233,19 +248,24 @@ private:
             }
             case CommandType::Jog: {
                 // Jog is a SIGNED relative move (mm) carried in i16 — a uint8_t
-                // absolute could never express a negative delta (#3 §7.4).
+                // absolute could never express a negative delta (#3 §7.4). Report
+                // the actuator's real accept/reject, not a blind Accepted — a
+                // move refused for soft-limit/not-homed/fault must NOT ack
+                // Accepted (review #5 §9).
                 Instrument* in = byId(c.instrument);
                 if (in && in->actuator()) {
-                    in->actuator()->requestPositionMm(in->actuator()->currentPositionMm() + float(c.i16));
-                    ack(c, ExecResult::Accepted);
+                    bool ok = in->actuator()->requestPositionMm(in->actuator()->currentPositionMm() + float(c.i16));
+                    ack(c, ok ? ExecResult::Accepted : ExecResult::Rejected);
                 } else ack(c, ExecResult::Rejected);
                 break;
             }
             case CommandType::TestActuator: {
                 // absolute test position (mm) in `a`; single-instrument only (#13)
                 Instrument* in = byId(c.instrument);
-                if (in && in->actuator()) { in->actuator()->requestPositionMm(float(c.a)); ack(c, ExecResult::Accepted); }
-                else ack(c, ExecResult::Rejected);
+                if (in && in->actuator()) {
+                    bool ok = in->actuator()->requestPositionMm(float(c.a));
+                    ack(c, ok ? ExecResult::Accepted : ExecResult::Rejected);
+                } else ack(c, ExecResult::Rejected);
                 break;
             }
             case CommandType::TestAir: {
@@ -269,10 +289,12 @@ private:
                 // Push the newly-saved dynamic parameters into the live objects
                 // so the API's "applied" claim is truthful (correction #17).
                 // Config is indexed by the instrument's stable id().
-                if (live_)
+                if (live_) {
+                    transpose_ = live_->midi.transpose;   // global transpose is dynamic (#5 §12)
                     for (uint8_t i = 0; i < count_; ++i)
                         if (inst_[i] && inst_[i]->id() < live_->instrumentCount)
                             inst_[i]->applyDynamic(live_->instruments[inst_[i]->id()]);
+                }
                 break;
             default: break;   // calibration handled elsewhere
         }
@@ -282,6 +304,7 @@ private:
     uint8_t            count_ = 0;
     CommandQueue<QN>*  q_ = nullptr;
     float              bendRangeSemis_ = 2.0f;
+    int8_t             transpose_ = 0;
     const RuntimeConfig* live_ = nullptr;       // for ApplyDynamicConfig
     TestAirState       testAir_[MAX_INSTRUMENTS];                   // per-instrument TestAir FSM
     ExecAck            lastAck_{};                                  // last direct-command ack
