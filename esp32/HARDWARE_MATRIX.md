@@ -37,7 +37,7 @@ Markers:
 | `MidiRouter` | IMPLEMENTED · TESTED IN SOFTWARE | single entry point, transpose |
 | `RealtimeEngine` | IMPLEMENTED · TESTED IN SOFTWARE | queue drain, routing, per-flute test scope |
 | `PwmOutput` LEDC wrapper | IMPLEMENTED · TESTED IN SOFTWARE (math/polarity) · NOT TESTED — REQUIRES HARDWARE (LEDC) | 2.x + 3.x API isolated, both syntax-checked in CI |
-| `EspMotionSink` / `EspAirSink` | IMPLEMENTED (structure) · EXPERIMENTAL · NOT TESTED — REQUIRES HARDWARE | Arduino-guarded; both LEDC branches syntax-checked in CI; not yet wired into the sketch |
+| `EspMotionSink` / `EspAirSink` | IMPLEMENTED (structure) · EXPERIMENTAL · NOT TESTED — REQUIRES HARDWARE | Arduino-guarded; both LEDC branches syntax-checked in CI; wired into the universal firmware via `MainApp`/`InstrumentRuntime` (compiles in CI) |
 | Portable JSON (`Json.h`) | IMPLEMENTED · TESTED IN SOFTWARE | parser+writer, escaping, UTF-8, FNV-1a checksum |
 | `ConfigCodec` + v3 migration | IMPLEMENTED · TESTED IN SOFTWARE | round-trip, structural validation, legacy NVS-key mapping |
 | `ConfigStore` (atomic/backup/recovery) | IMPLEMENTED · TESTED IN SOFTWARE (logic) | transactional import, factory reset |
@@ -51,11 +51,11 @@ Markers:
 
 | Item | Status |
 |------|--------|
-| Wire core into `esp32_slide_whistle.ino` (RT task owns `Instrument`) | BLOCKED / TODO |
+| Core wired into the UNIVERSAL firmware (`universal_main.cpp` → `MainApp`, RT task owns `Instrument`) | IMPLEMENTED · EXPERIMENTAL · COMPILES in CI · NOT TESTED — REQUIRES HARDWARE. (The legacy `.ino` is unchanged and deprecated.) |
 | `PwmOutput` LEDC wrapper (old/new Arduino-ESP32 API) | IMPLEMENTED (see core table) |
 | Platform `IMotionSink` / `IAirSink` | IMPLEMENTED (skeleton) · EXPERIMENTAL — PCA9685 servo backend + RMT stepping TODO |
-| Deterministic RT task (`vTaskDelayUntil`) — correction #3 | BLOCKED / TODO |
-| Web handlers → CommandQueue only — correction #6 | BLOCKED / TODO |
+| Deterministic RT task (`vTaskDelayUntil`) — correction #3 | IMPLEMENTED in `MainApp` · COMPILES in CI · NOT TESTED — REQUIRES HARDWARE |
+| Web handlers → CommandQueue only — correction #6 | IMPLEMENTED (universal `ApiRouter` is enqueue-only) · TESTED IN SOFTWARE |
 | LittleFS `/config.json` atomic save + migration from v3 | IMPLEMENTED (logic tested; LittleFS backend needs hardware) |
 | Auth/session/rate-limit logic — Section 15 | IMPLEMENTED · TESTED IN SOFTWARE |
 | `/api/v1` dispatch logic (auth, transactional apply, restart) — Section 14 | IMPLEMENTED · TESTED IN SOFTWARE |
@@ -184,7 +184,7 @@ correct-by-construction but needs hardware to validate. TODO = not yet done
 | 45 | Calibration UI / OTA missing | TODO |
 
 Net: the real-time/config/air correctness defects that can be proven off-device
-are fixed and covered by tests (152 C++ cases + 25 node cases total). The remainder are
+are fixed and covered by tests (163 C++ cases + 26 node cases total). The remainder are
 hardware-transport bound (RMT stepping, PCA9685, ToF, BLE/rtp/DIN, WS transport
 edge cases) or larger UI build-out, and are listed here honestly rather than
 marked done.
@@ -233,6 +233,33 @@ transports), WS transport edge cases (§13), and the larger UI build-out — Exp
 per-block forms, calibration/OTA screens, Play-without-session guard (§14
 remainder). These remain hardware- or transport-bound and are tracked here
 rather than marked done.
+
+## Fourth review response (safety, config, security)
+
+| Item | Status |
+|------|--------|
+| Global Fault didn't refuse new commands | FIXED·TESTED (engine command gate; MainApp blocks on SysState::Fault) |
+| Restart bypassed the RT owner (cross-core panicAll) | FIXED·TESTED (SafeRestart command; RT reaches safe state, then reboot) |
+| Command fields narrowed before validation | FIXED·TESTED (channel/note/value/instrument/int16 range-checked → 400) |
+| Pumps could start before the first valid measurement | FIXED·TESTED (sensor present=false/valid=false until first good sample) |
+| TestAir opened air with no prepare/ready wait | FIXED·TESTED (Prepare→WaitReady→Hold→Close FSM; Rejected when air faulted) |
+| Legato release-fallback could go silent | FIXED·TESTED (chooseActiveAndTrigger owns the air; no pre-close on fallback) |
+| Rate limiter keyed on unverified token; unbounded map | FIXED·TESTED (key only verified tokens; shared unauth bucket; map capped) |
+| Fake apply_pending never retried | FIXED·TESTED (real pending state retried by servicePending()) |
+| configNeedsRestart incomplete | FIXED·TESTED (network/auth/MIDI-transport/angle/flow-type/gate+flow pca/endstopMax/pumpCount — firmware + UI) |
+
+Still open from review #4 (P0 mechanical + integration): RMT/GPTimer step
+generation with an authoritative emitted-step counter and air-gating on the
+EXECUTED position (§P0 — the core hardware blocker), continuous endstop
+monitoring during play (§P0), a formally-safe status snapshot (a short
+critical-section copy for ≤4 instruments would be simpler than the seqlock — §P1),
+richer completion/history acks (Queued/Started/Completed/Failed/TimedOut — §P1),
+propagating PWM/servo attach failures into the startup validator, the remaining
+validator arbitration (UART/I2C/PCA-address, required endstopMin, FanOnOff LEDC
+claim), the Phase-4 transports/backends, and the Phase-5 UI (wizard steps,
+Expert forms, calibration, config-driven keyboard, WS reconnect Panic, OTA). The
+legacy v3 sketch compiles but stays **deprecated** — its fixed AP password, pin
+collisions, blocking loops and unqueued HTTP writes are documented, not fixed.
 
 ## How to run the software tests
 
