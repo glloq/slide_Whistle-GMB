@@ -15,6 +15,8 @@
 #ifndef SWC_CORE_APIROUTER_H
 #define SWC_CORE_APIROUTER_H
 
+#include <cstring>
+
 #include "ApiResponse.h"
 #include "AuthManager.h"
 #include "ConfigStore.h"
@@ -50,6 +52,17 @@ struct QueueSink : ICommandSink {
 inline bool configNeedsRestart(const RuntimeConfig& oo, const RuntimeConfig& nn) {
     if (oo.device.board != nn.device.board) return true;
     if (oo.instrumentCount != nn.instrumentCount) return true;
+    // Network + auth changes re-init the WiFi/AP/session stack, which
+    // applyDynamic() does NOT do — so they need a reboot (review #4 §P1).
+    const auto& on = oo.network; const auto& nnw = nn.network;
+    if (on.apEnabled != nnw.apEnabled || on.requireAuth != nnw.requireAuth ||
+        on.disableApWhenConnected != nnw.disableApWhenConnected ||
+        std::strcmp(on.apSsid, nnw.apSsid) != 0 ||
+        std::strcmp(on.allowedOrigin, nnw.allowedOrigin) != 0) return true;
+    // MIDI TRANSPORT enable flags need bring-up at boot (transpose stays dynamic).
+    const auto& om = oo.midi; const auto& nm = nn.midi;
+    if (om.din != nm.din || om.ble != nm.ble || om.rtp != nm.rtp ||
+        om.usb != nm.usb || om.webKeyboard != nm.webKeyboard) return true;
     for (uint8_t i = 0; i < nn.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
         const InstrumentConfig& a = oo.instruments[i];
         const InstrumentConfig& b = nn.instruments[i];
@@ -57,16 +70,22 @@ inline bool configNeedsRestart(const RuntimeConfig& oo, const RuntimeConfig& nn)
         if (a.motion.type != b.motion.type) return true;
         const auto& as = a.motion.stepper; const auto& bs = b.motion.stepper;
         if (as.stepPin != bs.stepPin || as.dirPin != bs.dirPin || as.enablePin != bs.enablePin ||
-            as.endstopMin.pin != bs.endstopMin.pin) return true;
+            as.endstopMin.pin != bs.endstopMin.pin || as.endstopMax.pin != bs.endstopMax.pin) return true;
         if (a.motion.servoA.pin != b.motion.servoA.pin || a.motion.servoA.backend != b.motion.servoA.backend ||
             a.motion.servoA.pcaChannel != b.motion.servoA.pcaChannel) return true;
         if (a.motion.servoB.pin != b.motion.servoB.pin || a.motion.servoB.backend != b.motion.servoB.backend ||
             a.motion.servoB.pcaChannel != b.motion.servoB.pcaChannel) return true;
-        if (a.air.source.type != b.air.source.type) return true;
+        if (a.air.source.type != b.air.source.type || a.air.source.pumpCount != b.air.source.pumpCount) return true;
         for (int p = 0; p < MAX_PUMPS; ++p) if (a.air.source.pin[p] != b.air.source.pin[p]) return true;
         if (a.air.gate.type != b.air.gate.type || a.air.gate.pin != b.air.gate.pin ||
-            a.air.gate.backend != b.air.gate.backend) return true;
-        if (a.air.flow.pin != b.air.flow.pin || a.air.flow.backend != b.air.flow.backend) return true;
+            a.air.gate.backend != b.air.gate.backend || a.air.gate.pcaChannel != b.air.gate.pcaChannel) return true;
+        // Flow control TYPE (and its backend/pca) changes the driver, not just a
+        // tuning parameter → restart.
+        if (a.air.flow.type != b.air.flow.type || a.air.flow.pin != b.air.flow.pin ||
+            a.air.flow.backend != b.air.flow.backend || a.air.flow.pcaChannel != b.air.flow.pcaChannel) return true;
+        // Jet-angle servo attach/pin/backend/channel.
+        if (a.air.angle.enabled != b.air.angle.enabled || a.air.angle.pin != b.air.angle.pin ||
+            a.air.angle.backend != b.air.angle.backend || a.air.angle.pcaChannel != b.air.angle.pcaChannel) return true;
         if (a.air.sensor.type != b.air.sensor.type || a.air.sensor.pin != b.air.sensor.pin) return true;
     }
     return false;

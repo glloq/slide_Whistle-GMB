@@ -226,6 +226,24 @@ TEST(api_dynamic_apply_pending_is_retried) {
     CHECK(g.sink.cmds.back().type == CommandType::ApplyDynamicConfig);
 }
 
+// Review #4 §P1: configNeedsRestart must flag network/auth/MIDI-transport and
+// angle/flow-type/endstop-max/pump-count changes (applyDynamic can't do those),
+// while a pure tuning change (transpose) stays dynamic.
+TEST(config_needs_restart_covers_more_fields) {
+    RuntimeConfig a = defaultConfig();
+    CHECK(!configNeedsRestart(a, a));                       // identical
+    { RuntimeConfig b = a; b.network.requireAuth = !a.network.requireAuth; CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.network.apEnabled = !a.network.apEnabled;     CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; std::snprintf(b.network.allowedOrigin, sizeof(b.network.allowedOrigin), "http://x"); CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.midi.ble = !a.midi.ble;        CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.angle.enabled = !a.instruments[0].air.angle.enabled; CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.flow.type = FlowControlType::FanPwm; CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.source.pumpCount = (uint8_t)(a.instruments[0].air.source.pumpCount + 1); CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].motion.stepper.endstopMax.pin = 39; CHECK(configNeedsRestart(a, b)); }
+    // transpose is a live tuning parameter — no restart.
+    { RuntimeConfig b = a; b.midi.transpose = (int8_t)(a.midi.transpose + 1); CHECK(!configNeedsRestart(a, b)); }
+}
+
 TEST(api_restart_flag) {
     Rig g; g.begin();
     CHECK(!g.api.restartRequested());
