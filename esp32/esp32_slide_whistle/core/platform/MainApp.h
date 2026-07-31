@@ -95,6 +95,7 @@ public:
 
     void loop() {
         ws_.cleanupClients();
+        router_.servicePending();   // retry a queued-full dynamic apply (#4 §P1)
         // Restart is owned by the RT task: enqueue a SafeRestart command once,
         // then wait for the RT task to reach a safe state before rebooting — the
         // network task never touches the actuators directly (review #4 §P0).

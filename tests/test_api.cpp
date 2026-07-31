@@ -208,6 +208,24 @@ TEST(api_factory_reset) {
     CHECK(!g.live.instruments[0].enabled);   // back to safe default
 }
 
+// Review #4 §P1: a dynamic apply that can't be queued (queue full) becomes a
+// REAL pending state that servicePending() retries — not a cosmetic flag.
+TEST(api_dynamic_apply_pending_is_retried) {
+    Rig g; g.begin();
+    g.sink.full = true;                             // queue full
+    std::string body = configToJson(g.live);        // valid, dynamic-only (no diff)
+    ApiReply r = g.req("POST", "/api/v1/config", body, g.adminTok);
+    CHECK_EQ(r.status, 200);
+    CHECK(g.api.applyPending());                     // genuinely pending
+    CHECK(g.sink.cmds.empty());                      // nothing applied yet
+    // queue drains; the retry actually enqueues the ApplyDynamicConfig.
+    g.sink.full = false;
+    g.api.servicePending();
+    CHECK(!g.api.applyPending());
+    CHECK(!g.sink.cmds.empty());
+    CHECK(g.sink.cmds.back().type == CommandType::ApplyDynamicConfig);
+}
+
 TEST(api_restart_flag) {
     Rig g; g.begin();
     CHECK(!g.api.restartRequested());

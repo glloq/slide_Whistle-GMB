@@ -83,7 +83,19 @@ public:
     bool restartRequested() const { return restartRequested_; }
     void clearRestartRequested() { restartRequested_ = false; }
 
+    // Retry a dynamic-config apply that couldn't be queued earlier (queue full).
+    // Called from the network loop AND at the start of every request so the
+    // "apply_pending" state is real, not cosmetic (review #4 §P1).
+    void servicePending() {
+        if (dynApplyPending_ && sink_) {
+            Command c{}; c.type = CommandType::ApplyDynamicConfig;
+            if (sink_->push(c)) dynApplyPending_ = false;
+        }
+    }
+    bool applyPending() const { return dynApplyPending_; }
+
     ApiReply handle(const ApiRequest& r, uint32_t nowMs) {
+        servicePending();
         // Safety commands (panic, Note Off, All Notes/Sound Off) must ALWAYS get
         // through: they are exempt from Origin and rate-limit checks so a stop
         // can never be starved by a burst of notes/CC (correction #7).
@@ -190,14 +202,19 @@ private:
         } else if (sink_) {
             // Dynamic-only change: tell the RT task to apply it. Only claim it is
             // applied if it actually made it onto the queue (review #5).
-            Command c{CommandType::ApplyDynamicConfig};
+            Command c{}; c.type = CommandType::ApplyDynamicConfig;
             dynQueued = sink_->push(c);
+            // Queue full → record a REAL pending apply that servicePending()
+            // retries, instead of a fake apply_pending that never applies
+            // (review #4 §P1). The saved config is already the live struct, so a
+            // later ApplyDynamicConfig will push it into the objects.
+            if (!dynQueued) dynApplyPending_ = true;
         }
         JsonValue data = JsonValue::makeObj();
         data.set("restart_required", rr);
         data.set("saved", true);
         data.set("applied", rr ? false : dynQueued);   // truthful
-        if (!rr && !dynQueued) data.set("apply_pending", true);   // saved, will apply when queue drains
+        if (!rr && !dynQueued) data.set("apply_pending", true);   // saved, retried by servicePending()
         return reply(200, apiFromValidationOk(issues, data));
     }
 
@@ -308,6 +325,7 @@ private:
     size_t         maxBody_ = 16384;
     bool           restartRequired_ = false;
     bool           restartRequested_ = false;
+    bool           dynApplyPending_ = false;   // a dynamic apply awaiting queue space
     uint32_t       cmdSeq_ = 0;     // monotonic id stamped on each enqueued command
 };
 
