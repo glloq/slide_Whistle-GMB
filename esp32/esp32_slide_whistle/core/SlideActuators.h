@@ -247,8 +247,19 @@ protected:
                 break;
             case HPhase::SlowSeek:                         // creep back to precise contact
                 if (hit) {
-                    pos_    = 0.0f;                         // define zero AT the switch
-                    target_ = cfg_.stepper.homeOffsetMm;   // then physically move to offset
+                    // Define the mm reference AT the switch: 0 mm when homing to
+                    // the min end, travelMm when homing to the max end. Homing to
+                    // max previously also set pos_=0, so every later positive
+                    // target drove toward the max butée instead of inward (#7 §1).
+                    pos_ = cfg_.stepper.homeTowardZero ? 0.0f : cfg_.travelMm;
+                    // Realign the executed-step counter to this reference so the
+                    // next commanded move starts from here, not from the raw seek
+                    // count (#7 §1). No-op on absolute backends.
+                    if (sink_) sink_->syncPositionMm(pos_);
+                    // Move inward off the switch by the offset (toward the middle
+                    // of the travel, i.e. away from whichever butée we hit).
+                    const float inward = cfg_.stepper.homeTowardZero ? 1.0f : -1.0f;
+                    target_ = pos_ + inward * cfg_.stepper.homeOffsetMm;
                     enterPhase(HPhase::MoveToOffset, nowUs);
                 } else {
                     pos_ += dir * cfg_.stepper.homingSlowMmS * dt;

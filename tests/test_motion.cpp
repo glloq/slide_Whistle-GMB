@@ -16,10 +16,27 @@ struct FakeSink : IMotionSink {
     bool driverOn = false;
     // endstop trips once the commanded stepper position passes this point.
     float endstopAtMm = -1000.0f;
+    int   syncCount = 0;          // times the executed-step counter was realigned
+    float lastSyncMm = -1e9f;     // mm passed to the last syncPositionMm()
     void writeStepperMm(float mm) override { lastStepperMm = mm; }
     void writeServoUs(uint8_t i, uint16_t us) override { if (i < 2) servoUs[i] = us; }
     void enableDriver(bool on) override { driverOn = on; }
     bool readEndstop(bool) override { return lastStepperMm <= endstopAtMm; }
+    void syncPositionMm(float mm) override { ++syncCount; lastSyncMm = mm; }
+};
+
+// Sink whose MAX endstop trips once the position rises to/above a threshold,
+// for exercising homeTowardZero=false.
+struct MaxHomeSink : IMotionSink {
+    float lastStepperMm = 0;
+    float maxTripMm = 1e9f;
+    int   syncCount = 0;
+    float lastSyncMm = -1e9f;
+    void writeStepperMm(float mm) override { lastStepperMm = mm; }
+    void writeServoUs(uint8_t, uint16_t) override {}
+    void enableDriver(bool) override {}
+    bool readEndstop(bool useMax) override { return useMax && lastStepperMm >= maxTripMm; }
+    void syncPositionMm(float mm) override { ++syncCount; lastSyncMm = mm; }
 };
 
 static SlideMotionConfig stepperCfg() {
@@ -249,6 +266,40 @@ TEST(stepper_homing_distant_switch_and_offset) {
     CHECK(act.isHomed());
     CHECK(act.fault() == FaultCode::None);
     CHECK_NEAR(act.currentPositionMm(), 5.0f, 0.6);   // real move to offset, not a snap
+}
+
+// Review #7 §1: at the precise homing contact the actuator must realign the
+// executed-step counter to its new mm reference (0 at the min end), otherwise
+// the first post-home move drives a phantom correction on real hardware.
+TEST(stepper_homing_syncs_step_counter_at_min) {
+    FakeSink sink; sink.endstopAtMm = 0.0f;
+    StepDirSlideActuator act(&sink);
+    CHECK(act.begin(stepperCfg()));
+    CHECK(act.requestHoming());
+    pump(act, 0, 3000);
+    CHECK(act.isHomed());
+    CHECK(sink.syncCount >= 1);              // counter was realigned at contact
+    CHECK_NEAR(sink.lastSyncMm, 0.0f, 1e-4); // to the min reference (0 mm)
+}
+
+// Review #7 §1: homing toward the MAX end must define the contact as travelMm
+// (not 0) and then move INWARD by the offset — so subsequent positive targets
+// stay inside the course instead of driving back into the max butée.
+TEST(stepper_homing_toward_max_reference) {
+    MaxHomeSink sink; sink.maxTripMm = 100.0f;   // switch at the travel end
+    auto c = stepperCfg();
+    c.stepper.homeTowardZero = false;
+    c.stepper.homeOffsetMm = 5.0f;
+    c.stepper.phaseTimeoutMs = 6000;
+    StepDirSlideActuator act(&sink);
+    CHECK(act.begin(c));
+    CHECK(act.requestHoming());
+    pump(act, 0, 8000);
+    CHECK(act.isHomed());
+    CHECK(act.fault() == FaultCode::None);
+    CHECK_NEAR(sink.lastSyncMm, 100.0f, 1e-4);          // reference defined at travelMm
+    CHECK_NEAR(act.currentPositionMm(), 95.0f, 0.8);    // parked 5 mm inward, not at 0
+    CHECK(act.requestPositionMm(20.0f));                // an inward target is accepted
 }
 
 // Review #6: applyDynamic changes speed/accel/soft-limits live (not pins/type).
