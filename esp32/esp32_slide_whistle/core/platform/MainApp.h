@@ -98,14 +98,20 @@ public:
         router_.begin(&auth_, &store_, &config_, &sink_, &entropy_, &status_);
 
         startNetwork();
-        startWebServer();
-        printCredentials();                 // Serial: AP password + admin token (#5)
 
         // 5. runnable config → home before declaring READY (#10). If not
         // runnable we stay SafeConfigOnly (no actuators) — never home nothing.
         if (state_ == SysState::Initializing) { requestHomingAll(); state_ = SysState::NeedsHoming; }
 
+        // Bring up the RT task (sole actuator owner) BEFORE opening the network
+        // server, so a WebSocket/HTTP command cannot be enqueued and observed
+        // before the command gate is being managed (review #7 §4). The engine
+        // also starts blocked, so even a command that slips in early is refused
+        // until the lifecycle reaches Ready.
         xTaskCreatePinnedToCore(rtTaskThunk, "rt",  16384, this, 5, nullptr, 1);
+
+        startWebServer();
+        printCredentials();                 // Serial: AP password + admin token (#5)
     }
 
     void loop() {
@@ -289,6 +295,12 @@ private:
         for (;;) {
             uint32_t ms = millis();
             uint32_t us = micros();
+            // Refresh the command gate BEFORE draining the queue, using the state
+            // settled at the end of the previous cycle. Updating it only after
+            // the drain (as before) let one batch execute against a stale gate —
+            // e.g. a command drained while the system had already left Ready
+            // (review #7 §4). Actuation is allowed ONLY in Ready.
+            engine_.setCommandsBlocked(state_ != SysState::Ready);
             // Single owner of updates: engine_.tick() ticks each instrument's
             // actuator + air + sequencer exactly once — no second pass (#9).
             engine_.tick(ms, us, /*budget=*/32);
@@ -320,11 +332,9 @@ private:
             // motors so an already-playing note cannot continue (review #5 §P0.3).
             if (state_ == SysState::Fault && prev != SysState::Fault)
                 engine_.panicAll(ms);
-            // Actuation is allowed ONLY in Ready: block NoteOn/CC/Jog/Test during
-            // Boot/Initializing/NeedsHoming/Homing/SafeConfigOnly/Fault so e.g. a
-            // TestAir can't run mid-homing (review #6 §7). Safety/recovery
+            // The command gate for the NEXT drain is applied at the top of the
+            // loop from this settled state_ (review #7 §4). Safety/recovery
             // commands (Panic/NoteOff/Home/Rearm) bypass the gate regardless.
-            engine_.setCommandsBlocked(state_ != SysState::Ready);
             publishSnapshot();                        // lock-free telemetry (#37)
             vTaskDelayUntil(&last, period);            // deterministic cadence
         }
