@@ -258,7 +258,7 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
     in.watchdogMs = (uint32_t)v.num_or("watchdogMs", in.watchdogMs);
 
     if (auto* m = v.find("motion")) {
-        in.motion.type = (SlideDriveType)m->int_or("type", (int)in.motion.type);
+        in.motion.type = (SlideDriveType)checkedInt(*m, "type", (int)in.motion.type, 0, 3, ok);
         in.motion.travelMm = (float)m->num_or("travelMm", in.motion.travelMm);
         in.motion.maxSpeedMmS = (float)m->num_or("maxSpeedMmS", in.motion.maxSpeedMmS);
         in.motion.accelMmS2 = (float)m->num_or("accelMmS2", in.motion.accelMmS2);
@@ -271,8 +271,8 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             sp.enablePin = (int8_t)checkedInt(*st, "enablePin", sp.enablePin, PIN_LO, PIN_HI, ok);
             sp.enableActiveHigh = st->bool_or("enableActiveHigh", sp.enableActiveHigh);
             sp.invertDir = st->bool_or("invertDir", sp.invertDir);
-            sp.stepsPerRev = (uint16_t)st->int_or("stepsPerRev", sp.stepsPerRev);
-            sp.microsteps = (uint16_t)st->int_or("microsteps", sp.microsteps);
+            sp.stepsPerRev = (uint16_t)checkedInt(*st, "stepsPerRev", sp.stepsPerRev, 1, 10000, ok);
+            sp.microsteps = (uint16_t)checkedInt(*st, "microsteps", sp.microsteps, 1, 256, ok);
             sp.stepsPerMm = (float)st->num_or("stepsPerMm", sp.stepsPerMm);
             sp.homingFastMmS = (float)st->num_or("homingFastMmS", sp.homingFastMmS);
             sp.homingSlowMmS = (float)st->num_or("homingSlowMmS", sp.homingSlowMmS);
@@ -289,12 +289,12 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
         if (auto* sa = m->find("servoA")) servoFromJson(*sa, in.motion.servoA, ok);
         if (auto* sb = m->find("servoB")) servoFromJson(*sb, in.motion.servoB, ok);
         in.motion.servoBEnabled = m->bool_or("servoBEnabled", in.motion.servoBEnabled);
-        in.motion.dualMode = (DualSyncMode)m->int_or("dualMode", (int)in.motion.dualMode);
+        in.motion.dualMode = (DualSyncMode)checkedInt(*m, "dualMode", (int)in.motion.dualMode, 0, 2, ok);
     }
     if (auto* a = v.find("air")) {
         if (auto* src = a->find("source")) {
             auto& so = in.air.source;
-            so.type = (AirSourceType)src->int_or("type", (int)so.type);
+            so.type = (AirSourceType)checkedInt(*src, "type", (int)so.type, 0, 4, ok);
             so.pumpCount = (uint8_t)checkedInt(*src, "pumpCount", so.pumpCount, 0, MAX_PUMPS, ok);
             if (auto* pins = src->find("pins"))
                 for (int p = 0; p < MAX_PUMPS && p < (int)pins->arr.size(); ++p) {
@@ -309,7 +309,7 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             so.spinUpMs = (uint32_t)src->num_or("spinUpMs", so.spinUpMs);
             so.stopDelayMs = (uint32_t)src->num_or("stopDelayMs", so.stopDelayMs);
             so.cascadeDelayMs = (uint32_t)src->num_or("cascadeDelayMs", so.cascadeDelayMs);
-            so.tankMode = (TankRegulationMode)src->int_or("tankMode", (int)so.tankMode);
+            so.tankMode = (TankRegulationMode)checkedInt(*src, "tankMode", (int)so.tankMode, 0, 2, ok);
             so.tankPwm = src->bool_or("tankPwm", so.tankPwm);
             so.target = (float)src->num_or("target", so.target);
             so.pidKp = (float)src->num_or("pidKp", so.pidKp);
@@ -323,7 +323,7 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
         }
         if (auto* g = a->find("gate")) {
             auto& gc = in.air.gate;
-            gc.type = (AirGateType)g->int_or("type", (int)gc.type);
+            gc.type = (AirGateType)checkedInt(*g, "type", (int)gc.type, 0, 5, ok);
             gc.pin = (int8_t)checkedInt(*g, "pin", gc.pin, PIN_LO, PIN_HI, ok);
             gc.backend = (PwmBackend)checkedInt(*g, "backend", (int)gc.backend, 0, 1, ok);
             gc.pcaChannel = (uint8_t)checkedInt(*g, "pca", gc.pcaChannel, 0, 15, ok);
@@ -336,12 +336,12 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             gc.open01 = (float)g->num_or("open01", gc.open01);
             gc.openDelayMs = (uint32_t)g->num_or("openDelayMs", gc.openDelayMs);
             gc.closeDelayMs = (uint32_t)g->num_or("closeDelayMs", gc.closeDelayMs);
-            gc.servoMinUs = (uint16_t)g->int_or("servoMinUs", gc.servoMinUs);
-            gc.servoMaxUs = (uint16_t)g->int_or("servoMaxUs", gc.servoMaxUs);
+            gc.servoMinUs = (uint16_t)checkedInt(*g, "servoMinUs", gc.servoMinUs, 100, 3000, ok);
+            gc.servoMaxUs = (uint16_t)checkedInt(*g, "servoMaxUs", gc.servoMaxUs, 100, 3000, ok);
         }
         if (auto* f = a->find("flow")) {
             auto& fc = in.air.flow;
-            fc.type = (FlowControlType)f->int_or("type", (int)fc.type);
+            fc.type = (FlowControlType)checkedInt(*f, "type", (int)fc.type, 0, 5, ok);
             fc.pin = (int8_t)checkedInt(*f, "pin", fc.pin, PIN_LO, PIN_HI, ok);
             fc.backend = (PwmBackend)checkedInt(*f, "backend", (int)fc.backend, 0, 1, ok);
             fc.pcaChannel = (uint8_t)checkedInt(*f, "pca", fc.pcaChannel, 0, 15, ok);
@@ -349,11 +349,11 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             fc.nominal = (uint8_t)checkedInt(*f, "nominal", fc.nominal, 0, 127, ok);
             fc.max = (uint8_t)checkedInt(*f, "max", fc.max, 0, 127, ok);
             fc.rest01 = (float)f->num_or("rest01", fc.rest01);
-            fc.curve = (VelocityCurve)f->int_or("curve", (int)fc.curve);
+            fc.curve = (VelocityCurve)checkedInt(*f, "curve", (int)fc.curve, 0, 4, ok);
             fc.expo = (float)f->num_or("expo", fc.expo);
             fc.maxSlewPerMs = (float)f->num_or("maxSlewPerMs", fc.maxSlewPerMs);
-            fc.servoMinUs = (uint16_t)f->int_or("servoMinUs", fc.servoMinUs);
-            fc.servoMaxUs = (uint16_t)f->int_or("servoMaxUs", fc.servoMaxUs);
+            fc.servoMinUs = (uint16_t)checkedInt(*f, "servoMinUs", fc.servoMinUs, 100, 3000, ok);
+            fc.servoMaxUs = (uint16_t)checkedInt(*f, "servoMaxUs", fc.servoMaxUs, 100, 3000, ok);
         }
         if (auto* ang = a->find("angle")) {
             auto& ac = in.air.angle;
@@ -366,12 +366,12 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             ac.nominal01 = (float)ang->num_or("nominal01", ac.nominal01);
             ac.max01 = (float)ang->num_or("max01", ac.max01);
             ac.useCc74 = ang->bool_or("useCc74", ac.useCc74);
-            ac.servoMinUs = (uint16_t)ang->int_or("servoMinUs", ac.servoMinUs);
-            ac.servoMaxUs = (uint16_t)ang->int_or("servoMaxUs", ac.servoMaxUs);
+            ac.servoMinUs = (uint16_t)checkedInt(*ang, "servoMinUs", ac.servoMinUs, 100, 3000, ok);
+            ac.servoMaxUs = (uint16_t)checkedInt(*ang, "servoMaxUs", ac.servoMaxUs, 100, 3000, ok);
         }
         if (auto* se = a->find("sensor")) {
             auto& sc = in.air.sensor;
-            sc.type = (AirSensorType)se->int_or("type", (int)sc.type);
+            sc.type = (AirSensorType)checkedInt(*se, "type", (int)sc.type, 0, 7, ok);
             sc.pin = (int8_t)checkedInt(*se, "pin", sc.pin, PIN_LO, PIN_HI, ok);
             sc.i2cAddr = (uint8_t)checkedInt(*se, "i2cAddr", sc.i2cAddr, 0, 127, ok);
             sc.rawMin = (float)se->num_or("rawMin", sc.rawMin);
@@ -388,14 +388,14 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
         in.air.minNoteMs = (uint32_t)a->num_or("minNoteMs", in.air.minNoteMs);
     }
     if (auto* sq = v.find("seq")) {
-        in.seq.mono = (MonoPolicy)sq->int_or("mono", (int)in.seq.mono);
-        in.seq.legato = (LegatoPolicy)sq->int_or("legato", (int)in.seq.legato);
+        in.seq.mono = (MonoPolicy)checkedInt(*sq, "mono", (int)in.seq.mono, 0, 2, ok);
+        in.seq.legato = (LegatoPolicy)checkedInt(*sq, "legato", (int)in.seq.legato, 0, 5, ok);
         in.seq.legatoMaxDistanceMm = (float)sq->num_or("legatoMaxDistanceMm", in.seq.legatoMaxDistanceMm);
         in.seq.legatoMaxTimeMs = (uint32_t)sq->num_or("legatoMaxTimeMs", in.seq.legatoMaxTimeMs);
         in.seq.legatoMaxMoveTimeMs = (float)sq->num_or("legatoMaxMoveTimeMs", in.seq.legatoMaxMoveTimeMs);
         in.seq.minNoteMs = (uint32_t)sq->num_or("minNoteMs", in.seq.minNoteMs);
         in.seq.prepareTimeoutMs = (uint32_t)sq->num_or("prepareTimeoutMs", in.seq.prepareTimeoutMs);
-        in.seq.vibratoUnit = (VibratoUnit)sq->int_or("vibratoUnit", (int)in.seq.vibratoUnit);
+        in.seq.vibratoUnit = (VibratoUnit)checkedInt(*sq, "vibratoUnit", (int)in.seq.vibratoUnit, 0, 2, ok);
         in.seq.vibratoRateHz = (float)sq->num_or("vibratoRateHz", in.seq.vibratoRateHz);
     }
     if (auto* cc = v.find("cc")) {
@@ -573,7 +573,9 @@ inline ConfigDecodeResult configFromJson(const std::string& text, RuntimeConfig&
         cfg.schemaVersion = (uint32_t)ver;
         if (auto* d = root->find("device")) {
             std::snprintf(cfg.device.name, sizeof(cfg.device.name), "%s", d->str_or("name", cfg.device.name).c_str());
-            cfg.device.board = (BoardKind)d->int_or("board", (int)cfg.device.board);
+            long bd = d->int_or("board", (int)cfg.device.board);
+            if (bd < 0 || bd > 2) { r.error = "device.board out of range"; return r; }
+            cfg.device.board = (BoardKind)bd;
         }
         if (auto* n = root->find("network")) {
             std::snprintf(cfg.network.apSsid, sizeof(cfg.network.apSsid), "%s", n->str_or("apSsid", cfg.network.apSsid).c_str());
@@ -593,9 +595,10 @@ inline ConfigDecodeResult configFromJson(const std::string& text, RuntimeConfig&
             if (tr < -64 || tr > 63) { r.error = "midi.transpose out of -64..63"; return r; }
             cfg.midi.transpose = (int8_t)tr;
         }
+        // Reject an out-of-range instrumentCount rather than silently clamping
+        // it (review #6 §14) — a clamp would hide a malformed config.
         long count = root->int_or("instrumentCount", 1);
-        if (count < 0) count = 0;
-        if (count > MAX_INSTRUMENTS) count = MAX_INSTRUMENTS;
+        if (count < 0 || count > MAX_INSTRUMENTS) { r.error = "instrumentCount out of range"; return r; }
         cfg.instrumentCount = (uint8_t)count;
         bool ok = true;
         if (auto* arr = root->find("instruments"))

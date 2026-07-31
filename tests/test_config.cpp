@@ -130,6 +130,29 @@ TEST(config_rejects_out_of_range_normalized) {
 }
 
 // Review #5 §21: servo pulse-width fields are range-checked before narrowing.
+// Review #6 §14: an enum value that would narrow (256→0) into a valid enum is
+// rejected pre-narrow, not silently accepted.
+TEST(config_rejects_out_of_range_enum) {
+    RuntimeConfig c = defaultConfig();
+    std::string j = configToJson(c);
+    auto p = j.find("\"type\":0,\"travelMm\"");   // motion.type
+    CHECK(p != std::string::npos);
+    j.replace(p, std::string("\"type\":0").size(), "\"type\":256");
+    RuntimeConfig d;
+    CHECK(!configFromJson(j, d).ok);
+}
+
+// Review #6 §14: an out-of-range instrumentCount is rejected, not clamped.
+TEST(config_rejects_instrument_count_overflow) {
+    RuntimeConfig c = defaultConfig();
+    std::string j = configToJson(c);
+    auto p = j.find("\"instrumentCount\":1");
+    CHECK(p != std::string::npos);
+    j.replace(p, std::string("\"instrumentCount\":1").size(), "\"instrumentCount\":99");
+    RuntimeConfig d;
+    CHECK(!configFromJson(j, d).ok);
+}
+
 TEST(config_rejects_out_of_range_servo_pulse) {
     RuntimeConfig c = defaultConfig();
     c.instruments[0].motion.type = SlideDriveType::SingleServo;
