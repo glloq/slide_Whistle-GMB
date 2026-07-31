@@ -134,7 +134,10 @@ public:
         estopped_ = true;
         forceSafe();
         state_ = AirState::EStopped;
-        fault_ = FaultCode::EmergencyStop;
+        // Keep the ROOT cause (Overpressure, SensorMissing, PumpTimeout, …) if
+        // one is already latched — EStopped records the safety action, fault()
+        // still reports why (review #6 §19).
+        if (fault_ == FaultCode::None) fault_ = FaultCode::EmergencyStop;
     }
 
     void rearm() override {

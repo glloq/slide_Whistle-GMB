@@ -73,6 +73,25 @@ TEST(fan_source_ready_after_spinup) {
     CHECK(s.src[0] > 0.0f);
 }
 
+// Review #6 §18: the fan stop-delay is measured with elapsed_u32 from the idle
+// start, so it survives the millis() wrap (the old absolute compare stopped the
+// fan immediately when idled near the wrap).
+TEST(fan_source_stop_delay_rollover_safe) {
+    FakeAirSink s; AirConfig c;
+    c.source.type = AirSourceType::FanPwm; c.source.spinUpMs = 0; c.source.stopDelayMs = 50;
+    c.source.idle01 = 0.0f; c.source.min01 = 0.2f; c.source.max01 = 1.0f;
+    FanSource f; f.begin(c, &s);
+    AirNoteRequest r; r.velocity = 100;
+    uint32_t t = 0xFFFFFFE0u;                 // near the wrap
+    f.prepare(r, t); f.run(r, t);
+    CHECK(s.src[0] > 0.0f);                    // running
+    f.idle(t); f.update(t);
+    f.update(t + 30);                          // 30 ms < 50, crossing the wrap
+    CHECK(s.src[0] > 0.0f);                    // NOT stopped prematurely
+    f.update(t + 60);                          // 60 ms > 50
+    CHECK_NEAR(s.src[0], 0.0f, 1e-3);          // idled down at the right time
+}
+
 TEST(pump_direct_cascade) {
     FakeAirSink s; AirConfig c;
     c.source.type = AirSourceType::PumpsDirect; c.source.pumpCount = 3; c.source.cascadeDelayMs = 100;
