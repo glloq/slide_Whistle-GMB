@@ -206,6 +206,11 @@ private:
         RuntimeConfig cand;
         ConfigDecodeResult dec = configFromJson(json, cand);
         if (!dec.ok) return reply(400, apiErr("CONFIG_INVALID", dec.error.empty() ? "config rejected" : dec.error));
+        // If the payload carried an integrity checksum, it MUST match — the
+        // normal POST path enforced only dec.ok, unlike ConfigStore::importJson,
+        // so a tampered wrapped config could slip through (review #5 §22). An
+        // unwrapped config has checksumOk=true, so this only rejects real tamper.
+        if (!dec.checksumOk) return reply(400, apiErr("BAD_CHECKSUM", "config checksum mismatch"));
         HardwareResourceValidator v; buildClaims(v, cand);
         auto issues = v.validate();
         if (HardwareResourceValidator::hasErrors(issues)) {

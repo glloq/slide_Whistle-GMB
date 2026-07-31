@@ -244,6 +244,21 @@ TEST(config_needs_restart_covers_more_fields) {
     { RuntimeConfig b = a; b.midi.transpose = (int8_t)(a.midi.transpose + 1); CHECK(!configNeedsRestart(a, b)); }
 }
 
+// Review #5 §22: POST /config must reject a wrapped config whose integrity
+// checksum no longer matches its content (the normal path checked only dec.ok).
+TEST(api_config_rejects_bad_checksum) {
+    Rig g; g.begin();
+    std::string body = configToJson(g.live);      // wrapped {checksum, config}
+    // Tamper the CONTENT (valid value) so the recomputed checksum diverges from
+    // the stored one — an unwrapped/consistent config would still pass.
+    auto pos = body.find("\"transpose\":0");
+    CHECK(pos != std::string::npos);
+    body.replace(pos, std::string("\"transpose\":0").size(), "\"transpose\":5");
+    ApiReply r = g.req("POST", "/api/v1/config", body, g.adminTok);
+    CHECK_EQ(r.status, 400);
+    CHECK(Rig::parse(r.body).find("error")->str_or("code", "") == "BAD_CHECKSUM");
+}
+
 TEST(api_restart_flag) {
     Rig g; g.begin();
     CHECK(!g.api.restartRequested());
