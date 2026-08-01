@@ -302,6 +302,32 @@ TEST(stepper_homing_toward_max_reference) {
     CHECK(act.requestPositionMm(20.0f));                // an inward target is accepted
 }
 
+// Review #8 §5: on a fast reversal (velocity still positive, new target to the
+// left and close) the profile must DECELERATE the opposing velocity, never
+// accelerate it further in the wrong direction.
+TEST(stepper_reversal_does_not_accelerate_wrong_way) {
+    FakeSink sink; sink.endstopAtMm = 0.0f;
+    auto c = stepperCfg(); c.softMaxMm = 100; c.maxSpeedMmS = 200; c.accelMmS2 = 1000;
+    StepDirSlideActuator act(&sink);
+    act.begin(c); act.requestHoming(); pump(act, 0, 3000);
+    // Build a rightward velocity toward 60 mm.
+    CHECK(act.requestPositionMm(60.0f));
+    uint32_t t = 4000;
+    while (act.velocityMmS() < 80.0f && t < 4000 + 2000) { t += 1000; act.update(t); }
+    CHECK(act.velocityMmS() > 0.0f);                 // moving right
+    float vBefore = act.velocityMmS();
+    float posAt = act.currentPositionMm();
+    // Command a target just to the LEFT (close) — a reversal.
+    CHECK(act.requestPositionMm(posAt - 0.5f));
+    t += 1000; act.update(t);                         // one integration step
+    // The (still positive) velocity must have DECREASED, not grown.
+    CHECK(act.velocityMmS() < vBefore);
+    // And over the next few steps it keeps dropping toward/through zero, it does
+    // not run away toward vmax.
+    float vPrev = act.velocityMmS();
+    for (int i = 0; i < 5; ++i) { t += 1000; act.update(t); CHECK(act.velocityMmS() <= vPrev + 1e-3f); vPrev = act.velocityMmS(); }
+}
+
 // Review #6: applyDynamic changes speed/accel/soft-limits live (not pins/type).
 TEST(actuator_apply_dynamic_soft_limits) {
     FakeSink sink; sink.endstopAtMm = 0.0f;

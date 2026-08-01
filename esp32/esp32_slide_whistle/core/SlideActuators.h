@@ -126,6 +126,7 @@ public:
 
     float currentPositionMm() const override { return pos_; }
     float targetPositionMm()  const override { return target_; }
+    float velocityMmS() const { return vel_; }   // telemetry / tests (signed)
     MotionState state() const override { return state_; }
     FaultCode   fault() const override { return fault_; }
 
@@ -155,9 +156,16 @@ protected:
             if (state_ == MotionState::Moving) state_ = MotionState::Holding;
             return;
         }
-        // decelerate if we would overshoot, else accelerate toward target
-        if (std::fabs(d) <= stopDist) vel_ -= dir * a * dt;   // brake
-        else                          vel_ += dir * a * dt;   // push
+        // `dir` is the direction TO the target. Braking must only kick in while we
+        // are actually moving TOWARD the target and would overshoot; if the
+        // current velocity OPPOSES the target (a fast reversal — legato, return
+        // note, pitch bend), always push toward the target so the opposing
+        // velocity is cancelled first. The old code braked purely on target
+        // proximity, so `vel_ -= dir*a*dt` with dir<0 and vel_>0 accelerated the
+        // wrong way (review #8 §5).
+        const bool movingTowardTarget = (vel_ * dir) > 0.0f;
+        if (movingTowardTarget && std::fabs(d) <= stopDist) vel_ -= dir * a * dt;  // brake
+        else                                                vel_ += dir * a * dt;  // push toward target
         vel_ = clampv(vel_, -vmax, vmax);
         pos_ += vel_ * dt;
 
