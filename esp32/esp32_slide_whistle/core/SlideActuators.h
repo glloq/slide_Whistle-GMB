@@ -245,8 +245,10 @@ protected:
 
     void homingStep(float dt, uint32_t nowUs) override {
         if (!havePhaseTime_) { phaseStartUs_ = nowUs; havePhaseTime_ = true; }
-        // per-phase timeout — never spins forever (correction #4/#5)
-        if (elapsed_u32(nowUs, phaseStartUs_) > cfg_.stepper.phaseTimeoutMs * 1000u) {
+        // per-phase timeout — never spins forever (correction #4/#5). 64-bit
+        // product so a large phaseTimeoutMs cannot overflow the ms→us scale
+        // (review #8 §19).
+        if (elapsed_u32(nowUs, phaseStartUs_) > (uint64_t)cfg_.stepper.phaseTimeoutMs * 1000u) {
             fault_ = FaultCode::HomingTimeout;
             state_ = MotionState::Fault;
             if (sink_) sink_->enableDriver(false);

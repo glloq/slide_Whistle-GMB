@@ -132,6 +132,15 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
                 break;
             case SlideDriveType::Disabled: break;
         }
+        // Soft limits must sit inside the physical travel and be ordered — an
+        // out-of-travel or inverted window is a config error, not a clamp
+        // (review #8 §19). Scaled to mm×100 so fractional limits still compare.
+        if (in.motion.type != SlideDriveType::Disabled) {
+            long travel = (long)(in.motion.travelMm * 100.0f);
+            v.claimBound((long)(in.motion.softMinMm * 100.0f), 0, travel, base + ".motion.softMinMm");
+            v.claimBound((long)(in.motion.softMaxMm * 100.0f), 0, travel, base + ".motion.softMaxMm");
+            v.claimRange((long)(in.motion.softMinMm * 100.0f), (long)(in.motion.softMaxMm * 100.0f), base + ".motion.softLimits");
+        }
 
         // --- air source pins (fan/pumps) ---
         {
@@ -141,7 +150,10 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
                 // Both fan modes drive the pin through LEDC in the Esp air sink,
                 // so both consume a channel — not only FanPwm (review #7 §14).
                 v.claimLedc(base + ".air.source.fanLedc");
+                // source drive levels must be ordered (review #8 §19)
+                v.claimRange((long)(src.min01 * 1000.0f), (long)(src.max01 * 1000.0f), base + ".air.source.driveRange");
             } else if (src.type == AirSourceType::PumpsDirect || src.type == AirSourceType::PumpsTank) {
+                v.claimRange((long)(src.min01 * 1000.0f), (long)(src.max01 * 1000.0f), base + ".air.source.driveRange");
                 for (uint8_t p = 0; p < src.pumpCount && p < MAX_PUMPS; ++p) {
                     v.requirePin(src.pin[p], true, false, base + ".air.source.pump[" + std::to_string(p) + "]", own + " pump");
                     v.claimLedc(base + ".air.source.pumpLedc[" + std::to_string(p) + "]");
@@ -154,6 +166,12 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
         // --- gate pin ---
         // FlowServoAsValve reuses the flow servo, so the flow claim already
         // covers the pin — do not claim it twice.
+        // FlowServoAsValve is declared but not wired: MainApp drives a separate
+        // (unattached) gate servo while the flow servo runs independently, so the
+        // "valve" closes nothing. Reject it until the sharing is implemented
+        // (review #8 §13) rather than silently reaching Ready.
+        if (in.air.gate.type == AirGateType::FlowServoAsValve)
+            v.markUnsupported(base + ".air.gate.type", "flow-servo-as-valve gate");
         if (in.air.gate.type != AirGateType::None &&
             in.air.gate.type != AirGateType::FlowServoAsValve) {
             if (in.air.gate.backend == PwmBackend::Pca9685)

@@ -252,6 +252,42 @@ TEST(validate_homing_endstop_and_flow_pin_required) {
     CHECK(hasCode(v2.validate(), "PIN_REQUIRED"));
 }
 
+// Review #8 §13: FlowServoAsValve is not actually wired (the gate servo is left
+// unattached), so selecting it is UNSUPPORTED_BACKEND rather than a silent
+// no-close valve.
+TEST(validate_flow_servo_as_valve_unsupported) {
+    RuntimeConfig c = defaultConfig(); c.instrumentCount = 1;
+    c.instruments[0].enabled = true;
+    applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+    c.instruments[0].air.gate.type = AirGateType::FlowServoAsValve;
+    c.instruments[0].air.gate.pin  = c.instruments[0].air.flow.pin;
+    HardwareResourceValidator v; buildClaims(v, c);
+    CHECK(hasCode(v.validate(), "UNSUPPORTED_BACKEND"));
+}
+
+// Review #8 §19: soft limits must sit inside travel and be ordered; source
+// drive levels must be ordered.
+TEST(validate_structural_soft_limits_and_levels) {
+    // soft max beyond travel
+    { RuntimeConfig c = defaultConfig(); c.instrumentCount = 1; c.instruments[0].enabled = true;
+      applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+      c.instruments[0].motion.travelMm = 100; c.instruments[0].motion.softMaxMm = 150;
+      HardwareResourceValidator v; buildClaims(v, c);
+      CHECK(hasCode(v.validate(), "BOUND_INVALID")); }
+    // inverted soft window
+    { RuntimeConfig c = defaultConfig(); c.instrumentCount = 1; c.instruments[0].enabled = true;
+      applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+      c.instruments[0].motion.softMinMm = 60; c.instruments[0].motion.softMaxMm = 40;
+      HardwareResourceValidator v; buildClaims(v, c);
+      CHECK(hasCode(v.validate(), "RANGE_INVALID")); }
+    // source min01 > max01
+    { RuntimeConfig c = defaultConfig(); c.instrumentCount = 1; c.instruments[0].enabled = true;
+      applyPreset(c.instruments[0], PresetId::StepperFanPwmFlow);
+      c.instruments[0].air.source.min01 = 0.9f; c.instruments[0].air.source.max01 = 0.3f;
+      HardwareResourceValidator v; buildClaims(v, c);
+      CHECK(hasCode(v.validate(), "RANGE_INVALID")); }
+}
+
 // Review #7 §14: a FanOnOff source consumes a LEDC channel (it is driven via
 // PWM in the air sink), not only FanPwm.
 TEST(validate_fan_onoff_claims_ledc) {

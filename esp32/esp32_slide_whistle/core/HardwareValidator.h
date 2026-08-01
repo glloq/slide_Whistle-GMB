@@ -86,6 +86,7 @@ struct PinClaim {
 };
 
 struct RangeClaim { long lo, hi; std::string field; };
+struct BoundClaim { long v, lo, hi; std::string field; };
 struct PcaClaim   { uint8_t addr, channel; std::string field; };
 struct LedcClaim  { std::string field; };
 
@@ -94,7 +95,7 @@ public:
     explicit HardwareResourceValidator(BoardProfile b = BoardProfile::wroom())
         : board_(b) {}
 
-    void reset() { pins_.clear(); ranges_.clear(); pcas_.clear(); ledc_.clear(); required_.clear(); unsupported_.clear(); wifiOn_ = true; }
+    void reset() { pins_.clear(); ranges_.clear(); bounds_.clear(); pcas_.clear(); ledc_.clear(); required_.clear(); unsupported_.clear(); wifiOn_ = true; }
     void setBoard(const BoardProfile& b) { board_ = b; }
     void setWifi(bool on) { wifiOn_ = on; }
 
@@ -109,6 +110,9 @@ public:
         pins_.push_back({pin, output, adc, field, owner});
     }
     void claimRange(long lo, long hi, const std::string& field) { ranges_.push_back({lo, hi, field}); }
+    // Require lo <= v <= hi, else BOUND_INVALID (e.g. soft limits within travel,
+    // a calibration point inside the course) — review #8 §19.
+    void claimBound(long v, long lo, long hi, const std::string& field) { bounds_.push_back({v, lo, hi, field}); }
     void claimPca(uint8_t addr, uint8_t ch, const std::string& field) { pcas_.push_back({addr, ch, field}); }
     void claimLedc(const std::string& field) { ledc_.push_back({field}); }
     // Flag a configuration that selects a backend the firmware does not yet
@@ -160,6 +164,10 @@ public:
         for (const auto& r : ranges_)
             if (r.lo > r.hi)
                 add(out, "RANGE_INVALID", "min (" + s(r.lo) + ") exceeds max (" + s(r.hi) + ")", r.field);
+        // 5b. value-within-bounds
+        for (const auto& b : bounds_)
+            if (b.v < b.lo || b.v > b.hi)
+                add(out, "BOUND_INVALID", s(b.v) + " is outside [" + s(b.lo) + ".." + s(b.hi) + "]", b.field);
         // 6. mandatory pins left unassigned for the selected mode (#24)
         for (const auto& field : required_)
             add(out, "PIN_REQUIRED", "a pin is required for the selected mode but is unassigned", field);
@@ -187,6 +195,7 @@ private:
     bool wifiOn_ = true;
     std::vector<PinClaim>  pins_;
     std::vector<RangeClaim> ranges_;
+    std::vector<BoundClaim> bounds_;
     std::vector<PcaClaim>   pcas_;
     std::vector<LedcClaim>  ledc_;
     std::vector<std::string> required_;   // fields of mandatory-but-unassigned pins
