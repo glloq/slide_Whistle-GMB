@@ -344,7 +344,7 @@ TEST(config_roundtrip_full_fields) {
     so.spinUpMs=250; so.stopDelayMs=600; so.cascadeDelayMs=90;
     so.tankMode = TankRegulationMode::Level; so.tankPwm=false; so.target=70;
     so.requireSensor=true; so.lowThresh=45; so.highThresh=85; so.safetyThresh=110;
-    so.refillTimeoutMs=7000; so.minOffMs=400;
+    so.refillTimeoutMs=7000; so.minOffMs=400; so.activeHigh=false;
     auto& g = i.air.gate;
     g.type = AirGateType::ServoValve; g.pin=27; g.backend=PwmBackend::Gpio; g.pcaChannel=2;
     g.activeHigh=false; g.openTimeoutMs=1500; g.peak01=0.9f; g.peakMs=35; g.hold01=0.35f;
@@ -352,7 +352,7 @@ TEST(config_roundtrip_full_fields) {
     auto& f = i.air.flow;
     f.type = FlowControlType::FlowServo; f.pin=26; f.backend=PwmBackend::Pca9685; f.pcaChannel=7;
     f.min=8; f.nominal=70; f.max=118; f.rest01=0.05f; f.curve=VelocityCurve::Exponential;
-    f.expo=2.6f; f.maxSlewPerMs=0.03f;
+    f.expo=2.6f; f.maxSlewPerMs=0.03f; f.activeHigh=false;
     auto& an = i.air.angle;
     an.enabled=true; an.pin=13; an.backend=PwmBackend::Gpio; an.pcaChannel=1;
     an.rest01=0.4f; an.min01=0.1f; an.nominal01=0.5f; an.max01=0.9f; an.useCc74=false;
@@ -393,6 +393,8 @@ TEST(config_roundtrip_full_fields) {
     CHECK_EQ(o.air.source.pin[2], 18);
     CHECK(o.air.source.tankMode == TankRegulationMode::Level);
     CHECK_EQ(o.air.source.refillTimeoutMs, 7000u);
+    CHECK(!o.air.source.activeHigh);   // polarity round-trips (#9 §4.10)
+    CHECK(!o.air.flow.activeHigh);
     CHECK_NEAR(o.air.gate.hold01, 0.35f, 1e-3);
     CHECK_EQ(o.air.gate.peakMs, 35u);
     CHECK_NEAR(o.air.gate.open01, 0.85f, 1e-3);

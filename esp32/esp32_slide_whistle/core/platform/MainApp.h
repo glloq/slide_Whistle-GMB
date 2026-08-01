@@ -225,20 +225,20 @@ private:
         const auto& a = ic.air;
         // source
         if (a.source.type == AirSourceType::FanOnOff || a.source.type == AirSourceType::FanPwm)
-            air_[i].configureSourcePwm(0, a.source.pin[0], 25000);
+            air_[i].configureSourcePwm(0, a.source.pin[0], 25000, a.source.activeHigh);
         else if (a.source.type == AirSourceType::PumpsDirect || a.source.type == AirSourceType::PumpsTank)
             for (uint8_t p = 0; p < a.source.pumpCount && p < MAX_PUMPS; ++p)
-                air_[i].configureSourcePwm(p, a.source.pin[p], 25000);
+                air_[i].configureSourcePwm(p, a.source.pin[p], 25000, a.source.activeHigh);
         // gate — solenoid uses digital / PWM, servo gates use a µs pulse (#13)
         switch (a.gate.type) {
             case AirGateType::SolenoidSimple: air_[i].configureSolenoid(a.gate.pin, a.gate.activeHigh); break;
-            case AirGateType::SolenoidPwm:    air_[i].configureSolenoidPwm(a.gate.pin, 20000); break;
+            case AirGateType::SolenoidPwm:    air_[i].configureSolenoidPwm(a.gate.pin, 20000, a.gate.activeHigh); break;
             case AirGateType::None:           break;
             default: air_[i].configureGateServo(a.gate.pin, a.gate.servoMinUs, a.gate.servoMaxUs); break;
         }
         // flow
         if (a.flow.type == FlowControlType::FlowServo)      air_[i].configureFlowServo(a.flow.pin, a.flow.servoMinUs, a.flow.servoMaxUs);
-        else if (a.flow.type != FlowControlType::None)      air_[i].configureFlowPwm(a.flow.pin, 20000);
+        else if (a.flow.type != FlowControlType::None)      air_[i].configureFlowPwm(a.flow.pin, 20000, a.flow.activeHigh);
         // angle
         if (a.angle.enabled) air_[i].configureAngleServo(a.angle.pin, a.angle.servoMinUs, a.angle.servoMaxUs);
         // sensor

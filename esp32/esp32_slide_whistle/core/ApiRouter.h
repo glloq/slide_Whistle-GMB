@@ -96,7 +96,7 @@ inline bool unappliedParamsDiffer(const InstrumentConfig& a, const InstrumentCon
         ax.pidKp != bx.pidKp || ax.pidKi != bx.pidKi || ax.lowThresh != bx.lowThresh ||
         ax.highThresh != bx.highThresh || ax.safetyThresh != bx.safetyThresh ||
         ax.refillTimeoutMs != bx.refillTimeoutMs || ax.minOffMs != bx.minOffMs ||
-        ax.requireSensor != bx.requireSensor) return true;
+        ax.requireSensor != bx.requireSensor || ax.activeHigh != bx.activeHigh) return true;
     // --- gate (type/pin/backend/pca compared separately) ---
     const auto& ag = a.air.gate; const auto& bg = b.air.gate;
     if (ag.servoMinUs != bg.servoMinUs || ag.servoMaxUs != bg.servoMaxUs ||
@@ -106,7 +106,8 @@ inline bool unappliedParamsDiffer(const InstrumentConfig& a, const InstrumentCon
         ag.openDelayMs != bg.openDelayMs || ag.closeDelayMs != bg.closeDelayMs) return true;
     // --- flow servo window (shaping min/nominal/max/curve/expo/slew/rest ARE dynamic) ---
     const auto& af = a.air.flow; const auto& bf = b.air.flow;
-    if (af.servoMinUs != bf.servoMinUs || af.servoMaxUs != bf.servoMaxUs) return true;
+    if (af.servoMinUs != bf.servoMinUs || af.servoMaxUs != bf.servoMaxUs ||
+        af.activeHigh != bf.activeHigh) return true;
     // --- angle (enabled/pin/backend/pca compared separately) ---
     const auto& aa = a.air.angle; const auto& ba = b.air.angle;
     if (aa.servoMinUs != ba.servoMinUs || aa.servoMaxUs != ba.servoMaxUs ||

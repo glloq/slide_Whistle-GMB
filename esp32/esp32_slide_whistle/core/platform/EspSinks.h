@@ -280,9 +280,9 @@ public:
     // Each helper records a failed LEDC/servo attach in ok_ so configOk() can
     // veto Ready — a pump/gate/flow with no PWM channel would silently move no
     // air otherwise (review #9 §3.8).
-    void configureSourcePwm(uint8_t i, int pin, uint32_t freq) {
+    void configureSourcePwm(uint8_t i, int pin, uint32_t freq, bool activeHigh = true) {
         if (i >= 3 || pin < 0) return;
-        PwmConfig p; p.pin = pin; p.freqHz = freq;
+        PwmConfig p; p.pin = pin; p.freqHz = freq; p.activeHigh = activeHigh;
         if (!source_[i].attach(p)) ok_ = false;
     }
     void configureSolenoid(int pin, bool activeHigh) {
@@ -291,9 +291,9 @@ public:
         pinMode(pin, OUTPUT);
         digitalWrite(pin, activeHigh ? LOW : HIGH);   // force CLOSED immediately (#8)
     }
-    void configureSolenoidPwm(int pin, uint32_t freq) {
+    void configureSolenoidPwm(int pin, uint32_t freq, bool activeHigh = true) {
         if (pin < 0) return;
-        PwmConfig p; p.pin = pin; p.freqHz = freq;
+        PwmConfig p; p.pin = pin; p.freqHz = freq; p.activeHigh = activeHigh;
         if (!gatePwm_.attach(p)) ok_ = false; else gatePwm_.writeRaw(0);   // closed
     }
     void configureGateServo(int pin, uint16_t minUs, uint16_t maxUs) {
@@ -302,9 +302,9 @@ public:
     void configureFlowServo(int pin, uint16_t minUs, uint16_t maxUs) {
         if (pin >= 0 && !flowServo_.attach(pin, minUs, maxUs)) ok_ = false;
     }
-    void configureFlowPwm(int pin, uint32_t freq) {
+    void configureFlowPwm(int pin, uint32_t freq, bool activeHigh = true) {
         if (pin < 0) return;
-        PwmConfig p; p.pin = pin; p.freqHz = freq;
+        PwmConfig p; p.pin = pin; p.freqHz = freq; p.activeHigh = activeHigh;
         if (!flowPwm_.attach(p)) ok_ = false;
     }
     void configureAngleServo(int pin, uint16_t minUs, uint16_t maxUs) {

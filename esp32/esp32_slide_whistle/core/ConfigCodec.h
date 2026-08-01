@@ -184,6 +184,7 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     src.set("target", so.target);
     src.set("pidKp", so.pidKp); src.set("pidKi", so.pidKi);
     src.set("requireSensor", so.requireSensor);
+    src.set("activeHigh", so.activeHigh);
     src.set("lowThresh", so.lowThresh);
     src.set("highThresh", so.highThresh);
     src.set("safetyThresh", so.safetyThresh);
@@ -208,6 +209,7 @@ inline JsonValue instrumentToJson(const InstrumentConfig& in) {
     f.set("min", (int)fc.min); f.set("nominal", (int)fc.nominal); f.set("max", (int)fc.max);
     f.set("rest01", fc.rest01); f.set("curve", (int)fc.curve); f.set("expo", fc.expo);
     f.set("maxSlewPerMs", fc.maxSlewPerMs);
+    f.set("activeHigh", fc.activeHigh);
     f.set("servoMinUs", (int)fc.servoMinUs); f.set("servoMaxUs", (int)fc.servoMaxUs);
     a.set("flow", f);
     const auto& ac = in.air.angle;
@@ -336,6 +338,7 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             so.pidKp = checkedNum(*src, "pidKp", so.pidKp, 0, 100000, ok);
             so.pidKi = checkedNum(*src, "pidKi", so.pidKi, 0, 100000, ok);
             so.requireSensor = src->bool_or("requireSensor", so.requireSensor);
+            so.activeHigh = src->bool_or("activeHigh", so.activeHigh);
             so.lowThresh = checkedNum(*src, "lowThresh", so.lowThresh, -1000000, 1000000, ok);
             so.highThresh = checkedNum(*src, "highThresh", so.highThresh, -1000000, 1000000, ok);
             so.safetyThresh = checkedNum(*src, "safetyThresh", so.safetyThresh, -1000000, 1000000, ok);
@@ -373,6 +376,7 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             fc.curve = (VelocityCurve)checkedInt(*f, "curve", (int)fc.curve, 0, 4, ok);
             fc.expo = checkedNum(*f, "expo", fc.expo, 0.01, 100, ok);
             fc.maxSlewPerMs = checkedNum(*f, "maxSlewPerMs", fc.maxSlewPerMs, 0, 1000, ok);
+            fc.activeHigh = f->bool_or("activeHigh", fc.activeHigh);
             fc.servoMinUs = (uint16_t)checkedInt(*f, "servoMinUs", fc.servoMinUs, 100, 3000, ok);
             fc.servoMaxUs = (uint16_t)checkedInt(*f, "servoMaxUs", fc.servoMaxUs, 100, 3000, ok);
         }
