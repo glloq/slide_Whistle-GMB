@@ -446,6 +446,7 @@ each with a test that fails without the change:
 | §4.9 Servos held last pose after Panic | FIXED·TESTED (Single/DualServo drive to their configured safeUs on e-stop) |
 | §4.10 Output polarity only on the simple solenoid | FIXED·TESTED (activeHigh on source + flow round-trips; propagated to fan/pump/PWM-solenoid/flow PWM; a change forces restart) |
 | §4.8 Overpressure/out-of-range only on PumpsTank | FIXED·TESTED (AirSafetyController trips Overpressure/OutOfRange/Stale/Missing for any source with a configured sensor) |
+| §4.6 Transpose applied twice once several MIDI transports feed the router | FIXED·TESTED (MidiRouter forwards raw notes; RealtimeEngine is the single transpose owner, so no transport can double-apply) |
 
 Still open from review #9 — hardware/architecture items that a bench or a larger
 refactor must close, tracked honestly rather than marked done: §3.3 the ISR is
@@ -453,9 +454,9 @@ not yet IRAM-placed and still calls digitalWrite (the l32r constraint — needs
 IRAM + register-level GPIO on a bench); §4.2/§4.3 applied-vs-desired config
 separation with atomic generations and inter-core locking; §4.4 surfacing a
 refused soft-limit apply as a typed ack; §4.5 per-source note ownership +
-watchdogMs; §4.6 the MIDI transports (DIN/BLE/RTP/USB) + the double-transpose
-guard once they attach to MidiRouter; §4.7 mode aliases that share one backend;
-the servo idle
+watchdogMs; §4.6 wiring the remaining MIDI transports (DIN/BLE/RTP/USB) onto
+MidiRouter (the double-transpose defect itself is fixed above); §4.7 mode aliases
+that share one backend; the servo idle
 detach path (detachIdleMs — the §4.9 safeUs-on-Panic is done, idle-detach is
 not); a real Custom board profile; §6 HTTP size-before-alloc + WS
 fragmentation/Origin; §7 fully-atomic persistence + in-flash LittleFS recovery;
