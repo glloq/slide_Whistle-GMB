@@ -271,38 +271,39 @@ TEST(sensor_stable_value_not_stale) {
     CHECK(sensor.fault() == FaultCode::None);
 }
 
-// Review #7 §20: a reading pinned to the exact same value for far longer than
-// the timeout (20×) is a stuck/failed sensor — it must become stale/faulted so
-// the safety layer can act, not silently pass as valid forever.
-TEST(sensor_frozen_becomes_stale) {
+// Review #8 §4: a genuinely stable reading is legitimate (settled tank, quiet
+// digital sensor) — it must NOT become stale/faulted from lack of variation
+// alone. frozen() stays a pure diagnostic.
+TEST(sensor_stable_value_stays_valid_even_when_frozen) {
     FakeAirSink s; s.sensorRaw = 50;
     AirConfig c; c.sensor.type = AirSensorType::PressureAnalog;
     c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
-    c.sensor.staleTimeoutMs = 100;                          // frozen window = 2000 ms
+    c.sensor.staleTimeoutMs = 100;                          // frozen diag window = 2000 ms
     AirSensor sensor; sensor.begin(c, &s);
-    for (uint32_t t = 1; t < 1500; ++t) sensor.update(t);   // still within the frozen window
-    CHECK(sensor.valid());
-    CHECK(sensor.fault() == FaultCode::None);
-    for (uint32_t t = 1500; t < 2200; ++t) sensor.update(t);// now past 20× the timeout
-    CHECK(sensor.frozen());
-    CHECK(!sensor.valid());                                  // frozen ⇒ not valid
-    CHECK(sensor.fault() == FaultCode::SensorStale);        // and reachable now
+    for (uint32_t t = 1; t < 3000; ++t) sensor.update(t);   // constant reading, long time
+    CHECK(sensor.frozen());                                 // diagnostic may flag it
+    CHECK(sensor.valid());                                  // but it is still VALID
+    CHECK(sensor.fault() == FaultCode::None);               // no fault from stability
 }
 
-// Review #7 §20: a frozen sensor trips the AirSafetyController (it acts on
-// SensorStale), so a stuck pressure reading no longer passes silently.
-TEST(safety_trips_on_frozen_sensor) {
+// Review #8 §4: "stale" means no FRESH sample. Losing the sensor (NaN reads)
+// past the timeout is what makes it stale and trips the safety layer.
+TEST(sensor_stale_on_lost_samples_trips_safety) {
     FakeAirSink s; s.sensorRaw = 50;
     AirConfig c; c.sensor.type = AirSensorType::PressureAnalog;
     c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
     c.sensor.staleTimeoutMs = 100;
     AirSensor sensor; sensor.begin(c, &s);
     AirSafetyController safety; safety.begin(c);
+    for (uint32_t t = 1; t < 300; ++t) sensor.update(t);    // healthy fresh samples
+    CHECK(sensor.valid());
+    s.sensorRaw = NAN;                                       // sensor lost (no fresh data)
     bool tripped = false;
-    for (uint32_t t = 1; t < 2300; ++t) {
+    for (uint32_t t = 300; t < 700; ++t) {
         sensor.update(t);
         if (safety.check(t, FaultCode::None, FaultCode::None, sensor)) { tripped = true; break; }
     }
+    CHECK(sensor.fault() == FaultCode::SensorStale);
     CHECK(tripped);
     CHECK(safety.fault() == FaultCode::SensorStale);
 }
