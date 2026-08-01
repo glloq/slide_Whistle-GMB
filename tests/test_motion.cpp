@@ -18,11 +18,13 @@ struct FakeSink : IMotionSink {
     float endstopAtMm = -1000.0f;
     int   syncCount = 0;          // times the executed-step counter was realigned
     float lastSyncMm = -1e9f;     // mm passed to the last syncPositionMm()
+    int   abortCalls = 0;         // times abortMotion() was called
     void writeStepperMm(float mm) override { lastStepperMm = mm; }
     void writeServoUs(uint8_t i, uint16_t us) override { if (i < 2) servoUs[i] = us; }
     void enableDriver(bool on) override { driverOn = on; }
     bool readEndstop(bool) override { return lastStepperMm <= endstopAtMm; }
     void syncPositionMm(float mm) override { ++syncCount; lastSyncMm = mm; }
+    void abortMotion() override { ++abortCalls; }
 };
 
 // Sink that models a step backend emitting a BOUNDED number of pulses per call,
@@ -241,6 +243,7 @@ TEST(emergency_stop_disables_and_blocks) {
     act.emergencyStop();
     CHECK(act.state() == MotionState::EStopped);
     CHECK(!sink.driverOn);
+    CHECK(sink.abortCalls >= 1);             // step generator halted (review #9 §3.1)
     CHECK(!act.requestPositionMm(10.0f));    // no motion after e-stop
 }
 

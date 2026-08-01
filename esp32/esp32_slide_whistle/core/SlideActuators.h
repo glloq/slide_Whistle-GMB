@@ -64,7 +64,7 @@ public:
             fault_ = FaultCode::TargetOutOfRange;
             state_ = MotionState::Fault;
             vel_ = 0.0f; target_ = pos_;
-            if (sink_) sink_->enableDriver(false);
+            if (sink_) { sink_->abortMotion(); sink_->enableDriver(false); }
             return false;
         }
         target_ = clampv(positionMm, cfg_.softMinMm, cfg_.softMaxMm);
@@ -86,7 +86,10 @@ public:
         // it — the EStopped state already records the safety action, and fault()
         // should still report why (review #6 §19).
         if (fault_ == FaultCode::None) fault_ = FaultCode::EmergencyStop;
-        if (sink_) sink_->enableDriver(false);
+        // Halt the step generator BEFORE (and regardless of) de-energising the
+        // driver: without an Enable pin, enableDriver(false) is a no-op and the
+        // pulse train would otherwise keep running after a Panic (review #9 §3.1).
+        if (sink_) { sink_->abortMotion(); sink_->enableDriver(false); }
     }
 
     bool isHomed() const override { return homed_; }
@@ -158,7 +161,7 @@ protected:
         if (fault_ == FaultCode::None) fault_ = f;   // keep the first/root cause
         state_ = MotionState::Fault;
         vel_ = 0.0f; target_ = pos_;
-        if (sink_) sink_->enableDriver(false);
+        if (sink_) { sink_->abortMotion(); sink_->enableDriver(false); }
     }
 
     float tickSeconds(uint32_t nowUs) {

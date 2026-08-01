@@ -109,6 +109,14 @@ public:
     // commanded position (review #7/#8 §6). Kept backend-agnostic so a future RMT
     // backend is a drop-in.
     virtual bool executedPositionMm(float& mm) const { (void)mm; return false; }
+
+    // Emergency abort of any in-flight motion generation: a step backend must
+    // immediately STOP producing STEP edges and drop its target onto the current
+    // executed position (review #9 §3.1). Called by the actuator on e-stop/fault
+    // so the pulse train halts even when there is no Enable pin — the virtual
+    // position and the physical position can no longer diverge after a Panic.
+    // Default no-op: absolute backends (servos) and plain fakes generate nothing.
+    virtual void abortMotion() {}
     virtual ~IMotionSink() = default;
 };
 

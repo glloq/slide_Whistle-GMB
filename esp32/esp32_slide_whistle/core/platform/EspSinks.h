@@ -54,14 +54,41 @@ public:
         startTimerOnce();
     }
     // Non-blocking: just publish the new target; the ISR walks curSteps_ to it.
-    void setTargetSteps(long t) { targetSteps_ = t; }
-    // Redefine the reference at a homing contact (no motion implied).
-    void syncSteps(long s) { curSteps_ = s; targetSteps_ = s; stepHigh_ = false; }
+    void setTargetSteps(long t) {
+        portENTER_CRITICAL(&mux_);
+        targetSteps_ = t;
+        portEXIT_CRITICAL(&mux_);
+    }
+    // Redefine the reference at a homing contact (no motion implied). Force STEP
+    // low first so a sync mid-pulse cannot leave the pin stuck high (review #9
+    // §3.2), and take the same lock the ISR uses so the multi-field update is
+    // atomic against a concurrent serviceTick().
+    void syncSteps(long s) {
+        portENTER_CRITICAL(&mux_);
+        if (stepHigh_ && stepPin_ >= 0) digitalWrite(stepPin_, LOW);
+        stepHigh_ = false; curSteps_ = s; targetSteps_ = s;
+        portEXIT_CRITICAL(&mux_);
+    }
+    // Emergency abort: stop generating pulses immediately (review #9 §3.1). Drop
+    // STEP low, drop the target onto the current executed count so the ISR has
+    // nothing left to walk, and clear the half-pulse state. The owning sink also
+    // de-energises the driver; this guarantees no further edges are produced even
+    // when there is no Enable pin.
+    void abort() {
+        portENTER_CRITICAL(&mux_);
+        if (stepHigh_ && stepPin_ >= 0) digitalWrite(stepPin_, LOW);
+        stepHigh_ = false; targetSteps_ = curSteps_;
+        portEXIT_CRITICAL(&mux_);
+    }
     long curSteps() const { return curSteps_; }
 
-    // One timer tick for this axis. Rising edge sets DIR + STEP high; the next
-    // tick drops STEP and advances the executed counter. Called from the ISR on
-    // hardware and directly from the unit test.
+    // One timer tick for this axis. Rising edge latches the DIRECTION and raises
+    // STEP; the next tick drops STEP and advances the executed counter USING THE
+    // LATCHED DIRECTION — never a freshly re-read target, so a target reversal
+    // between the two ticks cannot record a step the motor did not take, and an
+    // in-flight pulse is always completed (no STEP stuck high) even if the target
+    // became equal mid-pulse (review #9 §3.2). Called from the ISR on hardware
+    // and directly from the unit test.
     //
     // NOTE (bench work): this is intentionally NOT IRAM_ATTR. Marking it (and the
     // ISR trampoline) IRAM_ATTR triggers the toolchain's "dangerous relocation:
@@ -71,18 +98,22 @@ public:
     // out_w1tc). Running the ISR from flash works while the flash cache is
     // enabled, which is the case here, but is not robust across flash writes.
     void serviceTick() {
-        long tgt = targetSteps_, cur = curSteps_;
-        if (cur == tgt || stepPin_ < 0) return;
-        if (!stepHigh_) {
-            bool dir = (tgt > cur) ^ invertDir_;
-            if (dirPin_ >= 0) digitalWrite(dirPin_, dir ? HIGH : LOW);
-            digitalWrite(stepPin_, HIGH);
-            stepHigh_ = true;
-        } else {
+        if (stepPin_ < 0) return;
+        portENTER_CRITICAL_ISR(&mux_);
+        if (stepHigh_) {                         // ALWAYS complete an in-flight pulse
             digitalWrite(stepPin_, LOW);
             stepHigh_ = false;
-            curSteps_ = cur + ((tgt > cur) ? 1 : -1);
+            curSteps_ += pulseDir_ ? 1 : -1;     // latched direction, not re-read
+        } else {
+            long tgt = targetSteps_, cur = curSteps_;
+            if (cur != tgt) {
+                pulseDir_ = (tgt > cur);         // latch the direction for this pulse
+                if (dirPin_ >= 0) digitalWrite(dirPin_, (pulseDir_ ^ invertDir_) ? HIGH : LOW);
+                digitalWrite(stepPin_, HIGH);
+                stepHigh_ = true;
+            }
         }
+        portEXIT_CRITICAL_ISR(&mux_);
     }
 
 private:
@@ -112,6 +143,8 @@ private:
 
     int  stepPin_ = -1, dirPin_ = -1;
     bool invertDir_ = false, stepHigh_ = false, registered_ = false;
+    bool pulseDir_ = false;                       // latched at the rising edge
+    portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
     volatile long curSteps_ = 0, targetSteps_ = 0;
 };
 
@@ -154,6 +187,9 @@ public:
     // Test hook: on hardware the shared timer ISR services every axis; off-device
     // (no timer) the native backend test drives the pulse logic through here.
     void serviceStepGenTick() { stepGen_.serviceTick(); }
+
+    // Halt the pulse generator on an e-stop/fault (review #9 §3.1).
+    void abortMotion() override { stepGen_.abort(); }
 
     void writeServoUs(uint8_t index, uint16_t us) override {
         if (index > 1) return;
