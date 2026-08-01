@@ -313,6 +313,30 @@ TEST(sensor_stable_value_not_stale) {
     CHECK(sensor.fault() == FaultCode::None);
 }
 
+// Review #9 §4.8: overpressure protection is GLOBAL — a non-tank source (here
+// PumpsDirect) with a pressure sensor reading above safetyThresh trips the
+// safety controller, not only PumpsTank.
+TEST(safety_trips_on_overpressure_for_non_tank_source) {
+    FakeAirSink s; s.sensorRaw = 50;                      // healthy
+    AirConfig c;
+    c.source.type = AirSourceType::PumpsDirect; c.source.pumpCount = 1;
+    c.source.safetyThresh = 90.0f;
+    c.sensor.type = AirSensorType::PressureAnalog;
+    c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
+    AirSensor sensor; sensor.begin(c, &s);
+    AirSafetyController safety; safety.begin(c);
+    for (uint32_t t = 1; t < 50; ++t) { sensor.update(t); }
+    CHECK(!safety.check(49, FaultCode::None, FaultCode::None, sensor));   // 50 < 90, fine
+    s.sensorRaw = 95;                                     // overpressure (physical 95 >= 90)
+    bool tripped = false;
+    for (uint32_t t = 50; t < 120; ++t) {
+        sensor.update(t);
+        if (safety.check(t, FaultCode::None, FaultCode::None, sensor)) { tripped = true; break; }
+    }
+    CHECK(tripped);
+    CHECK(safety.fault() == FaultCode::Overpressure);
+}
+
 // Review #8 §4: a genuinely stable reading is legitimate (settled tank, quiet
 // digital sensor) — it must NOT become stale/faulted from lack of variation
 // alone. frozen() stays a pure diagnostic.

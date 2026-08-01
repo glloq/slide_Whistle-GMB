@@ -30,7 +30,21 @@ public:
             f = FaultCode::ValveTimeout;
         if (sourceFault != FaultCode::None) f = sourceFault;
         if (gateFault   != FaultCode::None) f = gateFault;
-        if (sensor.present() && sensor.fault() == FaultCode::SensorStale) f = FaultCode::SensorStale;
+        // A configured sensor protects EVERY source, not just PumpsTank (whose
+        // regulate() historically owned overpressure). For any source with a
+        // pressure/level sensor: overpressure beyond safetyThresh, an
+        // out-of-range reading, a stale reading, or — when the source requires it
+        // — a missing sensor all trip the safety layer (review #9 §4.8).
+        if (c_.sensor.type != AirSensorType::None) {
+            if (sensor.present()) {
+                if (sensor.fault() == FaultCode::SensorStale)        f = FaultCode::SensorStale;
+                else if (sensor.fault() == FaultCode::SensorOutOfRange) f = FaultCode::SensorOutOfRange;
+                if (c_.source.safetyThresh > 0.0f && sensor.valid() &&
+                    sensor.value() >= c_.source.safetyThresh)          f = FaultCode::Overpressure;
+            } else if (c_.source.requireSensor) {
+                f = FaultCode::SensorMissing;
+            }
+        }
         if (f != FaultCode::None) { tripped_ = true; fault_ = f; }
         return tripped_;
     }
