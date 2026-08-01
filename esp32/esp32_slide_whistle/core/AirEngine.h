@@ -83,7 +83,12 @@ public:
 
     void update(uint32_t nowMs) override {
         now_ = nowMs;
-        if (estopped_) return;
+        // Halt COMPLETELY once faulted or e-stopped: do NOT run the source / gate
+        // / flow updates (a source still flagged running_ could re-assert a level
+        // for a tick, producing repeated pulses at 1 kHz) and do NOT reset the
+        // safety controller's trip while the fault stands (review #8 §3). Just
+        // keep the outputs pinned safe every tick.
+        if (estopped_ || state_ == AirState::Fault) { forceOutputsSafe(); return; }
         sensor_.update(nowMs);
         src_->update(nowMs);
         gate_->update(nowMs);
@@ -91,7 +96,7 @@ public:
         safety_.noteGate(gate_->isOpen(), nowMs);
         if (safety_.check(nowMs, src_->fault(), gate_->fault(), sensor_)) {
             fault_ = safety_.fault();
-            forceSafe();
+            forceOutputsSafe();               // outputs off, but KEEP the trip latched
             state_ = AirState::Fault;
             return;
         }
@@ -136,7 +141,7 @@ public:
 
     void emergencyStop() override {
         estopped_ = true;
-        forceSafe();
+        forceOutputsSafe();          // keep the safety trip; rearm() clears it
         state_ = AirState::EStopped;
         // Keep the ROOT cause (Overpressure, SensorMissing, PumpTimeout, …) if
         // one is already latched — EStopped records the safety action, fault()
@@ -174,11 +179,13 @@ public:
     const AirSensor& sensor() const { return sensor_; }
 
 private:
-    void forceSafe() {
+    // Pin every output to its safe state WITHOUT touching the safety controller
+    // — used on the fault transition, during a held fault, and on e-stop so the
+    // trip stays latched until rearm() explicitly clears it (review #8 §3).
+    void forceOutputsSafe() {
         if (gate_) gate_->safeState();
         if (flow_) flow_->safeState();
         if (src_)  src_->safeState();
-        safety_.reset();
     }
 
     AirConfig cfg_; IAirSink* sink_ = nullptr;

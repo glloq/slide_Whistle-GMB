@@ -232,7 +232,12 @@ public:
         }
     }
     bool ready() const override { return ready_; }
+    // A Panic/e-stop must clear the RUN state, not only the output — otherwise
+    // update() re-asserts a level after Rearm with no new note (review #8 §2).
+    void safeState() override { reset(); BaseSource::safeState(); }
+    void resetFault() override { BaseSource::resetFault(); reset(); }
 private:
+    void reset() { running_ = false; idling_ = false; ready_ = false; }
     uint32_t preparedMs_ = 0, idleStartMs_ = 0;
     bool running_ = false, idling_ = false, ready_ = false;
 };
@@ -261,7 +266,13 @@ public:
         if (sink_) for (uint8_t i=0;i<MAX_PUMPS;++i) sink_->setSourceLevel(i, 0.0f);
     }
     bool ready() const override { return started_ >= clampv<uint8_t>(c_.pumpCount,1,MAX_PUMPS); }
+    // Without this a Panic zeroed the pump outputs but left running_=true and the
+    // last req_, so the first update() after Rearm restarted the pumps with no
+    // new note (review #8 §2).
+    void safeState() override { reset(); BaseSource::safeState(); }
+    void resetFault() override { BaseSource::resetFault(); reset(); }
 private:
+    void reset() { running_ = false; started_ = 0; req_ = AirNoteRequest{}; }
     uint32_t startMs_ = 0; uint8_t started_ = 0; bool running_ = false;
     AirNoteRequest req_;
 };
@@ -275,6 +286,9 @@ public:
     void idle(uint32_t nowMs) override { regulate(nowMs); }
     void update(uint32_t nowMs) override { if (!extSensor_) sensor_.update(nowMs); regulate(nowMs); }
     bool ready() const override { return regulatedReady_ && fault_ == FaultCode::None; }
+    // Clear the regulation state on a Panic too, so update()/regulate() cannot
+    // resume filling after Rearm without a fresh evaluation (review #8 §2).
+    void safeState() override { filling_ = false; regulatedReady_ = false; pidI_ = 0.0f; havePidTime_ = false; BaseSource::safeState(); }
     void resetFault() override { fault_ = FaultCode::None; filling_ = false; regulatedReady_ = false; pidI_ = 0.0f; havePidTime_ = false; }
 private:
     AirSensor* activeSensor() { return extSensor_ ? extSensor_ : &sensor_; }

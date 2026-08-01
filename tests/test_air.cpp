@@ -14,7 +14,8 @@ struct FakeAirSink : IAirSink {
     bool  gateOpen = false;
     float gatePwm = -1, flow = -1, angle = -1;
     float sensorRaw = NAN;   // set to a number to simulate a present sensor
-    void setSourceLevel(uint8_t i, float v) override { if (i < MAX_PUMPS) src[i] = v; }
+    int   srcNonZeroWrites = 0;   // count of setSourceLevel(_, >0) — catches Fault-state pulses
+    void setSourceLevel(uint8_t i, float v) override { if (i < MAX_PUMPS) src[i] = v; if (v > 0.0f) ++srcNonZeroWrites; }
     void setGateOpen(bool o) override { gateOpen = o; }
     void setGatePwm(float v) override { gatePwm = v; }
     void setFlow(float v) override { flow = v; }
@@ -102,6 +103,47 @@ TEST(pump_direct_cascade) {
     CHECK(s.src[0] > 0.0f); CHECK_NEAR(s.src[1], 0.0f, 1e-3);   // staggered
     p.run(r, 250); CHECK(s.src[2] > 0.0f);
     CHECK(p.ready());
+}
+
+// Review #8 §2: safeState() must clear the RUN state, not only the outputs —
+// otherwise the next update() (e.g. the first tick after Rearm) re-asserts the
+// pumps with no new note.
+TEST(pump_direct_no_autorestart_after_safe_state) {
+    FakeAirSink s; AirConfig c;
+    c.source.type = AirSourceType::PumpsDirect; c.source.pumpCount = 2; c.source.min01 = 0.3f;
+    PumpDirectSource p; p.begin(c, &s);
+    AirNoteRequest r; r.velocity = 127;
+    p.prepare(r, 0); p.run(r, 200);
+    CHECK(s.src[0] > 0.0f);              // running
+    p.safeState();                       // Panic
+    CHECK_NEAR(s.src[0], 0.0f, 1e-3);    // outputs off
+    s.srcNonZeroWrites = 0;
+    for (uint32_t t = 300; t < 600; ++t) p.update(t);   // ticks after "Rearm"
+    CHECK(s.srcNonZeroWrites == 0);      // pumps never restart on their own
+    CHECK_NEAR(s.src[0], 0.0f, 1e-3);
+}
+
+// Review #8 §3: once the air system is in Fault it must stop running the source
+// entirely — no per-tick re-assertion of a level (which at 1 kHz is a pulse
+// train on the pump) — and the safety trip must persist.
+TEST(airsystem_fault_state_is_fully_halted) {
+    FakeAirSink s;
+    AirConfig c;
+    c.source.type = AirSourceType::PumpsDirect; c.source.pumpCount = 1; c.source.min01 = 0.4f;
+    c.gate.type = AirGateType::SolenoidSimple;
+    c.flow.type = FlowControlType::FlowServo; c.flow.maxSlewPerMs = 1.0f;
+    c.valveOpenTimeoutMs = 50;                     // force a fault via valve timeout
+    AirSystem a; a.begin(c, &s);
+    AirNoteRequest r; r.velocity = 100;
+    a.setNow(0); a.startNote(r);
+    for (uint32_t t = 1; t <= 120; ++t) { a.setNow(t); a.update(t); }
+    CHECK(a.state() == AirState::Fault);
+    CHECK(a.fault() == FaultCode::ValveTimeout);
+    s.srcNonZeroWrites = 0;
+    for (uint32_t t = 121; t < 600; ++t) { a.setNow(t); a.update(t); }
+    CHECK(s.srcNonZeroWrites == 0);                // no source pulses while faulted
+    CHECK(a.state() == AirState::Fault);           // trip persists
+    CHECK(a.fault() == FaultCode::ValveTimeout);
 }
 
 TEST(pump_tank_no_sensor_no_autostart) {
