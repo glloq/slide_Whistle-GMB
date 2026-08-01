@@ -27,10 +27,11 @@ namespace swc {
 // ---------------------------------------------------------------------------
 // EspStepGen — hardware-timer step pulse generator (replaces the old blocking
 // delayMicroseconds busy-wait). One shared ESP32 hardware timer fires a single
-// IRAM ISR at a fixed rate; each registered axis emits at most one STEP edge
-// per tick toward its target and maintains an AUTHORITATIVE executed-step
-// counter (curSteps_). writeStepperMm() therefore only stores a target and
-// never blocks the 1 kHz RT task; the pulse train is produced in the background.
+// ISR at a fixed rate; each registered axis emits at most one STEP edge per tick
+// toward its target and maintains an AUTHORITATIVE executed-step counter
+// (curSteps_). writeStepperMm() therefore only stores a target and never blocks
+// the 1 kHz RT task; the pulse train is produced in the background. (The ISR is
+// not yet IRAM-placed — see serviceTick() for the bench work that remains.)
 //
 // Two ISR ticks make one full pulse (rising then falling), so the per-axis step
 // rate is timerHz/2. This is the "RMT/GPTimer" backend the reviews asked for,
@@ -61,7 +62,15 @@ public:
     // One timer tick for this axis. Rising edge sets DIR + STEP high; the next
     // tick drops STEP and advances the executed counter. Called from the ISR on
     // hardware and directly from the unit test.
-    void IRAM_ATTR serviceTick() {
+    //
+    // NOTE (bench work): this is intentionally NOT IRAM_ATTR. Marking it (and the
+    // ISR trampoline) IRAM_ATTR triggers the toolchain's "dangerous relocation:
+    // l32r" link error because it calls digitalWrite() and touches static state,
+    // which live in flash. A hardware-grade build must place the ISR in IRAM AND
+    // replace digitalWrite with IRAM-safe GPIO register writes (GPIO.out_w1ts /
+    // out_w1tc). Running the ISR from flash works while the flash cache is
+    // enabled, which is the case here, but is not robust across flash writes.
+    void serviceTick() {
         long tgt = targetSteps_, cur = curSteps_;
         if (cur == tgt || stepPin_ < 0) return;
         if (!stepHigh_) {
@@ -83,7 +92,7 @@ private:
     inline static uint8_t     s_count = 0;
     inline static hw_timer_t* s_timer = nullptr;
 
-    static void IRAM_ATTR s_onTimer() {
+    static void s_onTimer() {   // see serviceTick() note re: IRAM (bench work)
         for (uint8_t i = 0; i < s_count; ++i) if (s_gens[i]) s_gens[i]->serviceTick();
     }
     static void startTimerOnce() {
