@@ -93,9 +93,16 @@ public:
         state_ = runnable ? SysState::Initializing : SysState::SafeConfigOnly;
 
         engine_.begin(instPtrs_, instCount_, &queue_);
-        engine_.setLiveConfig(&config_);    // so ApplyDynamicConfig actually applies (#5)
+        // Cross-core config handoff: the objects below are built directly from
+        // config_ (generation 1), so publish it and prime the engine's applied
+        // generation to match — later saves go through the same handoff so the RT
+        // core never reads a config this core is mid-writing (review #9 §4.2/§4.3).
+        handoff_.publish(config_);
+        engine_.setConfigSource(&handoff_);
+        engine_.primeAppliedGen(handoff_.desiredGen());
         engine_.setTranspose(config_.midi.transpose);   // global transpose actually applied (#5 §12)
         router_.begin(&auth_, &store_, &config_, &sink_, &entropy_, &status_);
+        router_.setConfigHandoff(&handoff_);
 
         startNetwork();
 
@@ -373,6 +380,10 @@ private:
         const ExecAck& ack = engine_.lastExec();
         s.lastAckSeq = ack.seq;
         s.lastAckResult = uint8_t(ack.result);
+        // Desired-vs-applied config generation: equal ⇒ the last saved dynamic
+        // change has actually landed on the RT core (review #9 §4.2/§4.3).
+        s.configDesiredGen = handoff_.desiredGen();
+        s.configAppliedGen = engine_.appliedGen();
         for (uint8_t i = 0; i < instCount_ && i < MAX_INSTRUMENTS; ++i) {
             Instrument* in = instPtrs_[i];
             InstrumentStatus& is = s.instruments[i];
@@ -413,6 +424,11 @@ private:
             v.set("firstBoot", app->firstBoot_);
             v.set("fsFormatted", app->fsFormatted_);
             v.set("fsRecovery", app->fsRecovery_);   // FS unmountable → recovery, no actuators
+            // Config generations: a client that POSTed a dynamic change waits for
+            // config_applied_gen to reach config_desired_gen (review #9 §4.2/§4.3).
+            v.set("config_desired_gen", (double)s.configDesiredGen);
+            v.set("config_applied_gen", (double)s.configAppliedGen);
+            v.set("config_in_sync", s.configAppliedGen == s.configDesiredGen);
             JsonValue arr = JsonValue::makeArr();
             for (uint8_t i = 0; i < s.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
                 const InstrumentStatus& is = s.instruments[i];
@@ -443,6 +459,7 @@ private:
     ApiRouter        router_;
     StatusSrc        status_{};
     SnapshotPublisher snap_;
+    ConfigHandoff    handoff_;   // atomic desired→applied config handoff (§4.2/§4.3)
 
     EspMotionSink    motion_[MAX_INSTRUMENTS];
     EspAirSink       air_[MAX_INSTRUMENTS];

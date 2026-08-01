@@ -17,6 +17,7 @@
 #include "Instrument.h"
 #include "CommandQueue.h"
 #include "RuntimeConfig.h"
+#include "ConfigHandoff.h"
 #include <atomic>
 
 namespace swc {
@@ -44,8 +45,20 @@ public:
     // convergence point for every source, since the real path is the command
     // queue, not MidiRouter (review #5 §12). MainApp sets it from config.midi.
     void setTranspose(int8_t semis) { transpose_ = semis; }
-    // Live config source for ApplyDynamicConfig (indexed by Instrument::id()).
-    void setLiveConfig(const RuntimeConfig* cfg) { live_ = cfg; }
+    // Cross-core config source for ApplyDynamicConfig. The RT task copies the
+    // published desired config out of the handoff (seqlock) into applied_ before
+    // pushing it into the live objects — never reads a struct another core is
+    // mid-writing (review #9 §4.2/§4.3). Indexed by Instrument::id().
+    void setConfigSource(const ConfigHandoff* h) { handoff_ = h; }
+    // Prime the applied generation at boot: the instruments are built directly
+    // from generation `g` (InstrumentRuntime), so the objects already hold it
+    // even though no ApplyDynamicConfig ran. Without this, telemetry would report
+    // desired>applied at boot though they match.
+    void primeAppliedGen(uint32_t g) { appliedGen_ = g; }
+    // Generation currently reflected in the live objects (0 until the first
+    // apply/prime). Telemetry compares it against the handoff's desiredGen() so a
+    // client can tell a saved dynamic change has actually landed on the RT core.
+    uint32_t appliedGen() const { return appliedGen_; }
 
     // Drain up to `budget` commands, then tick every instrument. Called from a
     // periodic RT task (vTaskDelayUntil) — no blocking, no allocation.
@@ -359,20 +372,28 @@ private:
                 break;
             }
             case CommandType::ApplyDynamicConfig:
-                // Push the newly-saved dynamic parameters into the live objects
-                // so the API's "applied" claim is truthful (correction #17).
-                // Config is indexed by the instrument's stable id().
-                if (live_) {
-                    // A transpose change would otherwise leave notes whose ON was
-                    // transposed by the old amount unmatchable by their OFF (a
-                    // stuck note) — release everything first (#6 §13).
-                    if (live_->midi.transpose != transpose_)
+                // Copy the newly-saved config OUT of the cross-core handoff into
+                // our own applied_ buffer (seqlock: whole-old or whole-new, never
+                // a torn mix, review #9 §4.2/§4.3), then push the dynamic
+                // parameters into the live objects so the API's "applied" claim is
+                // truthful (correction #17). Indexed by the instrument's stable
+                // id(). A load() of 0 means nothing published / copy unverified —
+                // leave the objects and the applied generation untouched.
+                if (handoff_) {
+                    uint32_t g = handoff_->load(applied_);
+                    if (g) {
+                        // A transpose change would otherwise leave notes whose ON
+                        // was transposed by the old amount unmatchable by their OFF
+                        // (a stuck note) — release everything first (#6 §13).
+                        if (applied_.midi.transpose != transpose_)
+                            for (uint8_t i = 0; i < count_; ++i)
+                                if (inst_[i]) inst_[i]->allNotesOff(nowMs);
+                        transpose_ = applied_.midi.transpose;   // global transpose is dynamic (#5 §12)
                         for (uint8_t i = 0; i < count_; ++i)
-                            if (inst_[i]) inst_[i]->allNotesOff(nowMs);
-                    transpose_ = live_->midi.transpose;   // global transpose is dynamic (#5 §12)
-                    for (uint8_t i = 0; i < count_; ++i)
-                        if (inst_[i] && inst_[i]->id() < live_->instrumentCount)
-                            inst_[i]->applyDynamic(live_->instruments[inst_[i]->id()]);
+                            if (inst_[i] && inst_[i]->id() < applied_.instrumentCount)
+                                inst_[i]->applyDynamic(applied_.instruments[inst_[i]->id()]);
+                        appliedGen_ = g;   // the objects now reflect this generation
+                    }
                 }
                 break;
             default: break;   // calibration handled elsewhere
@@ -384,7 +405,9 @@ private:
     CommandQueue<QN>*  q_ = nullptr;
     float              bendRangeSemis_ = 2.0f;
     int8_t             transpose_ = 0;
-    const RuntimeConfig* live_ = nullptr;       // for ApplyDynamicConfig
+    const ConfigHandoff* handoff_ = nullptr;    // cross-core config source (#4.2/#4.3)
+    RuntimeConfig      applied_{};              // RT-private copy of the applied config
+    uint32_t           appliedGen_ = 0;         // generation now in the live objects
     TestAirState       testAir_[MAX_INSTRUMENTS];                   // per-instrument TestAir FSM
     bool               diag_[MAX_INSTRUMENTS] = {false};           // per-instrument diagnostic lock (#8 §8)
     ExecAck            lastAck_{};                                  // last direct-command ack

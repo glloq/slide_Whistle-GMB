@@ -206,10 +206,13 @@ TEST(engine_apply_dynamic_updates_live_notemap) {
     RuntimeConfig live = defaultConfig(); live.instrumentCount=1;
     live.instruments[0]=icfg(1,48,84);
     for (int n=48;n<=84;++n) live.instruments[0].map.setPoint((uint8_t)n,(n-48)*5.0f,60); // 60→60mm
-    eng.setLiveConfig(&live);
+    ConfigHandoff handoff; uint32_t gen = handoff.publish(live);   // §4.2/§4.3
+    eng.setConfigSource(&handoff);
+    CHECK(eng.appliedGen() == 0);                          // nothing applied yet
 
     Command a{CommandType::ApplyDynamicConfig}; q.push(a);
     for (uint32_t k=t; k<t+50; ++k) eng.tick(k, k*1000);   // apply
+    CHECK_EQ((int)eng.appliedGen(), (int)gen);             // the applied generation is recorded
     // now play note 60 → should target the NEW 60 mm, not the old 24 mm
     Command on{CommandType::NoteOn}; on.channel=1; on.a=60; on.b=100; q.push(on);
     for (uint32_t k=t+50; k<t+3000; ++k) eng.tick(k, k*1000);

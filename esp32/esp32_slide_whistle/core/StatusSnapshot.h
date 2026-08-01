@@ -34,6 +34,8 @@ struct StatusSnapshot {
     bool     restartRequired = false;
     uint32_t lastAckSeq = 0;    // seq of the last direct command the RT task acted on
     uint8_t  lastAckResult = 0; // ExecResult: 0 none, 1 accepted, 2 rejected
+    uint32_t configDesiredGen = 0;  // last config generation the network core published
+    uint32_t configAppliedGen = 0;  // generation now reflected in the RT objects (§4.2/§4.3)
     InstrumentStatus instruments[MAX_INSTRUMENTS];
 };
 

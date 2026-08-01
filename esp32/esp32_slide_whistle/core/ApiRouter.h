@@ -21,6 +21,7 @@
 #include "AuthManager.h"
 #include "ConfigStore.h"
 #include "CommandQueue.h"
+#include "ConfigHandoff.h"
 #include "Presets.h"
 
 namespace swc {
@@ -175,6 +176,11 @@ public:
                ICommandSink* sink, IEntropy* entropy, IStatusSource* status) {
         auth_ = auth; store_ = store; live_ = live; sink_ = sink; entropy_ = entropy; status_ = status;
     }
+    // Cross-core config handoff (review #9 §4.2/§4.3). When set, a dynamic-only
+    // apply is published here so the RT core copies a whole, consistent config out
+    // of it — instead of the RT core reading `*live_` while this core rewrites it.
+    // Optional: without it (portable API tests) the reply semantics are unchanged.
+    void setConfigHandoff(ConfigHandoff* h) { handoff_ = h; }
     void setMaxBodyBytes(size_t n) { maxBody_ = n; }
     bool restartRequired() const { return restartRequired_; }
     bool restartRequested() const { return restartRequested_; }
@@ -302,8 +308,12 @@ private:
         if (rr) {
             restartRequired_ = true;       // hardware change: needs reboot
         } else if (sink_) {
-            // Dynamic-only change: tell the RT task to apply it. Only claim it is
-            // applied if it actually made it onto the queue (review #5).
+            // Dynamic-only change: publish the whole config to the cross-core
+            // handoff FIRST (so the RT core copies a consistent snapshot, never a
+            // struct we are mid-writing, review #9 §4.2/§4.3), THEN tell the RT
+            // task to apply it. Only claim it is applied if the command actually
+            // made it onto the queue (review #5).
+            if (handoff_) handoff_->publish(cand);
             Command c{}; c.type = CommandType::ApplyDynamicConfig;
             dynQueued = sink_->push(c);
             // Queue full → record a REAL pending apply that servicePending()
@@ -421,6 +431,7 @@ private:
     AuthManager*   auth_ = nullptr;
     ConfigStore*   store_ = nullptr;
     RuntimeConfig* live_ = nullptr;
+    ConfigHandoff* handoff_ = nullptr;   // cross-core config publish (#4.2/#4.3)
     ICommandSink*  sink_ = nullptr;
     IEntropy*      entropy_ = nullptr;
     IStatusSource* status_ = nullptr;
