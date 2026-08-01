@@ -408,6 +408,23 @@ per-source note ownership + watchdogMs; §23 a formally-safe snapshot; §24 a re
 in-flash LittleFS recovery page; plus the Phase-4/5 backends and UI. These are
 tracked honestly rather than marked done.
 
+## Executed-step position + endstop supervision (the §6/§7 headline blocker)
+
+The long-standing blocker was the open-loop virtual position: the actuator
+decided "arrived" from the commanded `pos_` while the ESP sink emits only a
+bounded batch of step pulses per call, so air could open before the slide
+physically arrived; and endstops were read only during homing. The portable
+**architecture** for both is now in place and natively tested — what remains is
+the hardware peripheral itself:
+
+| Item | Status |
+|------|--------|
+| Air gating on the executed (not commanded) position | FIXED·TESTED (IMotionSink::executedPositionMm; isReadyForAir waits for the emitted-pulse position to reach target; servos/fakes opt out and fall back to commanded) |
+| Backend executed-position feedback | FIXED·TESTED (EspMotionSink derives it from curSteps_; standalone Arduino-stub test asserts it trails then converges) |
+| Continuous endstop supervision during play/jog/test | FIXED·TESTED (StepDir superviseLimits() faults EndstopInconsistent + stops + de-energises on an inconsistent trigger; margin avoids a false fault at the homed reference; MainApp's 1 kHz anyActuatorFault→panic closes the air) |
+| RMT/GPTimer hardware step generator | STILL OPEN — the bounded busy-wait step loop in EspMotionSink remains; a real RMT/GPTimer backend would feed the SAME curSteps_ counter, so the actuator's executed-gating and supervision above need no change to adopt it. This is the only remaining piece and it is hardware-bench work. |
+| Closed-loop tracking-error / stall detection | NOT ATTEMPTED (honestly): an open-loop stepper has no feedback that pulses produced real motion, so a physical stall is undetectable without an encoder — claiming a "tracking-error fault" would be false. Documented, not faked. |
+
 ## How to run the software tests
 
 ```sh
