@@ -445,6 +445,7 @@ each with a test that fails without the change:
 | §5 Durations negative→huge; floats non-finite | FIXED·TESTED (checkedU32 rejects negative/absurd ms durations; checkedNum requires finite+in-range floats across motion/source/gate/flow/angle/sensor/seq) |
 | §4.9 Servos held last pose after Panic | FIXED·TESTED (Single/DualServo drive to their configured safeUs on e-stop) |
 | §4.10 Output polarity only on the simple solenoid | FIXED·TESTED (activeHigh on source + flow round-trips; propagated to fan/pump/PWM-solenoid/flow PWM; a change forces restart) |
+| §4.8 Overpressure/out-of-range only on PumpsTank | FIXED·TESTED (AirSafetyController trips Overpressure/OutOfRange/Stale/Missing for any source with a configured sensor) |
 
 Still open from review #9 — hardware/architecture items that a bench or a larger
 refactor must close, tracked honestly rather than marked done: §3.3 the ISR is
@@ -454,7 +455,7 @@ separation with atomic generations and inter-core locking; §4.4 surfacing a
 refused soft-limit apply as a typed ack; §4.5 per-source note ownership +
 watchdogMs; §4.6 the MIDI transports (DIN/BLE/RTP/USB) + the double-transpose
 guard once they attach to MidiRouter; §4.7 mode aliases that share one backend;
-§4.8 global overpressure/SensorMissing for non-tank sources; the servo idle
+the servo idle
 detach path (detachIdleMs — the §4.9 safeUs-on-Panic is done, idle-detach is
 not); a real Custom board profile; §6 HTTP size-before-alloc + WS
 fragmentation/Origin; §7 fully-atomic persistence + in-flash LittleFS recovery;
