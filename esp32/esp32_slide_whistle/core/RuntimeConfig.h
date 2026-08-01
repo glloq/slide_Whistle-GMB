@@ -121,6 +121,10 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
                     v.requirePin(s.endstopMax.pin, false, false, base + ".motion.stepper.endstopMax.pin", own + " endstop2");
                     v.claimPin(s.endstopMin.pin, false, false, base + ".motion.stepper.endstopMin.pin", own + " endstop");
                 }
+                // The commanded step rate must stay within what EspStepGen can
+                // emit (review #9 §3.4) — beyond it the slide silently lags.
+                v.claimBound((long)(in.motion.maxSpeedMmS * s.stepsPerMm), 0,
+                             (long)STEP_GEN_MAX_HZ, base + ".motion.stepRateHz");
                 break;
             }
             case SlideDriveType::SingleServo:

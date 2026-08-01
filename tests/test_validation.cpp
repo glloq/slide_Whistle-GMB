@@ -252,6 +252,19 @@ TEST(validate_homing_endstop_and_flow_pin_required) {
     CHECK(hasCode(v2.validate(), "PIN_REQUIRED"));
 }
 
+// Review #9 §3.4: a commanded step rate above what EspStepGen can emit
+// (maxSpeedMmS × stepsPerMm > STEP_GEN_MAX_HZ) is rejected.
+TEST(validate_step_rate_ceiling) {
+    RuntimeConfig c = defaultConfig(); c.instrumentCount = 1; c.instruments[0].enabled = true;
+    applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+    // default preset stays under the ceiling
+    { HardwareResourceValidator v; buildClaims(v, c); CHECK(!hasCode(v.validate(), "BOUND_INVALID")); }
+    // 300 mm/s × 80 steps/mm = 24000 > 20000 → rejected
+    c.instruments[0].motion.maxSpeedMmS = 300.0f; c.instruments[0].motion.stepper.stepsPerMm = 80.0f;
+    HardwareResourceValidator v; buildClaims(v, c);
+    CHECK(hasCode(v.validate(), "BOUND_INVALID"));
+}
+
 // Review #8 §13: FlowServoAsValve is not actually wired (the gate servo is left
 // unattached), so selecting it is UNSUPPORTED_BACKEND rather than a silent
 // no-close valve.

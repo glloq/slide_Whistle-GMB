@@ -22,6 +22,12 @@ static constexpr uint8_t  MAX_INSTRUMENTS   = 4;
 static constexpr uint16_t MIDI_NOTE_COUNT    = 128;   // full MIDI range
 static constexpr uint8_t  MAX_NOTE_STACK     = 16;    // held notes per instrument
 static constexpr uint8_t  MAX_PUMPS          = 3;
+// Max STEP pulse rate the EspStepGen backend can produce per axis: the shared
+// timer runs at 40 kHz and two ticks make one pulse, so 20 000 steps/s. The
+// validator rejects a config whose maxSpeedMmS × stepsPerMm exceeds this — above
+// it the generator cannot keep up and the slide silently lags its profile
+// (review #9 §3.4). Keep in sync with EspStepGen::kTickUs (1e6 / (2·kTickUs)).
+static constexpr uint32_t STEP_GEN_MAX_HZ    = 20000;
 
 // ---------------------------------------------------------------------------
 // Fault codes — shared by actuators and air systems
