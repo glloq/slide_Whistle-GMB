@@ -440,13 +440,13 @@ each with a test that fails without the change:
 | §3.5 Homing declared done on the virtual position | FIXED·TESTED (MoveToOffset completes only once executedPositionMm reaches the offset) |
 | §3.6 Endstop supervision let a move drive into the butée | FIXED·TESTED (near an active endstop, a move INTO it faults immediately; inward moves allowed) |
 | §4.1 Vibrato before a note blocked the note start | FIXED·TESTED (LFO applied only while Playing, not during Positioning) |
+| §3.7 forceSafeOutputs drove pins before validating them | FIXED (each pin checked against the board profile — exists / not flash-reserved / not input-only — before pinMode/digitalWrite) — compiles in CI |
+| §3.8 Hardware-init failures could still reach Ready | FIXED (EspMotionSink::begin + EspAirSink report attach/timer success; configureSinks returns their AND; a failed instrument is skipped so setup stays SafeConfigOnly; failed RT-task creation also drops to SafeConfigOnly) — compiles in CI |
 
 Still open from review #9 — hardware/architecture items that a bench or a larger
 refactor must close, tracked honestly rather than marked done: §3.3 the ISR is
 not yet IRAM-placed and still calls digitalWrite (the l32r constraint — needs
-IRAM + register-level GPIO on a bench); §3.7 forceSafeOutputs runs before the
-GPIO validator; §3.8 sink attach()/timer/RT-task creation results are not
-propagated into a SafeConfigOnly refusal; §4.2/§4.3 applied-vs-desired config
+IRAM + register-level GPIO on a bench); §4.2/§4.3 applied-vs-desired config
 separation with atomic generations and inter-core locking; §4.4 surfacing a
 refused soft-limit apply as a typed ack; §4.5 per-source note ownership +
 watchdogMs; §4.6 the MIDI transports (DIN/BLE/RTP/USB) + the double-transpose
