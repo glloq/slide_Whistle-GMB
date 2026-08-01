@@ -448,14 +448,15 @@ each with a test that fails without the change:
 | §4.8 Overpressure/out-of-range only on PumpsTank | FIXED·TESTED (AirSafetyController trips Overpressure/OutOfRange/Stale/Missing for any source with a configured sensor) |
 | §4.6 Transpose applied twice once several MIDI transports feed the router | FIXED·TESTED (MidiRouter forwards raw notes; RealtimeEngine is the single transpose owner, so no transport can double-apply) |
 | §4.7 Enum values that advertise a distinct mode but share one backend | FIXED·TESTED (validator rejects FlowControlType::SourcePlusFlowServo — plain PWM, no source co-modulation — and VelocityCurve::Custom — no LUT, silently linear — as UNSUPPORTED_BACKEND) |
+| §4.5 watchdogMs validated/serialized but never enforced (a lost NoteOff held the air open forever) | FIXED·TESTED (NoteSequencer force-releases every note once one has sounded longer than maxNoteMs, fed from watchdogMs; cleared by the next NoteOn) |
 
 Still open from review #9 — hardware/architecture items that a bench or a larger
 refactor must close, tracked honestly rather than marked done: §3.3 the ISR is
 not yet IRAM-placed and still calls digitalWrite (the l32r constraint — needs
 IRAM + register-level GPIO on a bench); §4.2/§4.3 applied-vs-desired config
 separation with atomic generations and inter-core locking; §4.4 surfacing a
-refused soft-limit apply as a typed ack; §4.5 per-source note ownership +
-watchdogMs; §4.6 wiring the remaining MIDI transports (DIN/BLE/RTP/USB) onto
+refused soft-limit apply as a typed ack; §4.5 per-source note ownership (the
+watchdogMs enforcement itself is fixed above); §4.6 wiring the remaining MIDI transports (DIN/BLE/RTP/USB) onto
 MidiRouter (the double-transpose defect itself is fixed above); the servo idle
 detach path (detachIdleMs — the §4.9 safeUs-on-Panic is done, idle-detach is
 not); a real Custom board profile; §6 HTTP size-before-alloc + WS

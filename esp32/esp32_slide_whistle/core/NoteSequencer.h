@@ -35,6 +35,13 @@ struct SequencerConfig {
     // Max time to wait for the actuator AND the air source to be ready before
     // giving up on a note (so a stuck spin-up / unreached position can't hang).
     uint32_t prepareTimeoutMs    = 4000;
+    // Absolute upper bound on how long ONE note may sound (ms, 0 = disabled).
+    // A lost NoteOff, a stuck NoteOn or an unplugged MIDI cable would otherwise
+    // hold the air open indefinitely — this watchdog force-releases everything
+    // after the note has sounded this long without any change, independent of
+    // incoming MIDI traffic (review #9 §4.5). Populated from InstrumentConfig
+    // watchdogMs by the Instrument.
+    uint32_t maxNoteMs           = 0;
     // vibrato
     VibratoUnit vibratoUnit = VibratoUnit::Cents;
     float    vibratoRateHz  = 5.0f;
@@ -61,6 +68,7 @@ public:
         // would later fire it against noteOnMs_ and tear down THIS new note, and a
         // pedal-up would release a note that is actually still held (review #6 §17).
         pendingRelease_ = false;
+        watchdogTripped_ = false;   // a fresh key clears a prior stuck-note trip
         pushOrUpdate(note, vel);
         chooseActiveAndTrigger(nowMs, /*fromRelease=*/false);
     }
@@ -126,6 +134,19 @@ public:
 
     // ---- real-time tick ---------------------------------------------------
     void update(uint32_t nowMs, uint32_t nowUs) {
+        // Note watchdog: a single note that has been sounding longer than
+        // maxNoteMs almost certainly means its NoteOff was lost (stuck key,
+        // unplugged cable). Force EVERYTHING off so the air cannot stay open
+        // forever waiting on a NoteOff that will never come (review #9 §4.5).
+        // Measured from noteOnMs_ (rollover-safe), which every legato/glissando
+        // note change refreshes — so genuine playing keeps resetting it and only
+        // a truly static held note trips.
+        if (phase_ == SeqPhase::Playing && cfg_.maxNoteMs &&
+            elapsed_u32(nowMs, noteOnMs_) >= cfg_.maxNoteMs) {
+            watchdogTripped_ = true;
+            allNotesOff(nowMs);
+            return;
+        }
         // Continuous vibrato LFO ONLY while Playing. Applying it during
         // Positioning re-issued requestPositionMm() every tick, which flipped the
         // actuator back to Moving, so isReadyForAir() never became true and a note
@@ -179,6 +200,9 @@ public:
     SeqPhase phase() const { return phase_; }
     int      activeNoteOr(int none = -1) const { return active_ >= 0 ? active_ : none; }
     uint8_t  heldCount() const { return stackN_; }
+    // True once the note watchdog has force-released a stuck note; cleared by the
+    // next fresh NoteOn (for telemetry / tests, review #9 §4.5).
+    bool     watchdogTripped() const { return watchdogTripped_; }
 
 private:
     struct Held { uint8_t note; uint8_t vel; };
@@ -367,7 +391,7 @@ private:
     int     active_ = -1;
     SeqPhase phase_ = SeqPhase::Idle;
 
-    bool     sustainHeld_ = false, pendingRelease_ = false;
+    bool     sustainHeld_ = false, pendingRelease_ = false, watchdogTripped_ = false;
     uint32_t noteOnMs_ = 0, positionStartMs_ = 0;
     float    pitchBend_ = 0.0f, vibratoDepth_ = 0.0f;
 };

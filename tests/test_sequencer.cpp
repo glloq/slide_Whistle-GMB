@@ -426,3 +426,29 @@ TEST(seq_refuses_note_without_mapping) {
     CHECK(!sink.gateOpen);                            // air never opened
     CHECK_EQ(seq.heldCount(), 0);                     // unmapped note dropped from the stack
 }
+
+// Review #9 §4.5: watchdogMs was validated and serialized but never enforced —
+// a lost NoteOff (stuck key / unplugged cable) held the air open forever. The
+// sequencer's per-note watchdog must force everything off once a single note has
+// sounded longer than maxNoteMs, and clear on the next fresh key.
+TEST(seq_note_watchdog_releases_stuck_note) {
+    SeqRig r; SequencerConfig cfg; cfg.maxNoteMs = 20; r.begin(cfg);
+    uint32_t t = 0;
+    r.seq.noteOn(60, 100, t); r.tick(t);              // → Playing, air open
+    CHECK(r.seq.phase() == SeqPhase::Playing);
+    CHECK(r.sink.gateOpen);
+    // A few ticks BEFORE the window: still sounding, watchdog quiet.
+    for (int i = 0; i < 5; ++i) r.tick(t);
+    CHECK(!r.seq.watchdogTripped());
+    CHECK(r.sink.gateOpen);
+    // No NoteOff ever arrives. Tick well past the watchdog window.
+    for (int i = 0; i < 30; ++i) r.tick(t);
+    CHECK(r.seq.watchdogTripped());                   // watchdog fired
+    CHECK(!r.sink.gateOpen);                          // air forced closed
+    CHECK(r.seq.phase() != SeqPhase::Playing);
+    CHECK_EQ(r.seq.heldCount(), 0);                   // the stuck note was cleared
+    // A fresh key clears the trip and plays normally again.
+    r.seq.noteOn(62, 100, t); r.tick(t);
+    CHECK(!r.seq.watchdogTripped());
+    CHECK(r.sink.gateOpen);
+}

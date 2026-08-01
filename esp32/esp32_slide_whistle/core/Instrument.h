@@ -30,7 +30,7 @@ public:
         id_ = id; act_ = act; air_ = air; map_ = map;
         channel_ = cfg.midiChannel; noteMin_ = cfg.noteMin; noteMax_ = cfg.noteMax;
         enabled_ = cfg.enabled; cc_ = cfg.cc; transpose_ = 0;
-        seq_.begin(act, air, map, cfg.seq);
+        seq_.begin(act, air, map, withWatchdog(cfg));
     }
 
     // ---- dynamic (no-restart) reconfiguration -----------------------------
@@ -39,7 +39,7 @@ public:
         // to the real-time objects so the UI's "applied" claim is truthful.
         noteMin_ = cfg.noteMin; noteMax_ = cfg.noteMax;
         channel_ = cfg.midiChannel; cc_ = cfg.cc;
-        seq_.setConfig(cfg.seq);
+        seq_.setConfig(withWatchdog(cfg));
         if (map_) *map_ = cfg.map;                    // refresh note→position table
         if (act_) act_->applyDynamic(cfg.motion);     // live speed/accel/limits (#6)
         if (air_) air_->applyDynamic(cfg.air);        // live flow/expression params (#6)
@@ -111,6 +111,15 @@ public:
     bool enabled() const { return enabled_; }
 
 private:
+    // The per-note watchdog lives on the sequencer (it owns note timing), but the
+    // duration is an instrument-level field (watchdogMs). Fold it into the
+    // SequencerConfig so begin()/applyDynamic() carry it through (review #9 §4.5).
+    static SequencerConfig withWatchdog(const InstrumentConfig& cfg) {
+        SequencerConfig s = cfg.seq;
+        s.maxNoteMs = cfg.watchdogMs;
+        return s;
+    }
+
     uint8_t id_ = 0;
     ISlideActuator* act_ = nullptr;
     IAirSystem*     air_ = nullptr;
