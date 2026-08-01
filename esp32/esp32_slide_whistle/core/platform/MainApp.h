@@ -108,7 +108,11 @@ public:
         // before the command gate is being managed (review #7 §4). The engine
         // also starts blocked, so even a command that slips in early is refused
         // until the lifecycle reaches Ready.
-        xTaskCreatePinnedToCore(rtTaskThunk, "rt",  16384, this, 5, nullptr, 1);
+        // If the RT task cannot be created, NOTHING drives the actuators to a safe
+        // state or manages the command gate — refuse Ready and fall back to
+        // config-only so the outputs stay in the safe state forced above (#9 §3.8).
+        if (xTaskCreatePinnedToCore(rtTaskThunk, "rt", 16384, this, 5, nullptr, 1) != pdPASS)
+            state_ = SysState::SafeConfigOnly;
 
         startWebServer();
         printCredentials();                 // Serial: AP password + admin token (#5)
@@ -154,34 +158,46 @@ private:
     // chip's power-on reset and stay off until we init I2C, so only the direct
     // GPIO (backend == Gpio) pins need forcing here.
     void forceSafeOutputs(const RuntimeConfig& c) {
+        // Validate each pin NUMBER against the board profile before ever calling
+        // pinMode()/digitalWrite() on it, so a corrupt config cannot drive a
+        // flash-reserved, out-of-range or input-only pin while forcing outputs
+        // safe (review #9 §3.7). This is a per-pin guard, not the full validator —
+        // the full HardwareResourceValidator still runs before anything is built.
+        const BoardProfile b = (c.device.board == BoardKind::Esp32S3)
+                                   ? BoardProfile::s3() : BoardProfile::wroom();
         for (uint8_t i = 0; i < c.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
             const InstrumentConfig& ic = c.instruments[i];
             const SlideMotionConfig& m = ic.motion;
             // Stepper: hold the driver DISABLED and keep step/dir quiet.
             if (m.type == SlideDriveType::StepDir) {
-                safeDisableStepper(m.stepper.enablePin, m.stepper.enableActiveHigh);
-                safeLow(m.stepper.stepPin, true);
-                safeLow(m.stepper.dirPin, true);
+                safeDisableStepper(b, m.stepper.enablePin, m.stepper.enableActiveHigh);
+                safeLow(b, m.stepper.stepPin, true);
+                safeLow(b, m.stepper.dirPin, true);
             }
             // Servos on direct GPIO: no pulse train = no commanded motion.
             if (m.type == SlideDriveType::SingleServo || m.type == SlideDriveType::DualServo) {
-                if (m.servoA.backend == PwmBackend::Gpio) safeLow(m.servoA.pin, true);
-                if (m.servoBEnabled && m.servoB.backend == PwmBackend::Gpio) safeLow(m.servoB.pin, true);
+                if (m.servoA.backend == PwmBackend::Gpio) safeLow(b, m.servoA.pin, true);
+                if (m.servoBEnabled && m.servoB.backend == PwmBackend::Gpio) safeLow(b, m.servoB.pin, true);
             }
             const AirConfig& a = ic.air;
-            safeLow(a.gate.pin, a.gate.activeHigh);
-            for (uint8_t p = 0; p < MAX_PUMPS; ++p) safeLow(a.source.pin[p], true);
-            if (a.flow.backend == PwmBackend::Gpio)  safeLow(a.flow.pin, true);
-            if (a.angle.enabled && a.angle.backend == PwmBackend::Gpio) safeLow(a.angle.pin, true);
+            safeLow(b, a.gate.pin, a.gate.activeHigh);
+            for (uint8_t p = 0; p < MAX_PUMPS; ++p) safeLow(b, a.source.pin[p], true);
+            if (a.flow.backend == PwmBackend::Gpio)  safeLow(b, a.flow.pin, true);
+            if (a.angle.enabled && a.angle.backend == PwmBackend::Gpio) safeLow(b, a.angle.pin, true);
         }
     }
-    static void safeLow(int pin, bool activeHigh) {
-        if (pin < 0) return;
+    // A pin may be safely driven as an output only if it exists on the board and
+    // is neither flash-reserved nor input-only (review #9 §3.7).
+    static bool drivableOutput(const BoardProfile& b, int pin) {
+        return pin >= 0 && pin <= b.maxGpio && !b.isFlash(pin) && !b.isInputOnly(pin);
+    }
+    static void safeLow(const BoardProfile& b, int pin, bool activeHigh) {
+        if (!drivableOutput(b, pin)) return;
         pinMode(pin, OUTPUT);
         digitalWrite(pin, activeHigh ? LOW : HIGH);   // inactive
     }
-    static void safeDisableStepper(int enablePin, bool enableActiveHigh) {
-        if (enablePin < 0) return;
+    static void safeDisableStepper(const BoardProfile& b, int enablePin, bool enableActiveHigh) {
+        if (!drivableOutput(b, enablePin)) return;
         pinMode(enablePin, OUTPUT);
         // Inactive = driver DISABLED (opposite of the enable-active polarity).
         digitalWrite(enablePin, enableActiveHigh ? LOW : HIGH);
@@ -192,15 +208,20 @@ private:
         for (uint8_t i = 0; i < config_.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
             InstrumentConfig& ic = config_.instruments[i];
             if (!ic.enabled) continue;          // ignore disabled instruments (#8)
-            configureSinks(i, ic);
+            // A hardware-init failure (servo/pump LEDC attach, or a missing STEP
+            // timer) must NOT reach Ready: skip the instrument so instCount_ ends
+            // below enabledCount and setup() stays SafeConfigOnly (review #9 §3.8).
+            if (!configureSinks(i, ic)) continue;
             rt_[i] = new InstrumentRuntime(&motion_[i], &air_[i]);
             if (!rt_[i]->build(i, ic)) continue;
             instPtrs_[instCount_++] = &rt_[i]->instrument();
         }
     }
 
-    void configureSinks(uint8_t i, const InstrumentConfig& ic) {
-        motion_[i].begin(ic.motion);
+    // Returns false if any required output (STEP timer, servo/pump/gate/flow LEDC)
+    // failed to initialise (review #9 §3.8).
+    bool configureSinks(uint8_t i, const InstrumentConfig& ic) {
+        bool motionOk = motion_[i].begin(ic.motion);
         const auto& a = ic.air;
         // source
         if (a.source.type == AirSourceType::FanOnOff || a.source.type == AirSourceType::FanPwm)
@@ -222,6 +243,7 @@ private:
         if (a.angle.enabled) air_[i].configureAngleServo(a.angle.pin, a.angle.servoMinUs, a.angle.servoMaxUs);
         // sensor
         air_[i].configureSensor(a.sensor.pin);
+        return motionOk && air_[i].configOk();
     }
 
     void requestHomingAll() {

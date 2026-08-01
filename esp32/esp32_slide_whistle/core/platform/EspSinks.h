@@ -69,6 +69,11 @@ public:
         stepHigh_ = false; curSteps_ = s; targetSteps_ = s;
         portEXIT_CRITICAL(&mux_);
     }
+    bool active() const { return registered_; }
+    // The shared step timer started successfully (review #9 §3.8). Reported so the
+    // owning sink can refuse Ready when the STEP peripheral does not exist.
+    static bool timerReady() { return s_timer != nullptr; }
+
     // Emergency abort: stop generating pulses immediately (review #9 §3.1). Drop
     // STEP low, drop the target onto the current executed count so the ISR has
     // nothing left to walk, and clear the half-pulse state. The owning sink also
@@ -156,8 +161,12 @@ private:
 // ---------------------------------------------------------------------------
 class EspMotionSink : public IMotionSink {
 public:
-    void begin(const SlideMotionConfig& cfg) {
+    // Returns false if a required output failed to initialise (a servo LEDC
+    // attach failed, or the STEP timer did not start) so the caller can refuse
+    // Ready instead of running an axis that produces no motion (review #9 §3.8).
+    bool begin(const SlideMotionConfig& cfg) {
         cfg_ = cfg;
+        bool ok = true;
         const auto& s = cfg.stepper;
         if (cfg.type == SlideDriveType::StepDir) {
             if (s.stepPin >= 0)   pinMode(s.stepPin, OUTPUT);
@@ -171,11 +180,13 @@ public:
             if (s.endstopMax.pin >= 0)
                 pinMode(s.endstopMax.pin, s.endstopMax.internalPullup ? INPUT_PULLUP : INPUT);
             stepGen_.begin(s.stepPin, s.dirPin, s.invertDir);   // hardware-timer stepping
+            ok = ok && EspStepGen::timerReady();                // STEP peripheral must exist
         }
         if (cfg.type == SlideDriveType::SingleServo || cfg.type == SlideDriveType::DualServo)
-            attachServo(0, cfg.servoA);
+            ok = attachServo(0, cfg.servoA) && ok;
         if (cfg.type == SlideDriveType::DualServo)
-            attachServo(1, cfg.servoB);
+            ok = attachServo(1, cfg.servoB) && ok;
+        return ok;
     }
 
     // Non-blocking: publish the target step count; the hardware-timer ISR walks
@@ -230,10 +241,12 @@ public:
     }
 
 private:
-    void attachServo(uint8_t idx, const ServoMotionConfig& s) {
-        if (s.backend != PwmBackend::Gpio || s.pin < 0) return;   // PCA9685 backend: TODO
+    bool attachServo(uint8_t idx, const ServoMotionConfig& s) {
+        // PCA9685 servo backends are rejected by the validator (UNSUPPORTED); a
+        // GPIO servo must actually attach or the axis has no output (review #9 §3.8).
+        if (s.backend != PwmBackend::Gpio || s.pin < 0) return false;
         PwmConfig p; p.pin = s.pin; p.freqHz = s.freqHz; p.resolution = 16;
-        servo_[idx].attach(p);
+        return servo_[idx].attach(p);
     }
     SlideMotionConfig cfg_;
     EspStepGen stepGen_;
@@ -264,10 +277,13 @@ public:
     float readSensorRaw() override { return sensorPin_ < 0 ? NAN : (float)analogRead(sensorPin_); }
 
     // ---- wiring helpers -----------------------------------------------------
+    // Each helper records a failed LEDC/servo attach in ok_ so configOk() can
+    // veto Ready — a pump/gate/flow with no PWM channel would silently move no
+    // air otherwise (review #9 §3.8).
     void configureSourcePwm(uint8_t i, int pin, uint32_t freq) {
         if (i >= 3 || pin < 0) return;
         PwmConfig p; p.pin = pin; p.freqHz = freq;
-        source_[i].attach(p);
+        if (!source_[i].attach(p)) ok_ = false;
     }
     void configureSolenoid(int pin, bool activeHigh) {
         solenoidPin_ = pin; solenoidActiveHigh_ = activeHigh;
@@ -278,23 +294,26 @@ public:
     void configureSolenoidPwm(int pin, uint32_t freq) {
         if (pin < 0) return;
         PwmConfig p; p.pin = pin; p.freqHz = freq;
-        gatePwm_.attach(p); gatePwm_.writeRaw(0);     // closed
+        if (!gatePwm_.attach(p)) ok_ = false; else gatePwm_.writeRaw(0);   // closed
     }
     void configureGateServo(int pin, uint16_t minUs, uint16_t maxUs) {
-        if (pin >= 0) gateServo_.attach(pin, minUs, maxUs);
+        if (pin >= 0 && !gateServo_.attach(pin, minUs, maxUs)) ok_ = false;
     }
     void configureFlowServo(int pin, uint16_t minUs, uint16_t maxUs) {
-        if (pin >= 0) flowServo_.attach(pin, minUs, maxUs);
+        if (pin >= 0 && !flowServo_.attach(pin, minUs, maxUs)) ok_ = false;
     }
     void configureFlowPwm(int pin, uint32_t freq) {
         if (pin < 0) return;
         PwmConfig p; p.pin = pin; p.freqHz = freq;
-        flowPwm_.attach(p);
+        if (!flowPwm_.attach(p)) ok_ = false;
     }
     void configureAngleServo(int pin, uint16_t minUs, uint16_t maxUs) {
-        if (pin >= 0) angleServo_.attach(pin, minUs, maxUs);
+        if (pin >= 0 && !angleServo_.attach(pin, minUs, maxUs)) ok_ = false;
     }
     void configureSensor(int pin) { sensorPin_ = pin; if (pin >= 0) pinMode(pin, INPUT); }
+
+    // True only if every configured LEDC/servo output attached successfully.
+    bool configOk() const { return ok_; }
 
 private:
     PwmOutput   source_[3];
@@ -302,6 +321,7 @@ private:
     ServoOutput gateServo_, flowServo_, angleServo_; // µs-calibrated servos (#13)
     int  solenoidPin_ = -1, sensorPin_ = -1;
     bool solenoidActiveHigh_ = true;
+    bool ok_ = true;                     // every configured output attached (#3.8)
 };
 
 } // namespace swc
