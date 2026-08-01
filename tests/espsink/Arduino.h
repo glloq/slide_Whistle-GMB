@@ -34,3 +34,16 @@ typedef int portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0
 inline void portENTER_CRITICAL(portMUX_TYPE*) {}
 inline void portEXIT_CRITICAL(portMUX_TYPE*) {}
+
+// --- hardware timer (both arduino-esp32 2.x and 3.x signatures) ---
+#define IRAM_ATTR
+struct hw_timer_t;
+// 2.x
+inline hw_timer_t* timerBegin(unsigned char, unsigned short, bool) { return nullptr; }
+inline void timerAttachInterrupt(hw_timer_t*, void (*)(), bool) {}
+inline void timerAlarmWrite(hw_timer_t*, unsigned long long, bool) {}
+inline void timerAlarmEnable(hw_timer_t*) {}
+// 3.x
+inline hw_timer_t* timerBegin(unsigned int) { return nullptr; }
+inline void timerAttachInterrupt(hw_timer_t*, void (*)()) {}
+inline void timerAlarm(hw_timer_t*, unsigned long long, bool, unsigned long long) {}

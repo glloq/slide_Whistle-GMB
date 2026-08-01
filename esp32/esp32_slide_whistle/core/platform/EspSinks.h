@@ -25,10 +25,92 @@
 namespace swc {
 
 // ---------------------------------------------------------------------------
-// Motion sink: open-loop step generation + servo PWM.
-// The core computes the trapezoidal profile; this sink only realises the
-// commanded position. Step pulses are emitted as a bounded delta per call so a
-// single tick never blocks (a future RMT/timer backend can replace this).
+// EspStepGen — hardware-timer step pulse generator (replaces the old blocking
+// delayMicroseconds busy-wait). One shared ESP32 hardware timer fires a single
+// IRAM ISR at a fixed rate; each registered axis emits at most one STEP edge
+// per tick toward its target and maintains an AUTHORITATIVE executed-step
+// counter (curSteps_). writeStepperMm() therefore only stores a target and
+// never blocks the 1 kHz RT task; the pulse train is produced in the background.
+//
+// Two ISR ticks make one full pulse (rising then falling), so the per-axis step
+// rate is timerHz/2. This is the "RMT/GPTimer" backend the reviews asked for,
+// realised with the always-available hw_timer_t API.
+//
+// Status: IMPLEMENTED · COMPILES in CI against the real arduino-esp32 timer API
+// (2.x here; 3.x branch guarded) · the pulse-EMISSION LOGIC is unit-tested via
+// the native Arduino stub. NOT HARDWARE-VERIFIED: real ISR cadence, IRAM
+// placement of digitalWrite, and actual step output require a bench. Treat as
+// experimental until validated on hardware.
+// ---------------------------------------------------------------------------
+class EspStepGen {
+public:
+    // Register this axis and (on first use) start the shared timer. pinMode for
+    // step/dir is done by the owning sink.
+    void begin(int stepPin, int dirPin, bool invertDir) {
+        stepPin_ = stepPin; dirPin_ = dirPin; invertDir_ = invertDir;
+        curSteps_ = 0; targetSteps_ = 0; stepHigh_ = false;
+        if (!registered_ && s_count < kMaxGens) { s_gens[s_count++] = this; registered_ = true; }
+        startTimerOnce();
+    }
+    // Non-blocking: just publish the new target; the ISR walks curSteps_ to it.
+    void setTargetSteps(long t) { targetSteps_ = t; }
+    // Redefine the reference at a homing contact (no motion implied).
+    void syncSteps(long s) { curSteps_ = s; targetSteps_ = s; stepHigh_ = false; }
+    long curSteps() const { return curSteps_; }
+
+    // One timer tick for this axis. Rising edge sets DIR + STEP high; the next
+    // tick drops STEP and advances the executed counter. Called from the ISR on
+    // hardware and directly from the unit test.
+    void IRAM_ATTR serviceTick() {
+        long tgt = targetSteps_, cur = curSteps_;
+        if (cur == tgt || stepPin_ < 0) return;
+        if (!stepHigh_) {
+            bool dir = (tgt > cur) ^ invertDir_;
+            if (dirPin_ >= 0) digitalWrite(dirPin_, dir ? HIGH : LOW);
+            digitalWrite(stepPin_, HIGH);
+            stepHigh_ = true;
+        } else {
+            digitalWrite(stepPin_, LOW);
+            stepHigh_ = false;
+            curSteps_ = cur + ((tgt > cur) ? 1 : -1);
+        }
+    }
+
+private:
+    static constexpr uint8_t  kMaxGens = MAX_INSTRUMENTS;
+    static constexpr uint32_t kTickUs  = 25;   // 40 kHz ISR → 20 k steps/s per axis
+    inline static EspStepGen* s_gens[kMaxGens] = {nullptr};
+    inline static uint8_t     s_count = 0;
+    inline static hw_timer_t* s_timer = nullptr;
+
+    static void IRAM_ATTR s_onTimer() {
+        for (uint8_t i = 0; i < s_count; ++i) if (s_gens[i]) s_gens[i]->serviceTick();
+    }
+    static void startTimerOnce() {
+        if (s_timer) return;
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+        s_timer = timerBegin(1000000);            // 1 MHz tick base (3.x API)
+        if (s_timer) { timerAttachInterrupt(s_timer, &s_onTimer); timerAlarm(s_timer, kTickUs, true, 0); }
+#else
+        s_timer = timerBegin(0, 80, true);        // 80 MHz / 80 = 1 MHz (2.x API)
+        if (s_timer) {
+            timerAttachInterrupt(s_timer, &s_onTimer, true);
+            timerAlarmWrite(s_timer, kTickUs, true);
+            timerAlarmEnable(s_timer);
+        }
+#endif
+    }
+
+    int  stepPin_ = -1, dirPin_ = -1;
+    bool invertDir_ = false, stepHigh_ = false, registered_ = false;
+    volatile long curSteps_ = 0, targetSteps_ = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Motion sink: hardware-timer step generation + servo PWM.
+// The core computes the trapezoidal profile; this sink realises the commanded
+// position through EspStepGen (non-blocking) and reports the executed position
+// back from the authoritative step counter.
 // ---------------------------------------------------------------------------
 class EspMotionSink : public IMotionSink {
 public:
@@ -46,7 +128,7 @@ public:
             // (review #7 §3).
             if (s.endstopMax.pin >= 0)
                 pinMode(s.endstopMax.pin, s.endstopMax.internalPullup ? INPUT_PULLUP : INPUT);
-            curSteps_ = 0;
+            stepGen_.begin(s.stepPin, s.dirPin, s.invertDir);   // hardware-timer stepping
         }
         if (cfg.type == SlideDriveType::SingleServo || cfg.type == SlideDriveType::DualServo)
             attachServo(0, cfg.servoA);
@@ -54,22 +136,15 @@ public:
             attachServo(1, cfg.servoB);
     }
 
+    // Non-blocking: publish the target step count; the hardware-timer ISR walks
+    // the executed counter to it. No delayMicroseconds busy-wait in the RT task.
     void writeStepperMm(float mm) override {
-        long target = (long)(mm * cfg_.stepper.stepsPerMm);
-        long delta  = target - curSteps_;
-        if (delta == 0) return;
-        bool dir = (delta > 0) ^ cfg_.stepper.invertDir;
-        if (cfg_.stepper.dirPin >= 0) digitalWrite(cfg_.stepper.dirPin, dir ? HIGH : LOW);
-        long steps = delta > 0 ? delta : -delta;
-        if (steps > kMaxStepsPerCall) steps = kMaxStepsPerCall;   // bounded, non-blocking
-        for (long i = 0; i < steps; ++i) {
-            digitalWrite(cfg_.stepper.stepPin, HIGH);
-            delayMicroseconds(3);
-            digitalWrite(cfg_.stepper.stepPin, LOW);
-            delayMicroseconds(3);
-        }
-        curSteps_ += (delta > 0 ? steps : -steps);
+        stepGen_.setTargetSteps(lroundf(mm * cfg_.stepper.stepsPerMm));
     }
+
+    // Test hook: on hardware the shared timer ISR services every axis; off-device
+    // (no timer) the native backend test drives the pulse logic through here.
+    void serviceStepGenTick() { stepGen_.serviceTick(); }
 
     void writeServoUs(uint8_t index, uint16_t us) override {
         if (index > 1) return;
@@ -96,17 +171,16 @@ public:
     // motion instead of a phantom correction back to the pre-home count
     // (review #8 §1 — the base-class default no-op left curSteps_ untouched).
     void syncPositionMm(float mm) override {
-        curSteps_ = lroundf(mm * cfg_.stepper.stepsPerMm);
+        stepGen_.syncSteps(lroundf(mm * cfg_.stepper.stepsPerMm));
     }
 
-    // Authoritative executed position from the pulses actually emitted so far.
-    // writeStepperMm() emits at most kMaxStepsPerCall pulses per call, so during
-    // a fast move curSteps_ trails the commanded mm; the actuator gates air on
-    // this (review #7/#8 §6). A future RMT/GPTimer step generator would keep the
-    // same curSteps_ contract, so no actuator change is needed for that upgrade.
+    // Authoritative executed position from the pulses the timer ISR has actually
+    // emitted so far. During a fast move the executed counter trails the
+    // commanded mm (the ISR is still walking toward the target), so the actuator
+    // gates air on this (review #7/#8 §6).
     bool executedPositionMm(float& mm) const override {
         if (cfg_.stepper.stepsPerMm <= 0.0f) return false;
-        mm = float(curSteps_) / cfg_.stepper.stepsPerMm;
+        mm = float(stepGen_.curSteps()) / cfg_.stepper.stepsPerMm;
         return true;
     }
 
@@ -116,10 +190,9 @@ private:
         PwmConfig p; p.pin = s.pin; p.freqHz = s.freqHz; p.resolution = 16;
         servo_[idx].attach(p);
     }
-    static constexpr long kMaxStepsPerCall = 8;
     SlideMotionConfig cfg_;
-    long      curSteps_ = 0;
-    PwmOutput servo_[2];
+    EspStepGen stepGen_;
+    PwmOutput  servo_[2];
 };
 
 // ---------------------------------------------------------------------------
