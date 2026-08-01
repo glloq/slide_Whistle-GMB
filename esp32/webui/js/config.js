@@ -22,6 +22,17 @@ const HW_PATHS = [
   "air.flow.type", "air.flow.pin", "air.flow.backend", "air.flow.pca",
   "air.angle.enabled", "air.angle.pin", "air.angle.backend", "air.angle.pca",
   "air.sensor.type", "air.sensor.pin",
+  // Parameters applyDynamic() cannot push to the built objects, so a change
+  // needs a reboot too (mirror of the firmware's unappliedParamsDiffer, review
+  // #7 §12). The firmware response stays authoritative; this only sharpens the
+  // instant client-side hint. Kept to the fields the UI commonly edits.
+  "motion.travelMm",
+  "motion.stepper.stepsPerMm", "motion.stepper.invertDir", "motion.stepper.homeTowardZero",
+  "motion.stepper.idleDisableMs", "motion.stepper.alwaysHold",
+  "air.source.spinUpMs", "air.source.pidKp", "air.source.requireSensor",
+  "air.gate.servoMinUs", "air.gate.servoMaxUs", "air.gate.activeHigh",
+  "air.flow.servoMinUs", "air.flow.servoMaxUs",
+  "air.sensor.staleTimeoutMs", "watchdogMs",
 ];
 
 // Device/config-level fields (outside the per-instrument array) needing restart:

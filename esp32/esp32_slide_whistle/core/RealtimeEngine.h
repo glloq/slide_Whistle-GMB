@@ -182,6 +182,29 @@ private:
         if (in->sequencer().activeNoteOr(-1) >= 0 || in->sequencer().heldCount() > 0) return true;
         uint8_t slot = in->id();
         if (slot < MAX_INSTRUMENTS && testAir_[slot].phase != TestAirPhase::Idle) return true;
+        // A diagnostic must also wait for any in-flight motion or air activity —
+        // otherwise two commands in the same drain batch (Home+Jog, Jog+TestActuator,
+        // TestActuator+TestAir) overwrite each other's target (review #7 §5).
+        if (auto* a = in->actuator())
+            if (a->state() == MotionState::Moving || a->state() == MotionState::Homing) return true;
+        if (auto* air = in->air()) {
+            AirState s = air->state();
+            if (s == AirState::Preparing || s == AirState::Playing || s == AirState::Releasing) return true;
+        }
+        return false;
+    }
+
+    // Re-arm only makes sense when something is actually faulted/e-stopped.
+    // Without this guard a Rearm sent from Ready during a note would clear the
+    // air and force a re-home mid-play (review #7 §5).
+    bool instrumentNeedsRearm(Instrument* in) {
+        if (!in) return false;
+        if (auto* a = in->actuator())
+            if (a->state() == MotionState::Fault || a->state() == MotionState::EStopped ||
+                a->fault() != FaultCode::None) return true;
+        if (auto* air = in->air())
+            if (air->state() == AirState::Fault || air->state() == AirState::EStopped ||
+                air->fault() != FaultCode::None) return true;
         return false;
     }
 
@@ -254,6 +277,7 @@ private:
                 // Acknowledge fault + re-arm actuator & air, then re-home so the
                 // instrument is usable again after panic (review #9).
                 Instrument* in = byId(c.instrument);
+                if (in && !instrumentNeedsRearm(in)) { ack(c, ExecResult::Rejected); break; }
                 if (in) {
                     if (in->actuator()) in->actuator()->clearFault();
                     if (in->air())      in->air()->rearm();
@@ -334,7 +358,11 @@ private:
     const RuntimeConfig* live_ = nullptr;       // for ApplyDynamicConfig
     TestAirState       testAir_[MAX_INSTRUMENTS];                   // per-instrument TestAir FSM
     ExecAck            lastAck_{};                                  // last direct-command ack
-    bool               blocked_ = false;                           // global-fault command gate
+    // Blocked by default: the RT task drains the queue on its very first tick,
+    // before MainApp's lifecycle code sets the gate. Starting unblocked let a
+    // command enqueued at boot (before homing) execute in that first drain
+    // (review #7 §4). MainApp clears it only once the system reaches Ready.
+    bool               blocked_ = true;                            // command gate (blocked until Ready)
     std::atomic<bool>  safeRestartDone_{false};                    // RT reached safe state for reboot
 };
 

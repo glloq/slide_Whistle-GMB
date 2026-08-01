@@ -327,6 +327,46 @@ Origin allow-list on the WebSocket handshake (the HTTP POST path is already
 gated); plus the Phase-4/5 backends and UI (PCA9685/ToF/digital sensors, MIDI
 transports, OTA, full wizard/calibration screens, config-driven keyboard).
 
+## Seventh review response (stepper, lifecycle, validation, config, sensor)
+
+Review #7 re-audited the whole system and made `curSteps_`-not-reset the new
+headline. The software-provable items were closed here in the recommended Lot
+order, each with a test that fails without the change:
+
+| Item | Status |
+|------|--------|
+| §1 Homing zero not pushed to the step counter | FIXED·TESTED (IMotionSink::syncPositionMm; EspMotionSink resets curSteps_ at contact) |
+| §1 Homing toward max used pos_=0 | FIXED·TESTED (max contact defined as travelMm, then moves inward by offset) |
+| §3 endstopMax pin not configured / homing endstop optional | FIXED·TESTED (EspMotionSink configures both pins; validator requires the homing-side endstop) |
+| §4 Command gate applied after the drain / server before RT task | FIXED (gate set before engine.tick(); engine starts blocked; server started after the RT task) — compiles in CI |
+| §4/§5 Engine could act before Ready; diagnostics not exclusive | FIXED·TESTED (blocked_ defaults true; instrumentBusy() covers Moving/Homing + air Preparing/Playing/Releasing) |
+| §5 Rearm had no state guard | FIXED·TESTED (Rearm rejected unless the instrument is actually faulted/e-stopped) |
+| §7 Unimplemented backends reach Ready | FIXED·TESTED (validator emits UNSUPPORTED_BACKEND for PCA9685 outputs and ToF/digital sensors) |
+| §14 FanOnOff LEDC not counted; flow GPIO pin optional | FIXED·TESTED (LEDC claimed for both fan modes; active GPIO flow pin required) |
+| §12 configNeedsRestart classed unapplied fields as dynamic | FIXED·TESTED (unappliedParamsDiffer forces restart for calibration/homing/source/PID/servo-window/sensor/watchdog/travelMm; live fields stay dynamic; mirrored in config.js) |
+| §13 Live soft-limit shrink clamped the position | FIXED·TESTED (a window excluding pos_/target_ is refused until the axis is idle inside it) |
+| §20 SensorStale unreachable; frozen_ drove nothing | FIXED·TESTED (a reading frozen 20× the timeout becomes stale → AirSafetyController trips) |
+
+Still open from review #7 — the genuine hardware/integration blockers that keep
+this **firmware beta / hardware alpha**, unchanged in kind from review #6 and
+not honestly closable without a bench: §2 the RMT/GPTimer stepper with an
+authoritative executed-step counter, tracking-error supervision, and air-gating
+on the *executed* position (the §1 counter-sync is a correct partial step, but
+the open-loop virtual position remains); §3 continuous dual-endstop monitoring
+*during play* (config + validation are done, runtime supervision is not); §6/§8
+propagating sink `attach()` failures into the startup validator so a silent
+LEDC/servo attach failure cannot reach Ready; §8 PWM/source polarity for
+SolenoidPwm/pumps/fans/flow; §9 separated applied-vs-desired config with atomic
+generations and an immutable dynamic snapshot carried on the command, plus
+inter-core locking of `RuntimeConfig` (§10/§11); §16 a genuine in-flash LittleFS
+recovery page; §17 HTTP size-check-before-buffer, WS fragmentation, and the
+Origin allow-list on the WS handshake; §18 a real `watchdogMs` producer-timeout
+with per-source note ownership; §19 a formally-safe snapshot (short critical
+section over a full copy); plus the Phase-4/5 backends and UI (PCA9685/ToF/
+digital sensors, MIDI DIN/BLE/RTP/USB, Wi-Fi station, OTA/rollback, full
+wizard/calibration screens, config-driven keyboard). These now fail validation
+(UNSUPPORTED_BACKEND) instead of silently reaching Ready.
+
 ## How to run the software tests
 
 ```sh

@@ -19,6 +19,7 @@
 #include "Types.h"
 #include <vector>
 #include <string>
+#include <utility>
 
 namespace swc {
 
@@ -93,7 +94,7 @@ public:
     explicit HardwareResourceValidator(BoardProfile b = BoardProfile::wroom())
         : board_(b) {}
 
-    void reset() { pins_.clear(); ranges_.clear(); pcas_.clear(); ledc_.clear(); required_.clear(); wifiOn_ = true; }
+    void reset() { pins_.clear(); ranges_.clear(); pcas_.clear(); ledc_.clear(); required_.clear(); unsupported_.clear(); wifiOn_ = true; }
     void setBoard(const BoardProfile& b) { board_ = b; }
     void setWifi(bool on) { wifiOn_ = on; }
 
@@ -110,6 +111,13 @@ public:
     void claimRange(long lo, long hi, const std::string& field) { ranges_.push_back({lo, hi, field}); }
     void claimPca(uint8_t addr, uint8_t ch, const std::string& field) { pcas_.push_back({addr, ch, field}); }
     void claimLedc(const std::string& field) { ledc_.push_back({field}); }
+    // Flag a configuration that selects a backend the firmware does not yet
+    // drive (PCA9685 outputs, ToF / digital sensors). A config that reaches
+    // Ready while selecting one of these would silently move no hardware, so it
+    // is a hard error, not a TODO (review #7 §7).
+    void markUnsupported(const std::string& field, const std::string& what) {
+        unsupported_.push_back({field, what});
+    }
 
     std::vector<ValidationIssue> validate() {
         std::vector<ValidationIssue> out;
@@ -155,6 +163,9 @@ public:
         // 6. mandatory pins left unassigned for the selected mode (#24)
         for (const auto& field : required_)
             add(out, "PIN_REQUIRED", "a pin is required for the selected mode but is unassigned", field);
+        // 7. backends the firmware cannot actually drive yet (#7)
+        for (const auto& u : unsupported_)
+            add(out, "UNSUPPORTED_BACKEND", u.second + " is selected but not implemented in this firmware", u.first);
         return out;
     }
 
@@ -179,6 +190,7 @@ private:
     std::vector<PcaClaim>   pcas_;
     std::vector<LedcClaim>  ledc_;
     std::vector<std::string> required_;   // fields of mandatory-but-unassigned pins
+    std::vector<std::pair<std::string,std::string>> unsupported_;   // {field, what}
 };
 
 } // namespace swc

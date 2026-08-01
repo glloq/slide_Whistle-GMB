@@ -50,7 +50,7 @@ TEST(engine_routes_by_channel) {
     r1.begin(0, icfg(1, 48, 84));
     r2.begin(1, icfg(2, 48, 84));
     Instrument* insts[] = {&r1.inst, &r2.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q); eng.setCommandsBlocked(false);
     MidiRouter<32> router(q);
 
     router.noteOn(1, 60, 100);          // channel 1 → only instrument 0
@@ -64,7 +64,7 @@ TEST(engine_split_by_note_range) {
     low.begin(0, icfg(1, 48, 59));      // low split
     high.begin(1, icfg(1, 60, 84));     // high split, same channel
     Instrument* insts[] = {&low.inst, &high.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q); eng.setCommandsBlocked(false);
     MidiRouter<32> router(q);
     router.noteOn(1, 55, 100);
     router.noteOn(1, 72, 100);
@@ -78,7 +78,7 @@ TEST(engine_split_by_note_range) {
 TEST(engine_transpose) {
     InstRig r; r.begin(0, icfg(1, 48, 84));
     Instrument* insts[] = {&r.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     MidiRouter<32> router(q); router.setTranspose(12);
     router.noteOn(1, 48, 100);          // +12 → 60
     for (int k = 0; k < 3; ++k) eng.tick(k, k*1000);
@@ -141,7 +141,7 @@ TEST(test_endpoint_hits_one_instrument_only) {
     CHECK(a0.isHomed()); CHECK(a1.isHomed());
 
     Instrument* insts[] = {&i0, &i1};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q); eng.setCommandsBlocked(false);
     Command t{CommandType::TestActuator}; t.instrument = 1; t.a = 40;   // move instrument 1 to 40 mm
     q.push(t);
     for (uint32_t k=3000; k<7000; ++k) eng.tick(k, k*1000);
@@ -152,7 +152,7 @@ TEST(test_endpoint_hits_one_instrument_only) {
 TEST(engine_pitchbend_via_queue) {
     InstRig r; r.begin(0, icfg(1, 48, 84));
     Instrument* insts[] = {&r.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     eng.setPitchBendRange(2.0f);
     MidiRouter<32> router(q);
     router.noteOn(1, 60, 100);
@@ -166,7 +166,7 @@ TEST(engine_pitchbend_via_queue) {
 TEST(engine_testair_auto_timeout) {
     InstRig r; r.begin(0, icfg(1, 48, 84));
     Instrument* insts[] = {&r.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     Command t{CommandType::TestAir}; t.instrument = 0; t.b = 100; t.i16 = 50;  // 50 ms
     q.push(t);
     uint32_t k = 0;
@@ -197,7 +197,7 @@ TEST(engine_apply_dynamic_updates_live_notemap) {
     uint32_t t=0; for (int k=0;k<3000 && !act.isHomed();++k){t++;act.update(t*1000);} CHECK(act.isHomed());
 
     Instrument* insts[]={&inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts,1,&q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts,1,&q); eng.setCommandsBlocked(false);
 
     // live config with a DIFFERENT calibration: note 60 → 50 mm
     RuntimeConfig live = defaultConfig(); live.instrumentCount=1;
@@ -217,7 +217,7 @@ TEST(engine_apply_dynamic_updates_live_notemap) {
 TEST(engine_rearm_after_panic) {
     InstRig r; r.begin(0, icfg(1, 48, 84));
     Instrument* insts[] = {&r.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     q.push(Command{CommandType::Panic});
     eng.tick(0, 0);
     CHECK(r.air.state() == AirState::EStopped);
@@ -237,7 +237,7 @@ TEST(engine_two_testair_sessions_independent) {
     r0.begin(0, icfg(1, 48, 84));
     r1.begin(1, icfg(2, 48, 84));
     Instrument* insts[] = {&r0.inst, &r1.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q); eng.setCommandsBlocked(false);
     Command t0{CommandType::TestAir}; t0.instrument = 0; t0.i16 = 40; q.push(t0);
     eng.tick(0, 0);                         // t0 Prepare→WaitReady
     eng.tick(1, 1000);                      // t0 source ready → opens (hold from t=1)
@@ -326,7 +326,7 @@ TEST(engine_direct_command_routes_by_stable_id) {
     a.begin(3, icfg(1, 48, 84));            // stable id 3, array index 0
     b.begin(1, icfg(2, 48, 84));            // stable id 1, array index 1
     Instrument* insts[] = {&a.inst, &b.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 2, &q); eng.setCommandsBlocked(false);
     Command t{CommandType::TestAir}; t.instrument = 3; t.i16 = 50; q.push(t);
     eng.tick(0, 0);                         // Prepare→WaitReady
     eng.tick(1, 1000);                      // source ready → opens
@@ -343,7 +343,7 @@ TEST(engine_jog_is_signed_relative) {
     InstRig a;
     a.begin(0, icfg(1, 48, 84));
     Instrument* insts[] = {&a.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     Command pos{CommandType::TestActuator}; pos.instrument = 0; pos.a = 50; q.push(pos);
     eng.tick(0, 0);
     CHECK_NEAR(a.act.currentPositionMm(), 50.0f, 1e-3);
@@ -359,7 +359,7 @@ TEST(engine_exec_ack_accepted_and_rejected) {
     InstRig a;
     a.begin(0, icfg(1, 48, 84));
     Instrument* insts[] = {&a.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     Command home{CommandType::Home}; home.instrument = 0; home.seq = 42; q.push(home);
     eng.tick(0, 0);
     CHECK_EQ(eng.lastExec().seq, 42u);
@@ -378,7 +378,7 @@ TEST(engine_fault_gate_refuses_actuation) {
     InstRig a;
     a.begin(0, icfg(1, 48, 84));
     Instrument* insts[] = {&a.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     eng.setCommandsBlocked(true);
     // NoteOn is dropped — no air opens.
     Command on{CommandType::NoteOn}; on.channel = 1; on.a = 60; on.b = 100; q.push(on);
@@ -403,7 +403,7 @@ TEST(engine_safe_restart_reaches_safe_state) {
     InstRig a;
     a.begin(0, icfg(1, 48, 84));
     Instrument* insts[] = {&a.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     // start a note so there is air to shut off
     Command on{CommandType::NoteOn}; on.channel = 1; on.a = 60; on.b = 100; q.push(on);
     for (int k = 0; k < 4; ++k) eng.tick(k, k * 1000);
@@ -452,7 +452,7 @@ TEST(engine_testair_waits_for_source_ready) {
     DisabledSlideActuator act; SlideMotionConfig mc; mc.type = SlideDriveType::Disabled; act.begin(mc);
     StubAir air; NoteMap map; Instrument in; in.begin(0, &act, &air, &map, icfg(1, 48, 84));
     Instrument* insts[] = {&in};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     Command t{CommandType::TestAir}; t.instrument = 0; t.i16 = 1000; q.push(t);
     for (int k = 0; k < 5; ++k) eng.tick(k, k * 1000);
     CHECK_EQ(air.started_, 0);              // source not ready → gate never opened
@@ -470,7 +470,7 @@ TEST(engine_testair_rejected_when_air_faulted) {
     StubAir air; air.fault_ = FaultCode::Overpressure;
     NoteMap map; Instrument in; in.begin(0, &act, &air, &map, icfg(1, 48, 84));
     Instrument* insts[] = {&in};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     Command t{CommandType::TestAir}; t.instrument = 0; t.seq = 5; q.push(t);
     eng.tick(0, 0);
     CHECK(eng.lastExec().result == ExecResult::Rejected);
@@ -482,7 +482,7 @@ TEST(engine_testair_rejected_when_air_faulted) {
 TEST(engine_global_transpose_applied) {
     InstRig a; a.begin(0, icfg(1, 48, 84));
     Instrument* insts[] = {&a.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     eng.setTranspose(12);
     Command on{CommandType::NoteOn}; on.channel = 1; on.a = 60; on.b = 100; q.push(on);
     for (int k = 0; k < 4; ++k) eng.tick(k, k * 1000);
@@ -504,7 +504,7 @@ TEST(engine_jog_rejected_when_move_refused) {
     AirSystem air; FASink s; air.begin(air2(), &s);
     NoteMap map; Instrument in; in.begin(0, &act, &air, &map, icfg(1, 48, 84));
     Instrument* insts[] = {&in};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     Command jog{CommandType::Jog}; jog.instrument = 0; jog.i16 = 10; jog.seq = 3; q.push(jog);
     eng.tick(0, 0);
     CHECK(eng.lastExec().result == ExecResult::Rejected);
@@ -515,7 +515,7 @@ TEST(engine_jog_rejected_when_move_refused) {
 TEST(engine_transpose_drops_out_of_range) {
     InstRig a; a.begin(0, icfg(1, 0, 127));
     Instrument* insts[] = {&a.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     eng.setTranspose(70);
     Command on{CommandType::NoteOn}; on.channel = 1; on.a = 100; on.b = 100; q.push(on);  // 170 > 127
     for (int k = 0; k < 4; ++k) eng.tick(k, k * 1000);
@@ -528,7 +528,7 @@ TEST(engine_transpose_drops_out_of_range) {
 TEST(engine_diagnostics_rejected_while_note_active) {
     InstRig a; a.begin(0, icfg(1, 48, 84));
     Instrument* insts[] = {&a.inst};
-    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
     Command on{CommandType::NoteOn}; on.channel = 1; on.a = 60; on.b = 100; q.push(on);
     for (int k = 0; k < 4; ++k) eng.tick(k, k * 1000);
     CHECK(a.sink.gateOpen);                     // note playing
@@ -539,4 +539,65 @@ TEST(engine_diagnostics_rejected_while_note_active) {
     eng.tick(6, 6000);
     CHECK(eng.lastExec().result == ExecResult::Rejected);
     CHECK(a.sink.gateOpen);                     // note still undisturbed
+}
+
+// Review #7 §4: the engine starts BLOCKED. A command enqueued before MainApp's
+// lifecycle code runs (i.e. before Ready) must not execute on the first drain.
+TEST(engine_blocked_by_default_until_ready) {
+    InstRig a; a.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&a.inst};
+    Command on{CommandType::NoteOn}; on.channel = 1; on.a = 60; on.b = 100;
+    Command t{CommandType::TestAir}; t.instrument = 0; t.seq = 3;
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q);  // NOT unblocked
+    CHECK(eng.commandsBlocked());               // blocked out of the box
+    q.push(on); q.push(t);
+    for (int k = 0; k < 4; ++k) eng.tick(k, k * 1000);
+    CHECK(!a.sink.gateOpen);                     // NoteOn dropped while blocked
+    CHECK(eng.lastExec().result == ExecResult::Rejected);   // TestAir rejected
+}
+
+// Review #7 §5: two diagnostics in the SAME drain batch must not overwrite each
+// other — instrumentBusy() now also covers in-flight motion. On a HOMED axis, a
+// TestActuator starts a move (Moving); a Jog behind it in the batch is Rejected
+// rather than overwriting the target.
+TEST(engine_diagnostics_exclusive_during_motion) {
+    struct MSink : IMotionSink { float mm=0; void writeStepperMm(float v) override{mm=v;}
+        void writeServoUs(uint8_t,uint16_t) override{} void enableDriver(bool) override{}
+        bool readEndstop(bool) override{return mm<=0.0f;} } m;   // trips at/below 0
+    StepDirSlideActuator act(&m);
+    SlideMotionConfig mc; mc.type = SlideDriveType::StepDir; mc.travelMm=100; mc.softMaxMm=100;
+    mc.maxSpeedMmS=30; mc.accelMmS2=200; mc.stepper.stepsPerMm=80;
+    mc.stepper.homingFastMmS=50; mc.stepper.phaseTimeoutMs=100000; mc.stepper.homeBackoffMm=2;
+    act.begin(mc); act.requestHoming();
+    for (int k=0;k<3000 && !act.isHomed();++k) act.update(k*1000);
+    CHECK(act.isHomed());
+    AirSystem air; FASink s; air.begin(air2(), &s); NoteMap map;
+    Instrument in; in.begin(0, &act, &air, &map, icfg(1,48,84));
+    Instrument* insts[] = {&in};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
+    // Same batch: TestActuator(→60) accepted and axis starts Moving; the Jog
+    // behind it must be rejected, not overwrite the 60 mm target.
+    Command ta{CommandType::TestActuator}; ta.instrument = 0; ta.a = 60; ta.seq = 1; q.push(ta);
+    Command j{CommandType::Jog}; j.instrument = 0; j.i16 = -50; j.seq = 2; q.push(j);
+    uint32_t t = 4000; eng.tick(t, t*1000);
+    CHECK(act.state() == MotionState::Moving);
+    CHECK(eng.lastExec().seq == 2);                          // the Jog ack
+    CHECK(eng.lastExec().result == ExecResult::Rejected);    // rejected: axis busy moving
+    CHECK_NEAR(act.targetPositionMm(), 60.0f, 0.01f);        // Jog did not move the target
+}
+
+// Review #7 §5: Rearm is only valid when something is actually faulted. Sent
+// from a clean (Ready) instrument it is Rejected; after a Panic it is Accepted.
+TEST(engine_rearm_requires_fault) {
+    InstRig a; a.begin(0, icfg(1, 48, 84));
+    Instrument* insts[] = {&a.inst};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
+    Command re{CommandType::Rearm}; re.instrument = 0; re.seq = 1; q.push(re);
+    eng.tick(0, 0);
+    CHECK(eng.lastExec().result == ExecResult::Rejected);   // nothing to re-arm
+    // Now fault the instrument via Panic, then Rearm is accepted.
+    Command p{CommandType::Panic}; q.push(p); eng.tick(1, 1000);
+    Command re2{CommandType::Rearm}; re2.instrument = 0; re2.seq = 2; q.push(re2);
+    eng.tick(2, 2000);
+    CHECK(eng.lastExec().result == ExecResult::Accepted);
 }

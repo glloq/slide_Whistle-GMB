@@ -91,6 +91,13 @@ public:
     virtual void writeServoUs(uint8_t index, uint16_t us) = 0; // index 0=A,1=B
     virtual void enableDriver(bool on) = 0;
     virtual bool readEndstop(bool useMax) = 0;          // logical: true = triggered
+    // Re-define the executed-step counter so that the NEXT writeStepperMm(mm)
+    // commands zero motion. Called at the precise homing contact when the
+    // actuator redefines its mm reference (0 at min, travelMm at max): without
+    // it the hardware counter keeps the pre-home value and the first post-home
+    // move drives a large phantom correction (review #7 §1). Default no-op:
+    // absolute backends (servo) and test fakes need nothing.
+    virtual void syncPositionMm(float mm) { (void)mm; }
     virtual ~IMotionSink() = default;
 };
 

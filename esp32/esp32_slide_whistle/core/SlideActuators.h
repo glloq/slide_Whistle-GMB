@@ -102,8 +102,20 @@ public:
         // Only the safe, dynamic fields — never pins / type / backend (#6).
         cfg_.maxSpeedMmS = c.maxSpeedMmS;
         cfg_.accelMmS2   = c.accelMmS2;
-        cfg_.softMinMm   = c.softMinMm;
-        cfg_.softMaxMm   = c.softMaxMm;
+        // Soft limits can only be tightened LIVE if the axis is idle and both the
+        // current position and target already sit inside the new window. Applying
+        // a window that excludes pos_/target_ mid-move would clamp pos_ in the
+        // integrator without a real move — a phantom jump in reported position
+        // (review #7 §13). Reject the shrink otherwise; the change then falls to
+        // the restart path (configNeedsRestart already treats it accordingly is
+        // not required — the caller keeps the old limits until a safe moment).
+        const bool idle = (state_ != MotionState::Moving && state_ != MotionState::Homing);
+        const bool posInside = pos_ >= c.softMinMm - 1e-3f && pos_ <= c.softMaxMm + 1e-3f;
+        const bool tgtInside = target_ >= c.softMinMm - 1e-3f && target_ <= c.softMaxMm + 1e-3f;
+        if (idle && posInside && tgtInside) {
+            cfg_.softMinMm = c.softMinMm;
+            cfg_.softMaxMm = c.softMaxMm;
+        }
     }
 
     bool isReadyForAir() const override {
@@ -247,8 +259,19 @@ protected:
                 break;
             case HPhase::SlowSeek:                         // creep back to precise contact
                 if (hit) {
-                    pos_    = 0.0f;                         // define zero AT the switch
-                    target_ = cfg_.stepper.homeOffsetMm;   // then physically move to offset
+                    // Define the mm reference AT the switch: 0 mm when homing to
+                    // the min end, travelMm when homing to the max end. Homing to
+                    // max previously also set pos_=0, so every later positive
+                    // target drove toward the max butée instead of inward (#7 §1).
+                    pos_ = cfg_.stepper.homeTowardZero ? 0.0f : cfg_.travelMm;
+                    // Realign the executed-step counter to this reference so the
+                    // next commanded move starts from here, not from the raw seek
+                    // count (#7 §1). No-op on absolute backends.
+                    if (sink_) sink_->syncPositionMm(pos_);
+                    // Move inward off the switch by the offset (toward the middle
+                    // of the travel, i.e. away from whichever butée we hit).
+                    const float inward = cfg_.stepper.homeTowardZero ? 1.0f : -1.0f;
+                    target_ = pos_ + inward * cfg_.stepper.homeOffsetMm;
                     enterPhase(HPhase::MoveToOffset, nowUs);
                 } else {
                     pos_ += dir * cfg_.stepper.homingSlowMmS * dt;

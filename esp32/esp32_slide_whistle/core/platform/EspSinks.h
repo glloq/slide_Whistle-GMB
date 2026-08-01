@@ -41,6 +41,11 @@ public:
             if (s.enablePin >= 0) { pinMode(s.enablePin, OUTPUT); enableDriver(false); }
             if (s.endstopMin.pin >= 0)
                 pinMode(s.endstopMin.pin, s.endstopMin.internalPullup ? INPUT_PULLUP : INPUT);
+            // Configure the max endstop too — homing toward the max end reads it,
+            // and continuous supervision needs both inputs driven, not floating
+            // (review #7 §3).
+            if (s.endstopMax.pin >= 0)
+                pinMode(s.endstopMax.pin, s.endstopMax.internalPullup ? INPUT_PULLUP : INPUT);
             curSteps_ = 0;
         }
         if (cfg.type == SlideDriveType::SingleServo || cfg.type == SlideDriveType::DualServo)

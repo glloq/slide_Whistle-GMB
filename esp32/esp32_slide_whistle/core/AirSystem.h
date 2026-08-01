@@ -147,14 +147,18 @@ public:
             return;   // no fresh sample this tick — do not fabricate one
         }
         present_ = true;                          // recovered / present
-        lastGoodMs_ = nowMs; haveTime_ = true;    // a fresh sample arrived → not stale
-        stale_ = false;
+        lastGoodMs_ = nowMs; haveTime_ = true;    // a fresh sample arrived
         if (std::isnan(filt_)) filt_ = raw;
         else filt_ = filt_ + c_.filterAlpha * (raw - filt_);
         // "frozen" is a DISTINCT diagnostic (long window) — a perfectly stable
-        // reading is NOT stale (review #14).
+        // reading is NOT stale over a normal timeout (review #14). But a reading
+        // pinned to the exact same value for a very long time (20× the timeout)
+        // is a stuck/failed sensor: mark it stale so fault() surfaces SensorStale
+        // and the AirSafetyController acts on it — previously frozen_ was computed
+        // but drove nothing and SensorStale was unreachable (review #7 §20).
         if (std::isnan(lastRaw_) || std::fabs(raw - lastRaw_) > 0.5f) { lastRaw_ = raw; lastChangeMs_ = nowMs; }
         frozen_ = elapsed_u32(nowMs, lastChangeMs_) > (c_.staleTimeoutMs * 20u);
+        stale_  = frozen_;                         // a frozen reading is treated as stale
         float phys = c_.physMin + (filt_ - c_.rawMin) / (c_.rawMax - c_.rawMin) *
                      (c_.physMax - c_.physMin);
         if (c_.invert) phys = c_.physMax - (phys - c_.physMin);

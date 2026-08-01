@@ -244,6 +244,34 @@ TEST(config_needs_restart_covers_more_fields) {
     { RuntimeConfig b = a; b.midi.transpose = (int8_t)(a.midi.transpose + 1); CHECK(!configNeedsRestart(a, b)); }
 }
 
+// Review #7 §12: fields applyDynamic() cannot push to the built objects must
+// force a restart — otherwise a "dynamic" apply would run against hardware
+// constructed from the previous values.
+TEST(config_needs_restart_for_unapplied_params) {
+    RuntimeConfig a = defaultConfig();
+    a.instrumentCount = 1; a.instruments[0].enabled = true;
+    // --- these are NOT applied dynamically → must require restart ---
+    { RuntimeConfig b = a; b.instruments[0].motion.travelMm += 5.0f;                 CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].motion.stepper.stepsPerMm += 1.0f;       CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].motion.stepper.invertDir ^= 1;           CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].motion.stepper.homeTowardZero ^= 1;      CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].motion.stepper.idleDisableMs += 100;     CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].motion.servoA.trimUs += 10;              CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].motion.servoA.cal[0].us += 5;            CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.source.spinUpMs += 10;               CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.source.pidKp += 0.01f;               CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.gate.servoMinUs += 10;               CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.flow.servoMaxUs += 10;               CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.sensor.staleTimeoutMs += 50;         CHECK(configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].watchdogMs += 100;                       CHECK(configNeedsRestart(a, b)); }
+    // --- genuinely dynamic fields stay dynamic → NO restart ---
+    { RuntimeConfig b = a; b.instruments[0].motion.maxSpeedMmS += 5.0f;              CHECK(!configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].motion.softMaxMm -= 1.0f;                CHECK(!configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.flow.nominal = (uint8_t)(a.instruments[0].air.flow.nominal + 1); CHECK(!configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.valveOpenTimeoutMs += 100;           CHECK(!configNeedsRestart(a, b)); }
+    { RuntimeConfig b = a; b.instruments[0].air.minNoteMs += 10;                     CHECK(!configNeedsRestart(a, b)); }
+}
+
 // Review #5 §22: POST /config must reject a wrapped config whose integrity
 // checksum no longer matches its content (the normal path checked only dec.ok).
 TEST(api_config_rejects_bad_checksum) {
