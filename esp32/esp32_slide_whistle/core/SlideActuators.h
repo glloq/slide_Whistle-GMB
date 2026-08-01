@@ -46,6 +46,10 @@ public:
         if (state_ == MotionState::EStopped || state_ == MotionState::Fault) return;
         if (state_ == MotionState::Homing) { homingStep(dt, nowUs); applyOutput(); return; }
         integrate(dt);
+        // Continuous limit supervision during play/jog/test — not only homing
+        // (review #7/#8 §7). A no-op for backends without endstops (servos).
+        superviseLimits();
+        if (state_ == MotionState::Fault) { applyOutput(); return; }
         applyOutput();
     }
 
@@ -121,7 +125,16 @@ public:
     bool isReadyForAir() const override {
         if (state_ == MotionState::Fault || state_ == MotionState::EStopped) return false;
         if (!homed_) return false;
-        return !isMoving() && std::fabs(pos_ - target_) <= toleranceMm();
+        if (isMoving() || std::fabs(pos_ - target_) > toleranceMm()) return false;
+        // Gate on the EXECUTED position when the backend reports it: the commanded
+        // pos_ may already equal target while the step backend is still emitting
+        // the last bounded batch of pulses, so opening air here would sound the
+        // note before the slide has physically arrived (review #7/#8 §6). Fall
+        // back to the commanded position on feedback-less backends (servos).
+        float exec;
+        if (sink_ && sink_->executedPositionMm(exec))
+            return std::fabs(exec - target_) <= toleranceMm();
+        return true;
     }
 
     float currentPositionMm() const override { return pos_; }
@@ -134,6 +147,19 @@ protected:
     virtual void applyOutput() = 0;
     virtual bool validate() { return true; }
     virtual float toleranceMm() const { return 0.2f; }
+    // Continuous limit / consistency supervision, called every non-homing update.
+    // Default: nothing (absolute backends have no endstops). StepDir overrides it.
+    virtual void superviseLimits() {}
+
+    // Latch a motion fault: stop, freeze the target at the current position and
+    // de-energise the driver so update() halts and isReadyForAir() reports
+    // not-ready (the sequencer closes the air on the resulting not-ready).
+    void latchFault(FaultCode f) {
+        if (fault_ == FaultCode::None) fault_ = f;   // keep the first/root cause
+        state_ = MotionState::Fault;
+        vel_ = 0.0f; target_ = pos_;
+        if (sink_) sink_->enableDriver(false);
+    }
 
     float tickSeconds(uint32_t nowUs) {
         if (!haveTime_) { lastUs_ = nowUs; haveTime_ = true; return 0.0f; }
@@ -304,6 +330,23 @@ protected:
         // limits, which would stall the seek before reaching a distant switch.
         const float seekBound = cfg_.travelMm * 2.0f + 20.0f;
         pos_ = clampv(pos_, -seekBound, seekBound);
+    }
+
+    // Continuous endstop supervision during play/jog/test. An endstop that reads
+    // triggered while the commanded position is well AWAY from that end is
+    // inconsistent (a stuck switch, a wiring fault, or a physical overrun): stop
+    // and fault immediately (review #7/#8 §7). Parked at/near the homed reference
+    // the min switch may legitimately still read triggered, so a margin around
+    // each end suppresses that expected case.
+    void superviseLimits() override {
+        if (!sink_) return;
+        const auto& s = cfg_.stepper;
+        const float margin = s.homeBackoffMm + toleranceMm() + 0.5f;
+        if (s.endstopMin.pin >= 0 && sink_->readEndstop(false) && pos_ > margin)
+            latchFault(FaultCode::EndstopInconsistent);
+        else if (s.endstopMax.pin >= 0 && sink_->readEndstop(true) &&
+                 pos_ < cfg_.travelMm - margin)
+            latchFault(FaultCode::EndstopInconsistent);
     }
 
     void enterPhase(HPhase p, uint32_t nowUs) { hphase_ = p; phaseStartUs_ = nowUs; havePhaseTime_ = true; }

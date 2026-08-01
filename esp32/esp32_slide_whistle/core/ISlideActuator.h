@@ -98,6 +98,17 @@ public:
     // move drives a large phantom correction (review #7 §1). Default no-op:
     // absolute backends (servo) and test fakes need nothing.
     virtual void syncPositionMm(float mm) { (void)mm; }
+
+    // Authoritative EXECUTED position, derived from the real step counter the
+    // backend has physically emitted (curSteps_ today; an RMT/GPTimer step
+    // generator's counter tomorrow). Step backends emit a BOUNDED number of
+    // pulses per call, so this trails the commanded position during a fast move;
+    // the actuator gates air on THIS value so it never opens before the motor
+    // has actually arrived. Returns false on backends with no executed feedback
+    // (servos, disabled, plain fakes) — the actuator then falls back to its
+    // commanded position (review #7/#8 §6). Kept backend-agnostic so a future RMT
+    // backend is a drop-in.
+    virtual bool executedPositionMm(float& mm) const { (void)mm; return false; }
     virtual ~IMotionSink() = default;
 };
 

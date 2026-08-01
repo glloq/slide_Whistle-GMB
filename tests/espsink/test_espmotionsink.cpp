@@ -54,6 +54,18 @@ int main() {
     sink.writeStepperMm(100.0f);
     CHECK(g_stepPulses == 0);
 
+    // executedPositionMm reflects the pulses actually emitted (review #7/#8 §6):
+    // after a bounded first pulse batch toward a far target it must TRAIL the
+    // commanded position, then converge as more calls emit the rest.
+    sink.syncPositionMm(0.0f);
+    float exec = -1.0f;
+    sink.writeStepperMm(50.0f);                 // one bounded batch (<= 8 steps)
+    CHECK(sink.executedPositionMm(exec));
+    CHECK(exec > 0.0f && exec < 50.0f);         // trailing, not yet arrived
+    for (int i = 0; i < 1000; ++i) sink.writeStepperMm(50.0f);
+    CHECK(sink.executedPositionMm(exec));
+    CHECK(exec > 49.9f && exec < 50.1f);        // converged to the commanded mm
+
     if (failures == 0) std::printf("==== EspMotionSink backend: all checks passed ====\n");
     else               std::printf("==== EspMotionSink backend: %d FAILURES ====\n", failures);
     return failures ? 1 : 0;

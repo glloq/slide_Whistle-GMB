@@ -99,6 +99,17 @@ public:
         curSteps_ = lroundf(mm * cfg_.stepper.stepsPerMm);
     }
 
+    // Authoritative executed position from the pulses actually emitted so far.
+    // writeStepperMm() emits at most kMaxStepsPerCall pulses per call, so during
+    // a fast move curSteps_ trails the commanded mm; the actuator gates air on
+    // this (review #7/#8 §6). A future RMT/GPTimer step generator would keep the
+    // same curSteps_ contract, so no actuator change is needed for that upgrade.
+    bool executedPositionMm(float& mm) const override {
+        if (cfg_.stepper.stepsPerMm <= 0.0f) return false;
+        mm = float(curSteps_) / cfg_.stepper.stepsPerMm;
+        return true;
+    }
+
 private:
     void attachServo(uint8_t idx, const ServoMotionConfig& s) {
         if (s.backend != PwmBackend::Gpio || s.pin < 0) return;   // PCA9685 backend: TODO
