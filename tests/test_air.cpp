@@ -271,6 +271,42 @@ TEST(sensor_stable_value_not_stale) {
     CHECK(sensor.fault() == FaultCode::None);
 }
 
+// Review #7 §20: a reading pinned to the exact same value for far longer than
+// the timeout (20×) is a stuck/failed sensor — it must become stale/faulted so
+// the safety layer can act, not silently pass as valid forever.
+TEST(sensor_frozen_becomes_stale) {
+    FakeAirSink s; s.sensorRaw = 50;
+    AirConfig c; c.sensor.type = AirSensorType::PressureAnalog;
+    c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
+    c.sensor.staleTimeoutMs = 100;                          // frozen window = 2000 ms
+    AirSensor sensor; sensor.begin(c, &s);
+    for (uint32_t t = 1; t < 1500; ++t) sensor.update(t);   // still within the frozen window
+    CHECK(sensor.valid());
+    CHECK(sensor.fault() == FaultCode::None);
+    for (uint32_t t = 1500; t < 2200; ++t) sensor.update(t);// now past 20× the timeout
+    CHECK(sensor.frozen());
+    CHECK(!sensor.valid());                                  // frozen ⇒ not valid
+    CHECK(sensor.fault() == FaultCode::SensorStale);        // and reachable now
+}
+
+// Review #7 §20: a frozen sensor trips the AirSafetyController (it acts on
+// SensorStale), so a stuck pressure reading no longer passes silently.
+TEST(safety_trips_on_frozen_sensor) {
+    FakeAirSink s; s.sensorRaw = 50;
+    AirConfig c; c.sensor.type = AirSensorType::PressureAnalog;
+    c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
+    c.sensor.staleTimeoutMs = 100;
+    AirSensor sensor; sensor.begin(c, &s);
+    AirSafetyController safety; safety.begin(c);
+    bool tripped = false;
+    for (uint32_t t = 1; t < 2300; ++t) {
+        sensor.update(t);
+        if (safety.check(t, FaultCode::None, FaultCode::None, sensor)) { tripped = true; break; }
+    }
+    CHECK(tripped);
+    CHECK(safety.fault() == FaultCode::SensorStale);
+}
+
 // Review #15: a transient NaN does not make the sensor permanently absent.
 TEST(sensor_recovers_from_transient_nan) {
     FakeAirSink s; s.sensorRaw = 50;
