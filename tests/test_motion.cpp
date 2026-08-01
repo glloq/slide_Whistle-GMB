@@ -219,6 +219,23 @@ TEST(single_servo_inversion_and_ready) {
     CHECK_NEAR(sink.servoUs[0], 2000, 20);      // 0 mm → 1000 µs, inverted → 2000
 }
 
+// Review #9 §4.9: on Panic a position servo must be driven to its configured
+// safe pulse, not left holding the last commanded pose.
+TEST(single_servo_panic_drives_safe_us) {
+    FakeSink sink;
+    SingleServoSlideActuator act(&sink);
+    SlideMotionConfig c; c.type = SlideDriveType::SingleServo;
+    c.travelMm = 100; c.softMaxMm = 100; c.maxSpeedMmS = 500; c.accelMmS2 = 5000;
+    c.servoA.cal[0] = {0, 1000}; c.servoA.cal[1] = {100, 2000}; c.servoA.calCount = 2;
+    c.servoA.minUs = 1000; c.servoA.maxUs = 2000; c.servoA.safeUs = 1234;
+    CHECK(act.begin(c));
+    act.requestHoming(); pump(act, 0, 10);
+    act.requestPositionMm(50.0f); pump(act, 100000, 2000);
+    CHECK(sink.servoUs[0] != 1234);          // holding a commanded pose (~1500)
+    act.emergencyStop();
+    CHECK_EQ(sink.servoUs[0], 1234);         // driven to safeUs on Panic
+}
+
 TEST(dual_servo_opposite_same_cycle) {
     FakeSink sink;
     DualServoSlideActuator act(&sink);

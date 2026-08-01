@@ -90,6 +90,7 @@ public:
         // driver: without an Enable pin, enableDriver(false) is a no-op and the
         // pulse train would otherwise keep running after a Panic (review #9 §3.1).
         if (sink_) { sink_->abortMotion(); sink_->enableDriver(false); }
+        onEstop();   // backend-specific safe output (servos → safeUs, review #9 §4.9)
     }
 
     bool isHomed() const override { return homed_; }
@@ -153,6 +154,10 @@ protected:
     // Continuous limit / consistency supervision, called every non-homing update.
     // Default: nothing (absolute backends have no endstops). StepDir overrides it.
     virtual void superviseLimits() {}
+    // Backend-specific safe output on e-stop/Panic. Default: nothing (the stepper
+    // is handled by abortMotion + enableDriver). Servos override it to drive to
+    // their configured safeUs so they don't hold the last commanded pose (#9 §4.9).
+    virtual void onEstop() {}
 
     // Latch a motion fault: stop, freeze the target at the current position and
     // de-energise the driver so update() halts and isReadyForAir() reports
@@ -418,6 +423,9 @@ protected:
     void homingStep(float, uint32_t) override {
         pos_ = 0.0f; target_ = 0.0f; vel_ = 0.0f; homed_ = true; state_ = MotionState::Idle;
     }
+    // On Panic drive the servo to its configured safe pulse instead of leaving it
+    // holding the last commanded position (review #9 §4.9).
+    void onEstop() override { if (sink_) sink_->writeServoUs(0, cfg_.servoA.safeUs); }
     int hphase_ = 0;
 };
 
@@ -444,6 +452,12 @@ protected:
     }
     void homingStep(float, uint32_t) override {
         pos_ = 0.0f; target_ = 0.0f; vel_ = 0.0f; homed_ = true; state_ = MotionState::Idle;
+    }
+    // Both servos to their safe pulse on Panic (review #9 §4.9).
+    void onEstop() override {
+        if (!sink_) return;
+        sink_->writeServoUs(0, cfg_.servoA.safeUs);
+        if (cfg_.servoBEnabled) sink_->writeServoUs(1, cfg_.servoB.safeUs);
     }
 };
 
