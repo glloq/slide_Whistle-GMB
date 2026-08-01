@@ -231,8 +231,12 @@ test("config: hardware change → restart, dynamic change → not", () => {
     { motion: { type: 1, stepper: { stepPin: 32, dirPin: 33, enablePin: 25, endstopMin: { pin: 34 } },
                 servoA: {}, servoB: {} },
       air: { source: { type: 0 }, gate: { type: 1, pin: 27 }, flow: {}, sensor: {} } }] };
-  const dyn = JSON.parse(JSON.stringify(base)); dyn.instruments[0].motion.travelMm = 120;
+  // maxSpeedMmS IS applied live by the actuator's applyDynamic → no restart.
+  const dyn = JSON.parse(JSON.stringify(base)); dyn.instruments[0].motion.maxSpeedMmS = 200;
   assert.equal(configNeedsRestart(base, dyn), false);
+  // travelMm is NOT applied live (homing/dual mapping) → restart, mirror #7 §12.
+  const trav = JSON.parse(JSON.stringify(base)); trav.instruments[0].motion.travelMm = 120;
+  assert.equal(configNeedsRestart(base, trav), true);
   const hw = JSON.parse(JSON.stringify(base)); hw.instruments[0].motion.stepper.stepPin = 14;
   assert.equal(configNeedsRestart(base, hw), true);
 });

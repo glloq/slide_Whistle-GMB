@@ -315,3 +315,27 @@ TEST(actuator_apply_dynamic_soft_limits) {
     act.applyDynamic(c2);
     CHECK(act.requestPositionMm(80.0f));
 }
+
+// Review #7 §13: shrinking the soft-limit window around a position that would
+// fall OUTSIDE it must not take effect live (it would clamp pos_ without a real
+// move). The shrink is refused; the old window stays until a safe moment.
+TEST(actuator_apply_dynamic_soft_limit_shrink_refused) {
+    FakeSink sink; sink.endstopAtMm = 0.0f;
+    StepDirSlideActuator act(&sink);
+    auto c = stepperCfg(); c.softMaxMm = 100;
+    act.begin(c); act.requestHoming(); pump(act, 0, 3000);
+    CHECK(act.requestPositionMm(80.0f));              // move toward 80
+    pump(act, 4000, 3000);
+    CHECK_NEAR(act.currentPositionMm(), 80.0f, 1.0f); // settled at 80, idle
+    // Now shrink the window to [0,50] — 80 is outside it. The shrink must be
+    // refused so pos_ is not silently clamped to 50.
+    auto c2 = c; c2.softMaxMm = 50;
+    act.applyDynamic(c2);
+    CHECK_NEAR(act.currentPositionMm(), 80.0f, 1.0f); // unchanged, not clamped to 50
+    CHECK(act.requestPositionMm(70.0f));              // old window still in force
+    // A shrink that still contains the current position IS applied.
+    auto c3 = c; c3.softMaxMm = 90;
+    pump(act, 8000, 3000);                            // reach 70 and settle idle
+    act.applyDynamic(c3);
+    CHECK(!act.requestPositionMm(95.0f));             // 95 now beyond the new max
+}

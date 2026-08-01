@@ -47,6 +47,80 @@ struct QueueSink : ICommandSink {
     CommandQueue<N>& q_;
 };
 
+// True if any parameter that applyDynamic() does NOT push to the live objects
+// differs. Instrument::applyDynamic only propagates note range/channel/CC, the
+// NoteMap, the sequencer config, motion speed/accel/soft-limits, and the flow
+// SHAPING (+ valve timeout + minNoteMs). Everything else below (calibration,
+// homing, source/PID/tank, servo windows, sensor calibration, watchdog, …)
+// takes effect only at construction, so a change to it needs a reboot — leaving
+// it "dynamic" would apply it to hardware built from the previous values
+// (review #7 §12). Kept in sync with Instrument::applyDynamic / *::applyDynamic.
+inline bool unappliedParamsDiffer(const InstrumentConfig& a, const InstrumentConfig& b) {
+    if (a.watchdogMs != b.watchdogMs) return true;
+    // --- motion top-level (speed/accel/softlimits ARE dynamic → excluded) ---
+    const auto& am = a.motion; const auto& bm = b.motion;
+    if (am.travelMm != bm.travelMm || am.dualMode != bm.dualMode ||
+        am.servoBEnabled != bm.servoBEnabled) return true;
+    // --- stepper ---
+    const auto& as = am.stepper; const auto& bs = bm.stepper;
+    if (as.stepsPerRev != bs.stepsPerRev || as.microsteps != bs.microsteps ||
+        as.stepsPerMm != bs.stepsPerMm || as.enableActiveHigh != bs.enableActiveHigh ||
+        as.invertDir != bs.invertDir || as.homingFastMmS != bs.homingFastMmS ||
+        as.homingSlowMmS != bs.homingSlowMmS || as.homeTowardZero != bs.homeTowardZero ||
+        as.homeOffsetMm != bs.homeOffsetMm || as.homeBackoffMm != bs.homeBackoffMm ||
+        as.phaseTimeoutMs != bs.phaseTimeoutMs || as.idleDisableMs != bs.idleDisableMs ||
+        as.alwaysHold != bs.alwaysHold) return true;
+    auto endstopDiff = [](const EndstopConfig& x, const EndstopConfig& y) {
+        return x.present != y.present || x.normallyClosed != y.normallyClosed ||
+               x.activeHigh != y.activeHigh || x.internalPullup != y.internalPullup;
+    };
+    if (endstopDiff(as.endstopMin, bs.endstopMin) || endstopDiff(as.endstopMax, bs.endstopMax))
+        return true;
+    // --- servo calibration (pin/backend/pca compared separately) ---
+    auto servoDiff = [](const ServoMotionConfig& x, const ServoMotionConfig& y) {
+        if (x.freqHz != y.freqHz || x.minUs != y.minUs || x.maxUs != y.maxUs ||
+            x.invert != y.invert || x.restUs != y.restUs || x.safeUs != y.safeUs ||
+            x.trimUs != y.trimUs || x.offsetUs != y.offsetUs ||
+            x.detachIdleMs != y.detachIdleMs || x.calCount != y.calCount) return true;
+        for (uint8_t i = 0; i < x.calCount && i < 8; ++i)
+            if (x.cal[i].mm != y.cal[i].mm || x.cal[i].us != y.cal[i].us) return true;
+        return false;
+    };
+    if (servoDiff(am.servoA, bm.servoA) || servoDiff(am.servoB, bm.servoB)) return true;
+    // --- air source (type/pumpCount/pins compared separately) ---
+    const auto& ax = a.air.source; const auto& bx = b.air.source;
+    if (ax.idle01 != bx.idle01 || ax.min01 != bx.min01 || ax.max01 != bx.max01 ||
+        ax.startBoost01 != bx.startBoost01 || ax.spinUpMs != bx.spinUpMs ||
+        ax.stopDelayMs != bx.stopDelayMs || ax.cascadeDelayMs != bx.cascadeDelayMs ||
+        ax.tankMode != bx.tankMode || ax.tankPwm != bx.tankPwm || ax.target != bx.target ||
+        ax.pidKp != bx.pidKp || ax.pidKi != bx.pidKi || ax.lowThresh != bx.lowThresh ||
+        ax.highThresh != bx.highThresh || ax.safetyThresh != bx.safetyThresh ||
+        ax.refillTimeoutMs != bx.refillTimeoutMs || ax.minOffMs != bx.minOffMs ||
+        ax.requireSensor != bx.requireSensor) return true;
+    // --- gate (type/pin/backend/pca compared separately) ---
+    const auto& ag = a.air.gate; const auto& bg = b.air.gate;
+    if (ag.servoMinUs != bg.servoMinUs || ag.servoMaxUs != bg.servoMaxUs ||
+        ag.activeHigh != bg.activeHigh || ag.openTimeoutMs != bg.openTimeoutMs ||
+        ag.peak01 != bg.peak01 || ag.peakMs != bg.peakMs || ag.hold01 != bg.hold01 ||
+        ag.closed01 != bg.closed01 || ag.open01 != bg.open01 ||
+        ag.openDelayMs != bg.openDelayMs || ag.closeDelayMs != bg.closeDelayMs) return true;
+    // --- flow servo window (shaping min/nominal/max/curve/expo/slew/rest ARE dynamic) ---
+    const auto& af = a.air.flow; const auto& bf = b.air.flow;
+    if (af.servoMinUs != bf.servoMinUs || af.servoMaxUs != bf.servoMaxUs) return true;
+    // --- angle (enabled/pin/backend/pca compared separately) ---
+    const auto& aa = a.air.angle; const auto& ba = b.air.angle;
+    if (aa.servoMinUs != ba.servoMinUs || aa.servoMaxUs != ba.servoMaxUs ||
+        aa.rest01 != ba.rest01 || aa.min01 != ba.min01 || aa.nominal01 != ba.nominal01 ||
+        aa.max01 != ba.max01 || aa.useCc74 != ba.useCc74) return true;
+    // --- sensor calibration (type/pin compared separately) ---
+    const auto& an = a.air.sensor; const auto& bn = b.air.sensor;
+    if (an.i2cAddr != bn.i2cAddr || an.rawMin != bn.rawMin || an.rawMax != bn.rawMax ||
+        an.physMin != bn.physMin || an.physMax != bn.physMax || an.invert != bn.invert ||
+        an.filterAlpha != bn.filterAlpha || an.staleTimeoutMs != bn.staleTimeoutMs ||
+        an.physLo != bn.physLo || an.physHi != bn.physHi) return true;
+    return false;
+}
+
 // True if applying `nn` over `oo` changes a *hardware* resource (needs reboot,
 // Section 10) rather than a purely dynamic parameter.
 inline bool configNeedsRestart(const RuntimeConfig& oo, const RuntimeConfig& nn) {
@@ -87,6 +161,9 @@ inline bool configNeedsRestart(const RuntimeConfig& oo, const RuntimeConfig& nn)
         if (a.air.angle.enabled != b.air.angle.enabled || a.air.angle.pin != b.air.angle.pin ||
             a.air.angle.backend != b.air.angle.backend || a.air.angle.pcaChannel != b.air.angle.pcaChannel) return true;
         if (a.air.sensor.type != b.air.sensor.type || a.air.sensor.pin != b.air.sensor.pin) return true;
+        // Fields that applyDynamic() cannot push to the already-built objects
+        // must also force a restart (review #7 §12).
+        if (unappliedParamsDiffer(a, b)) return true;
     }
     return false;
 }
