@@ -44,6 +44,27 @@ inline long checkedInt(const JsonValue& v, const char* key, long def,
 static constexpr long PIN_LO = -1;
 static constexpr long PIN_HI = 48;
 
+// Upper bound for any millisecond duration field (1 hour). Durations were read
+// straight into uint32_t via num_or, so a NEGATIVE JSON value wrapped to a huge
+// timeout (review #9 §5). checkedU32 rejects negatives and absurd values before
+// the narrowing.
+static constexpr long MS_MAX = 3600000;
+inline uint32_t checkedU32(const JsonValue& v, const char* key, uint32_t def,
+                           long hi, bool& ok) {
+    long r = v.int_or(key, (long)def);
+    if (r < 0 || r > hi) { ok = false; return def; }
+    return (uint32_t)r;
+}
+// Reads a floating field and requires it be FINITE and within [lo,hi] — a NaN or
+// Inf (or an out-of-range value) fails the decode. The `>=`/`<=` pair is false
+// for NaN, so this also rejects NaN without a separate isnan() call (#9 §5).
+inline float checkedNum(const JsonValue& v, const char* key, float def,
+                        double lo, double hi, bool& ok) {
+    double r = v.num_or(key, def);
+    if (!(r >= lo && r <= hi)) { ok = false; return def; }
+    return (float)r;
+}
+
 inline void endstopFromJson(const JsonValue& v, EndstopConfig& e, bool& ok) {
     e.present = v.bool_or("present", e.present);
     e.pin = (int8_t)checkedInt(v, "pin", e.pin, PIN_LO, PIN_HI, ok);
@@ -89,7 +110,7 @@ inline void servoFromJson(const JsonValue& v, ServoMotionConfig& s, bool& ok) {
     s.safeUs = (uint16_t)checkedInt(v, "safeUs", s.safeUs, 100, 3000, ok);
     s.trimUs = (int16_t)checkedInt(v, "trimUs", s.trimUs, -1000, 1000, ok);
     s.offsetUs = (int16_t)checkedInt(v, "offsetUs", s.offsetUs, -1000, 1000, ok);
-    s.detachIdleMs = (uint32_t)v.num_or("detachIdleMs", s.detachIdleMs);
+    s.detachIdleMs = checkedU32(v, "detachIdleMs", s.detachIdleMs, MS_MAX, ok);
     if (auto* cal = v.find("cal")) {
         uint8_t n = 0;
         for (const auto& p : cal->arr) {
@@ -255,15 +276,15 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
     in.midiChannel = (uint8_t)checkedInt(v, "channel", in.midiChannel, 0, 16, ok);
     in.noteMin = (uint8_t)checkedInt(v, "noteMin", in.noteMin, 0, 127, ok);
     in.noteMax = (uint8_t)checkedInt(v, "noteMax", in.noteMax, 0, 127, ok);
-    in.watchdogMs = (uint32_t)v.num_or("watchdogMs", in.watchdogMs);
+    in.watchdogMs = checkedU32(v, "watchdogMs", in.watchdogMs, MS_MAX, ok);
 
     if (auto* m = v.find("motion")) {
         in.motion.type = (SlideDriveType)checkedInt(*m, "type", (int)in.motion.type, 0, 3, ok);
-        in.motion.travelMm = (float)m->num_or("travelMm", in.motion.travelMm);
-        in.motion.maxSpeedMmS = (float)m->num_or("maxSpeedMmS", in.motion.maxSpeedMmS);
-        in.motion.accelMmS2 = (float)m->num_or("accelMmS2", in.motion.accelMmS2);
-        in.motion.softMinMm = (float)m->num_or("softMinMm", in.motion.softMinMm);
-        in.motion.softMaxMm = (float)m->num_or("softMaxMm", in.motion.softMaxMm);
+        in.motion.travelMm = checkedNum(*m, "travelMm", in.motion.travelMm, 0.1, 100000, ok);
+        in.motion.maxSpeedMmS = checkedNum(*m, "maxSpeedMmS", in.motion.maxSpeedMmS, 0, 1000000, ok);
+        in.motion.accelMmS2 = checkedNum(*m, "accelMmS2", in.motion.accelMmS2, 0, 100000000, ok);
+        in.motion.softMinMm = checkedNum(*m, "softMinMm", in.motion.softMinMm, -100000, 100000, ok);
+        in.motion.softMaxMm = checkedNum(*m, "softMaxMm", in.motion.softMaxMm, -100000, 100000, ok);
         if (auto* st = m->find("stepper")) {
             auto& sp = in.motion.stepper;
             sp.stepPin = (int8_t)checkedInt(*st, "stepPin", sp.stepPin, PIN_LO, PIN_HI, ok);
@@ -273,14 +294,14 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             sp.invertDir = st->bool_or("invertDir", sp.invertDir);
             sp.stepsPerRev = (uint16_t)checkedInt(*st, "stepsPerRev", sp.stepsPerRev, 1, 10000, ok);
             sp.microsteps = (uint16_t)checkedInt(*st, "microsteps", sp.microsteps, 1, 256, ok);
-            sp.stepsPerMm = (float)st->num_or("stepsPerMm", sp.stepsPerMm);
-            sp.homingFastMmS = (float)st->num_or("homingFastMmS", sp.homingFastMmS);
-            sp.homingSlowMmS = (float)st->num_or("homingSlowMmS", sp.homingSlowMmS);
+            sp.stepsPerMm = checkedNum(*st, "stepsPerMm", sp.stepsPerMm, 0.01, 100000, ok);
+            sp.homingFastMmS = checkedNum(*st, "homingFastMmS", sp.homingFastMmS, 0, 1000000, ok);
+            sp.homingSlowMmS = checkedNum(*st, "homingSlowMmS", sp.homingSlowMmS, 0, 1000000, ok);
             sp.homeTowardZero = st->bool_or("homeTowardZero", sp.homeTowardZero);
-            sp.homeOffsetMm = (float)st->num_or("homeOffsetMm", sp.homeOffsetMm);
-            sp.homeBackoffMm = (float)st->num_or("homeBackoffMm", sp.homeBackoffMm);
-            sp.phaseTimeoutMs = (uint32_t)st->num_or("phaseTimeoutMs", sp.phaseTimeoutMs);
-            sp.idleDisableMs = (uint32_t)st->num_or("idleDisableMs", sp.idleDisableMs);
+            sp.homeOffsetMm = checkedNum(*st, "homeOffsetMm", sp.homeOffsetMm, 0, 100000, ok);
+            sp.homeBackoffMm = checkedNum(*st, "homeBackoffMm", sp.homeBackoffMm, 0, 100000, ok);
+            sp.phaseTimeoutMs = checkedU32(*st, "phaseTimeoutMs", sp.phaseTimeoutMs, MS_MAX, ok);
+            sp.idleDisableMs = checkedU32(*st, "idleDisableMs", sp.idleDisableMs, MS_MAX, ok);
             sp.alwaysHold = st->bool_or("alwaysHold", sp.alwaysHold);
             if (auto* e = st->find("endstopMin")) endstopFromJson(*e, sp.endstopMin, ok);
             else if (st->has("endstopPin")) sp.endstopMin.pin = (int8_t)checkedInt(*st, "endstopPin", sp.endstopMin.pin, PIN_LO, PIN_HI, ok);
@@ -302,24 +323,24 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
                     if (pv < PIN_LO || pv > PIN_HI) ok = false;
                     so.pin[p] = (int8_t)pv;
                 }
-            so.idle01 = (float)src->num_or("idle01", so.idle01);
-            so.min01 = (float)src->num_or("min01", so.min01);
-            so.max01 = (float)src->num_or("max01", so.max01);
-            so.startBoost01 = (float)src->num_or("startBoost01", so.startBoost01);
-            so.spinUpMs = (uint32_t)src->num_or("spinUpMs", so.spinUpMs);
-            so.stopDelayMs = (uint32_t)src->num_or("stopDelayMs", so.stopDelayMs);
-            so.cascadeDelayMs = (uint32_t)src->num_or("cascadeDelayMs", so.cascadeDelayMs);
+            so.idle01 = checkedNum(*src, "idle01", so.idle01, 0, 1, ok);
+            so.min01 = checkedNum(*src, "min01", so.min01, 0, 1, ok);
+            so.max01 = checkedNum(*src, "max01", so.max01, 0, 1, ok);
+            so.startBoost01 = checkedNum(*src, "startBoost01", so.startBoost01, 0, 1, ok);
+            so.spinUpMs = checkedU32(*src, "spinUpMs", so.spinUpMs, MS_MAX, ok);
+            so.stopDelayMs = checkedU32(*src, "stopDelayMs", so.stopDelayMs, MS_MAX, ok);
+            so.cascadeDelayMs = checkedU32(*src, "cascadeDelayMs", so.cascadeDelayMs, MS_MAX, ok);
             so.tankMode = (TankRegulationMode)checkedInt(*src, "tankMode", (int)so.tankMode, 0, 2, ok);
             so.tankPwm = src->bool_or("tankPwm", so.tankPwm);
-            so.target = (float)src->num_or("target", so.target);
-            so.pidKp = (float)src->num_or("pidKp", so.pidKp);
-            so.pidKi = (float)src->num_or("pidKi", so.pidKi);
+            so.target = checkedNum(*src, "target", so.target, -1000000, 1000000, ok);
+            so.pidKp = checkedNum(*src, "pidKp", so.pidKp, 0, 100000, ok);
+            so.pidKi = checkedNum(*src, "pidKi", so.pidKi, 0, 100000, ok);
             so.requireSensor = src->bool_or("requireSensor", so.requireSensor);
-            so.lowThresh = (float)src->num_or("lowThresh", so.lowThresh);
-            so.highThresh = (float)src->num_or("highThresh", so.highThresh);
-            so.safetyThresh = (float)src->num_or("safetyThresh", so.safetyThresh);
-            so.refillTimeoutMs = (uint32_t)src->num_or("refillTimeoutMs", so.refillTimeoutMs);
-            so.minOffMs = (uint32_t)src->num_or("minOffMs", so.minOffMs);
+            so.lowThresh = checkedNum(*src, "lowThresh", so.lowThresh, -1000000, 1000000, ok);
+            so.highThresh = checkedNum(*src, "highThresh", so.highThresh, -1000000, 1000000, ok);
+            so.safetyThresh = checkedNum(*src, "safetyThresh", so.safetyThresh, -1000000, 1000000, ok);
+            so.refillTimeoutMs = checkedU32(*src, "refillTimeoutMs", so.refillTimeoutMs, MS_MAX, ok);
+            so.minOffMs = checkedU32(*src, "minOffMs", so.minOffMs, MS_MAX, ok);
         }
         if (auto* g = a->find("gate")) {
             auto& gc = in.air.gate;
@@ -328,14 +349,14 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             gc.backend = (PwmBackend)checkedInt(*g, "backend", (int)gc.backend, 0, 1, ok);
             gc.pcaChannel = (uint8_t)checkedInt(*g, "pca", gc.pcaChannel, 0, 15, ok);
             gc.activeHigh = g->bool_or("activeHigh", gc.activeHigh);
-            gc.openTimeoutMs = (uint32_t)g->num_or("openTimeoutMs", gc.openTimeoutMs);
-            gc.peak01 = (float)g->num_or("peak01", gc.peak01);
-            gc.peakMs = (uint32_t)g->num_or("peakMs", gc.peakMs);
-            gc.hold01 = (float)g->num_or("hold01", gc.hold01);
-            gc.closed01 = (float)g->num_or("closed01", gc.closed01);
-            gc.open01 = (float)g->num_or("open01", gc.open01);
-            gc.openDelayMs = (uint32_t)g->num_or("openDelayMs", gc.openDelayMs);
-            gc.closeDelayMs = (uint32_t)g->num_or("closeDelayMs", gc.closeDelayMs);
+            gc.openTimeoutMs = checkedU32(*g, "openTimeoutMs", gc.openTimeoutMs, MS_MAX, ok);
+            gc.peak01 = checkedNum(*g, "peak01", gc.peak01, 0, 1, ok);
+            gc.peakMs = checkedU32(*g, "peakMs", gc.peakMs, MS_MAX, ok);
+            gc.hold01 = checkedNum(*g, "hold01", gc.hold01, 0, 1, ok);
+            gc.closed01 = checkedNum(*g, "closed01", gc.closed01, 0, 1, ok);
+            gc.open01 = checkedNum(*g, "open01", gc.open01, 0, 1, ok);
+            gc.openDelayMs = checkedU32(*g, "openDelayMs", gc.openDelayMs, MS_MAX, ok);
+            gc.closeDelayMs = checkedU32(*g, "closeDelayMs", gc.closeDelayMs, MS_MAX, ok);
             gc.servoMinUs = (uint16_t)checkedInt(*g, "servoMinUs", gc.servoMinUs, 100, 3000, ok);
             gc.servoMaxUs = (uint16_t)checkedInt(*g, "servoMaxUs", gc.servoMaxUs, 100, 3000, ok);
         }
@@ -348,10 +369,10 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             fc.min = (uint8_t)checkedInt(*f, "min", fc.min, 0, 127, ok);
             fc.nominal = (uint8_t)checkedInt(*f, "nominal", fc.nominal, 0, 127, ok);
             fc.max = (uint8_t)checkedInt(*f, "max", fc.max, 0, 127, ok);
-            fc.rest01 = (float)f->num_or("rest01", fc.rest01);
+            fc.rest01 = checkedNum(*f, "rest01", fc.rest01, 0, 1, ok);
             fc.curve = (VelocityCurve)checkedInt(*f, "curve", (int)fc.curve, 0, 4, ok);
-            fc.expo = (float)f->num_or("expo", fc.expo);
-            fc.maxSlewPerMs = (float)f->num_or("maxSlewPerMs", fc.maxSlewPerMs);
+            fc.expo = checkedNum(*f, "expo", fc.expo, 0.01, 100, ok);
+            fc.maxSlewPerMs = checkedNum(*f, "maxSlewPerMs", fc.maxSlewPerMs, 0, 1000, ok);
             fc.servoMinUs = (uint16_t)checkedInt(*f, "servoMinUs", fc.servoMinUs, 100, 3000, ok);
             fc.servoMaxUs = (uint16_t)checkedInt(*f, "servoMaxUs", fc.servoMaxUs, 100, 3000, ok);
         }
@@ -361,10 +382,10 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             ac.pin = (int8_t)checkedInt(*ang, "pin", ac.pin, PIN_LO, PIN_HI, ok);
             ac.backend = (PwmBackend)checkedInt(*ang, "backend", (int)ac.backend, 0, 1, ok);
             ac.pcaChannel = (uint8_t)checkedInt(*ang, "pca", ac.pcaChannel, 0, 15, ok);
-            ac.rest01 = (float)ang->num_or("rest01", ac.rest01);
-            ac.min01 = (float)ang->num_or("min01", ac.min01);
-            ac.nominal01 = (float)ang->num_or("nominal01", ac.nominal01);
-            ac.max01 = (float)ang->num_or("max01", ac.max01);
+            ac.rest01 = checkedNum(*ang, "rest01", ac.rest01, 0, 1, ok);
+            ac.min01 = checkedNum(*ang, "min01", ac.min01, 0, 1, ok);
+            ac.nominal01 = checkedNum(*ang, "nominal01", ac.nominal01, 0, 1, ok);
+            ac.max01 = checkedNum(*ang, "max01", ac.max01, 0, 1, ok);
             ac.useCc74 = ang->bool_or("useCc74", ac.useCc74);
             ac.servoMinUs = (uint16_t)checkedInt(*ang, "servoMinUs", ac.servoMinUs, 100, 3000, ok);
             ac.servoMaxUs = (uint16_t)checkedInt(*ang, "servoMaxUs", ac.servoMaxUs, 100, 3000, ok);
@@ -374,29 +395,29 @@ inline void instrumentFromJson(const JsonValue& v, InstrumentConfig& in, bool& o
             sc.type = (AirSensorType)checkedInt(*se, "type", (int)sc.type, 0, 7, ok);
             sc.pin = (int8_t)checkedInt(*se, "pin", sc.pin, PIN_LO, PIN_HI, ok);
             sc.i2cAddr = (uint8_t)checkedInt(*se, "i2cAddr", sc.i2cAddr, 0, 127, ok);
-            sc.rawMin = (float)se->num_or("rawMin", sc.rawMin);
-            sc.rawMax = (float)se->num_or("rawMax", sc.rawMax);
-            sc.physMin = (float)se->num_or("physMin", sc.physMin);
-            sc.physMax = (float)se->num_or("physMax", sc.physMax);
+            sc.rawMin = checkedNum(*se, "rawMin", sc.rawMin, -1000000, 1000000, ok);
+            sc.rawMax = checkedNum(*se, "rawMax", sc.rawMax, -1000000, 1000000, ok);
+            sc.physMin = checkedNum(*se, "physMin", sc.physMin, -1000000, 1000000, ok);
+            sc.physMax = checkedNum(*se, "physMax", sc.physMax, -1000000, 1000000, ok);
             sc.invert = se->bool_or("invert", sc.invert);
-            sc.filterAlpha = (float)se->num_or("filterAlpha", sc.filterAlpha);
-            sc.staleTimeoutMs = (uint32_t)se->num_or("staleTimeoutMs", sc.staleTimeoutMs);
-            sc.physLo = (float)se->num_or("physLo", sc.physLo);
-            sc.physHi = (float)se->num_or("physHi", sc.physHi);
+            sc.filterAlpha = checkedNum(*se, "filterAlpha", sc.filterAlpha, 0, 1, ok);
+            sc.staleTimeoutMs = checkedU32(*se, "staleTimeoutMs", sc.staleTimeoutMs, MS_MAX, ok);
+            sc.physLo = checkedNum(*se, "physLo", sc.physLo, -1000000, 1000000, ok);
+            sc.physHi = checkedNum(*se, "physHi", sc.physHi, -1000000, 1000000, ok);
         }
-        in.air.valveOpenTimeoutMs = (uint32_t)a->num_or("valveOpenTimeoutMs", in.air.valveOpenTimeoutMs);
-        in.air.minNoteMs = (uint32_t)a->num_or("minNoteMs", in.air.minNoteMs);
+        in.air.valveOpenTimeoutMs = checkedU32(*a, "valveOpenTimeoutMs", in.air.valveOpenTimeoutMs, MS_MAX, ok);
+        in.air.minNoteMs = checkedU32(*a, "minNoteMs", in.air.minNoteMs, MS_MAX, ok);
     }
     if (auto* sq = v.find("seq")) {
         in.seq.mono = (MonoPolicy)checkedInt(*sq, "mono", (int)in.seq.mono, 0, 2, ok);
         in.seq.legato = (LegatoPolicy)checkedInt(*sq, "legato", (int)in.seq.legato, 0, 5, ok);
-        in.seq.legatoMaxDistanceMm = (float)sq->num_or("legatoMaxDistanceMm", in.seq.legatoMaxDistanceMm);
-        in.seq.legatoMaxTimeMs = (uint32_t)sq->num_or("legatoMaxTimeMs", in.seq.legatoMaxTimeMs);
-        in.seq.legatoMaxMoveTimeMs = (float)sq->num_or("legatoMaxMoveTimeMs", in.seq.legatoMaxMoveTimeMs);
-        in.seq.minNoteMs = (uint32_t)sq->num_or("minNoteMs", in.seq.minNoteMs);
-        in.seq.prepareTimeoutMs = (uint32_t)sq->num_or("prepareTimeoutMs", in.seq.prepareTimeoutMs);
+        in.seq.legatoMaxDistanceMm = checkedNum(*sq, "legatoMaxDistanceMm", in.seq.legatoMaxDistanceMm, 0, 100000, ok);
+        in.seq.legatoMaxTimeMs = checkedU32(*sq, "legatoMaxTimeMs", in.seq.legatoMaxTimeMs, MS_MAX, ok);
+        in.seq.legatoMaxMoveTimeMs = checkedNum(*sq, "legatoMaxMoveTimeMs", in.seq.legatoMaxMoveTimeMs, 0, MS_MAX, ok);
+        in.seq.minNoteMs = checkedU32(*sq, "minNoteMs", in.seq.minNoteMs, MS_MAX, ok);
+        in.seq.prepareTimeoutMs = checkedU32(*sq, "prepareTimeoutMs", in.seq.prepareTimeoutMs, MS_MAX, ok);
         in.seq.vibratoUnit = (VibratoUnit)checkedInt(*sq, "vibratoUnit", (int)in.seq.vibratoUnit, 0, 2, ok);
-        in.seq.vibratoRateHz = (float)sq->num_or("vibratoRateHz", in.seq.vibratoRateHz);
+        in.seq.vibratoRateHz = checkedNum(*sq, "vibratoRateHz", in.seq.vibratoRateHz, 0, 100, ok);
     }
     if (auto* cc = v.find("cc")) {
         in.cc.breath = (uint8_t)checkedInt(*cc, "breath", in.cc.breath, 0, 127, ok);
