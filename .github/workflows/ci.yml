@@ -47,6 +47,8 @@ jobs:
           #define portMUX_INITIALIZER_UNLOCKED 0
           inline void portENTER_CRITICAL(portMUX_TYPE*){}
           inline void portEXIT_CRITICAL(portMUX_TYPE*){}
+          inline void portENTER_CRITICAL_ISR(portMUX_TYPE*){}
+          inline void portEXIT_CRITICAL_ISR(portMUX_TYPE*){}
           // hardware timer — mirror both the 2.x and 3.x arduino-esp32 signatures
           // so EspStepGen syntax-checks under either -DESP_ARDUINO_VERSION_MAJOR.
           #define IRAM_ATTR

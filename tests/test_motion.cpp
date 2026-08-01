@@ -18,11 +18,13 @@ struct FakeSink : IMotionSink {
     float endstopAtMm = -1000.0f;
     int   syncCount = 0;          // times the executed-step counter was realigned
     float lastSyncMm = -1e9f;     // mm passed to the last syncPositionMm()
+    int   abortCalls = 0;         // times abortMotion() was called
     void writeStepperMm(float mm) override { lastStepperMm = mm; }
     void writeServoUs(uint8_t i, uint16_t us) override { if (i < 2) servoUs[i] = us; }
     void enableDriver(bool on) override { driverOn = on; }
     bool readEndstop(bool) override { return lastStepperMm <= endstopAtMm; }
     void syncPositionMm(float mm) override { ++syncCount; lastSyncMm = mm; }
+    void abortMotion() override { ++abortCalls; }
 };
 
 // Sink that models a step backend emitting a BOUNDED number of pulses per call,
@@ -217,6 +219,23 @@ TEST(single_servo_inversion_and_ready) {
     CHECK_NEAR(sink.servoUs[0], 2000, 20);      // 0 mm → 1000 µs, inverted → 2000
 }
 
+// Review #9 §4.9: on Panic a position servo must be driven to its configured
+// safe pulse, not left holding the last commanded pose.
+TEST(single_servo_panic_drives_safe_us) {
+    FakeSink sink;
+    SingleServoSlideActuator act(&sink);
+    SlideMotionConfig c; c.type = SlideDriveType::SingleServo;
+    c.travelMm = 100; c.softMaxMm = 100; c.maxSpeedMmS = 500; c.accelMmS2 = 5000;
+    c.servoA.cal[0] = {0, 1000}; c.servoA.cal[1] = {100, 2000}; c.servoA.calCount = 2;
+    c.servoA.minUs = 1000; c.servoA.maxUs = 2000; c.servoA.safeUs = 1234;
+    CHECK(act.begin(c));
+    act.requestHoming(); pump(act, 0, 10);
+    act.requestPositionMm(50.0f); pump(act, 100000, 2000);
+    CHECK(sink.servoUs[0] != 1234);          // holding a commanded pose (~1500)
+    act.emergencyStop();
+    CHECK_EQ(sink.servoUs[0], 1234);         // driven to safeUs on Panic
+}
+
 TEST(dual_servo_opposite_same_cycle) {
     FakeSink sink;
     DualServoSlideActuator act(&sink);
@@ -241,6 +260,7 @@ TEST(emergency_stop_disables_and_blocks) {
     act.emergencyStop();
     CHECK(act.state() == MotionState::EStopped);
     CHECK(!sink.driverOn);
+    CHECK(sink.abortCalls >= 1);             // step generator halted (review #9 §3.1)
     CHECK(!act.requestPositionMm(10.0f));    // no motion after e-stop
 }
 
@@ -412,6 +432,62 @@ TEST(stepper_endstop_during_play_faults) {
     CHECK(!act.isReadyForAir());
 }
 
+// Review #9 §3.5: homing must not be declared complete until the EXECUTED
+// position (from the step backend) has also reached the offset — not just the
+// virtual pos_. With a bounded-step backend the executed count lags, so a naive
+// "virtual arrived" check would report homed early.
+TEST(stepper_homing_waits_for_executed_offset) {
+    LagSink sink; sink.stepsPerMm = 80; sink.maxPerCall = 8;   // ~0.1 mm/tick executed
+    auto c = stepperCfg(); c.stepper.stepsPerMm = 80;
+    c.stepper.homeOffsetMm = 5.0f;               // park 5 mm off the switch
+    // Move to the offset FASTER than the backend can emit (0.5 mm/tick virtual vs
+    // 0.1 mm/tick executed) so the executed position genuinely lags at the moment
+    // the virtual position arrives — that is the case the fix guards.
+    c.stepper.homingSlowMmS = 500.0f;
+    c.stepper.phaseTimeoutMs = 20000;
+    StepDirSlideActuator act(&sink);
+    act.begin(c); act.requestHoming();
+    uint32_t t = 0;
+    for (int k = 0; k < 20000 && !act.isHomed(); ++k) { t += 1000; act.update(t); }
+    CHECK(act.isHomed());
+    float exec; sink.executedPositionMm(exec);
+    CHECK_NEAR(exec, 5.0f, 0.2f);                // executed truly reached the offset
+}
+
+// Review #9 §3.6: a move directed INTO an active endstop near the butée must
+// stop immediately, while a move AWAY from it (inward) is allowed.
+TEST(stepper_endstop_blocks_move_into_butee) {
+    // Driving into an active MIN endstop near the min end → fault.
+    {
+        EndstopSink sink;
+        auto c = stepperCfg(); c.stepper.endstopMin.pin = 34; c.stepper.homeBackoffMm = 3;
+        c.stepper.homeOffsetMm = 2.0f;           // parked at 2 mm, inside the margin
+        StepDirSlideActuator act(&sink);
+        act.begin(c); act.requestHoming();
+        uint32_t t = pump(act, 0, 3000);
+        CHECK(act.isHomed()); CHECK_NEAR(act.currentPositionMm(), 2.0f, 0.3f);
+        sink.minTrig = true;                     // force the min switch active at 2 mm
+        CHECK(act.requestPositionMm(0.5f));      // command DOWN, toward the min butée
+        t += 1000; act.update(t);
+        CHECK(act.state() == MotionState::Fault);
+        CHECK(act.fault() == FaultCode::EndstopInconsistent);
+    }
+    // Moving inward with the same switch active is NOT faulted on that tick.
+    {
+        EndstopSink sink;
+        auto c = stepperCfg(); c.stepper.endstopMin.pin = 34; c.stepper.homeBackoffMm = 3;
+        c.stepper.homeOffsetMm = 2.0f;
+        StepDirSlideActuator act(&sink);
+        act.begin(c); act.requestHoming();
+        uint32_t t = pump(act, 0, 3000);
+        CHECK(act.isHomed());
+        sink.minTrig = true;
+        CHECK(act.requestPositionMm(2.5f));      // command UP, inward
+        t += 1000; act.update(t);
+        CHECK(act.fault() == FaultCode::None);   // inward move allowed
+    }
+}
+
 // Review #6: applyDynamic changes speed/accel/soft-limits live (not pins/type).
 TEST(actuator_apply_dynamic_soft_limits) {
     FakeSink sink; sink.endstopAtMm = 0.0f;
@@ -448,4 +524,29 @@ TEST(actuator_apply_dynamic_soft_limit_shrink_refused) {
     pump(act, 8000, 3000);                            // reach 70 and settle idle
     act.applyDynamic(c3);
     CHECK(!act.requestPositionMm(95.0f));             // 95 now beyond the new max
+}
+
+// Review #9 §4.4: a soft-limit change that applyDynamic() had to defer must not
+// be silently reported as applied — the actuator exposes a "pending" flag so the
+// client (via the telemetry snapshot) sees the tighter window is not in force yet.
+TEST(actuator_apply_dynamic_soft_limit_pending_is_observable) {
+    FakeSink sink; sink.endstopAtMm = 0.0f;
+    StepDirSlideActuator act(&sink);
+    auto c = stepperCfg(); c.softMaxMm = 100;
+    act.begin(c); act.requestHoming(); pump(act, 0, 3000);
+    CHECK(!act.softLimitApplyPending());              // nothing deferred yet
+    CHECK(act.requestPositionMm(80.0f));
+    pump(act, 4000, 3000);
+    CHECK_NEAR(act.currentPositionMm(), 80.0f, 1.0f); // settled at 80, idle
+    // Shrink to [0,50]: 80 is outside → deferred, and it must be OBSERVABLE.
+    auto c2 = c; c2.softMaxMm = 50;
+    act.applyDynamic(c2);
+    CHECK(act.softLimitApplyPending());               // the deferral is surfaced
+    // A later shrink that DOES contain the current position applies and clears it.
+    auto c3 = c; c3.softMaxMm = 90;
+    act.applyDynamic(c3);
+    CHECK(!act.softLimitApplyPending());              // took effect → no longer pending
+    // Re-applying the SAME limits (no change) is not a pending deferral either.
+    act.applyDynamic(c3);
+    CHECK(!act.softLimitApplyPending());
 }

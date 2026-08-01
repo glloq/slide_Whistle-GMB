@@ -381,6 +381,35 @@ TEST(seq_prepare_timeout_never_opens_late) {
     CHECK_EQ(air.started_, 0);                        // air never opened late
 }
 
+// Review #9 §4.1: a note pressed while a modulation-wheel vibrato is already
+// active must still start. The continuous LFO must not re-position the slide
+// during Positioning (which kept flipping the actuator to Moving so
+// isReadyForAir never became true and the note timed out without opening air).
+TEST(seq_vibrato_active_before_note_still_opens) {
+    FakeMotionSink m;                                  // readEndstop: mm <= 0
+    StepDirSlideActuator act(&m);
+    SlideMotionConfig mc; mc.type = SlideDriveType::StepDir;
+    mc.travelMm = 100; mc.softMaxMm = 100; mc.maxSpeedMmS = 200; mc.accelMmS2 = 2000;
+    mc.stepper.stepsPerMm = 80; mc.stepper.homingFastMmS = 200;
+    mc.stepper.phaseTimeoutMs = 100000; mc.stepper.homeBackoffMm = 2;
+    act.begin(mc);
+    AirSystem air; FakeAirSink2 s; air.begin(simpleAir(), &s);
+    NoteMap map; for (int n = 48; n <= 84; ++n) map.setPoint((uint8_t)n, (n-48)*2.0f, 60);
+    SequencerConfig cfg; cfg.prepareTimeoutMs = 400; cfg.vibratoRateHz = 10.0f;
+    NoteSequencer seq; seq.begin(&act, &air, &map, cfg);
+    uint32_t us = 0;
+    act.requestHoming();
+    for (int k = 0; k < 3000 && !act.isHomed(); ++k) { us += 1000; act.update(us); }
+    CHECK(act.isHomed());
+    seq.setVibrato(50.0f, us / 1000);                  // ~0.5 semitone vibrato depth, before the note
+    seq.noteOn(60, 100, us / 1000);
+    for (int k = 0; k < 1500 && !s.gateOpen; ++k) {
+        us += 1000; act.update(us); air.setNow(us / 1000); air.update(us / 1000); seq.update(us / 1000, us);
+    }
+    CHECK(s.gateOpen);                                 // the note opened despite active vibrato
+    CHECK(seq.phase() == SeqPhase::Playing);
+}
+
 // Review #3 §5.1: a note with no usable position mapping must never be played —
 // the sequencer must not enter Positioning/Playing or open air, and the note is
 // dropped from the stack rather than left dangling.
@@ -396,4 +425,30 @@ TEST(seq_refuses_note_without_mapping) {
     CHECK(seq.phase() != SeqPhase::Positioning);      // and does not wait to open air
     CHECK(!sink.gateOpen);                            // air never opened
     CHECK_EQ(seq.heldCount(), 0);                     // unmapped note dropped from the stack
+}
+
+// Review #9 §4.5: watchdogMs was validated and serialized but never enforced —
+// a lost NoteOff (stuck key / unplugged cable) held the air open forever. The
+// sequencer's per-note watchdog must force everything off once a single note has
+// sounded longer than maxNoteMs, and clear on the next fresh key.
+TEST(seq_note_watchdog_releases_stuck_note) {
+    SeqRig r; SequencerConfig cfg; cfg.maxNoteMs = 20; r.begin(cfg);
+    uint32_t t = 0;
+    r.seq.noteOn(60, 100, t); r.tick(t);              // → Playing, air open
+    CHECK(r.seq.phase() == SeqPhase::Playing);
+    CHECK(r.sink.gateOpen);
+    // A few ticks BEFORE the window: still sounding, watchdog quiet.
+    for (int i = 0; i < 5; ++i) r.tick(t);
+    CHECK(!r.seq.watchdogTripped());
+    CHECK(r.sink.gateOpen);
+    // No NoteOff ever arrives. Tick well past the watchdog window.
+    for (int i = 0; i < 30; ++i) r.tick(t);
+    CHECK(r.seq.watchdogTripped());                   // watchdog fired
+    CHECK(!r.sink.gateOpen);                          // air forced closed
+    CHECK(r.seq.phase() != SeqPhase::Playing);
+    CHECK_EQ(r.seq.heldCount(), 0);                   // the stuck note was cleared
+    // A fresh key clears the trip and plays normally again.
+    r.seq.noteOn(62, 100, t); r.tick(t);
+    CHECK(!r.seq.watchdogTripped());
+    CHECK(r.sink.gateOpen);
 }

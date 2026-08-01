@@ -75,12 +75,15 @@ TEST(engine_split_by_note_range) {
     CHECK_EQ(high.inst.sequencer().activeNoteOr(), 72);
 }
 
+// Review #9 §4.6 / review #5 §12: transpose is applied ONCE, by the engine on
+// dequeue — the router forwards raw notes so a note is never transposed twice.
 TEST(engine_transpose) {
     InstRig r; r.begin(0, icfg(1, 48, 84));
     Instrument* insts[] = {&r.inst};
     CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
-    MidiRouter<32> router(q); router.setTranspose(12);
-    router.noteOn(1, 48, 100);          // +12 → 60
+    eng.setTranspose(12);               // the single transpose point
+    MidiRouter<32> router(q);
+    router.noteOn(1, 48, 100);          // raw 48 → engine +12 → 60 (not 72)
     for (int k = 0; k < 3; ++k) eng.tick(k, k*1000);
     CHECK_EQ(r.inst.sequencer().activeNoteOr(), 60);
 }

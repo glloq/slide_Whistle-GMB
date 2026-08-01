@@ -425,6 +425,48 @@ the hardware peripheral itself:
 | RMT/GPTimer hardware step generator | IMPLEMENTED · COMPILED · NOT BENCH-VERIFIED — EspStepGen replaces the blocking delayMicroseconds busy-wait with a shared hw_timer_t ISR (40 kHz) that walks each axis to its target and maintains the authoritative curSteps_; writeStepperMm() is now non-blocking. The universal/S3 PlatformIO builds compile it against the real arduino-esp32 2.x timer API and the CI syntax-check covers 2.x+3.x; the pulse-emission LOGIC is unit-tested off-device. What still needs a bench: real ISR cadence, IRAM-safety of digitalWrite in the ISR, and actual step output on a driver. |
 | Closed-loop tracking-error / stall detection | NOT ATTEMPTED (honestly): an open-loop stepper has no feedback that pulses produced real motion, so a physical stall is undetectable without an encoder — claiming a "tracking-error fault" would be false. Documented, not faked. |
 
+## Ninth review response (stepper-safety hardening of the new step generator)
+
+Review #9 audited the whole project and, crucially, caught real defects in the
+EspStepGen backend added in the previous batch. The software-provable ones —
+especially the safety defects the new generator introduced — are fixed here,
+each with a test that fails without the change:
+
+| Item | Status |
+|------|--------|
+| §3.1 Panic didn't stop the pulse generator | FIXED·TESTED (IMotionSink::abortMotion(); EspStepGen::abort forces STEP low + collapses target; actuator calls it on e-stop/fault/out-of-range even with no Enable pin) |
+| §3.2 Direction re-read mid-pulse; STEP could stick high | FIXED·TESTED (direction latched at the rising edge and used on the falling edge; in-flight pulse always completed; syncSteps forces STEP low; setTarget/sync/abort + ISR under a portMUX) |
+| §3.4 No max STEP-rate validation | FIXED·TESTED (validator rejects maxSpeedMmS × stepsPerMm > STEP_GEN_MAX_HZ = 20 kHz) |
+| §3.5 Homing declared done on the virtual position | FIXED·TESTED (MoveToOffset completes only once executedPositionMm reaches the offset) |
+| §3.6 Endstop supervision let a move drive into the butée | FIXED·TESTED (near an active endstop, a move INTO it faults immediately; inward moves allowed) |
+| §4.1 Vibrato before a note blocked the note start | FIXED·TESTED (LFO applied only while Playing, not during Positioning) |
+| §3.7 forceSafeOutputs drove pins before validating them | FIXED (each pin checked against the board profile — exists / not flash-reserved / not input-only — before pinMode/digitalWrite) — compiles in CI |
+| §3.8 Hardware-init failures could still reach Ready | FIXED (EspMotionSink::begin + EspAirSink report attach/timer success; configureSinks returns their AND; a failed instrument is skipped so setup stays SafeConfigOnly; failed RT-task creation also drops to SafeConfigOnly) — compiles in CI |
+| §5 Durations negative→huge; floats non-finite | FIXED·TESTED (checkedU32 rejects negative/absurd ms durations; checkedNum requires finite+in-range floats across motion/source/gate/flow/angle/sensor/seq) |
+| §4.9 Servos held last pose after Panic | FIXED·TESTED (Single/DualServo drive to their configured safeUs on e-stop) |
+| §4.10 Output polarity only on the simple solenoid | FIXED·TESTED (activeHigh on source + flow round-trips; propagated to fan/pump/PWM-solenoid/flow PWM; a change forces restart) |
+| §4.8 Overpressure/out-of-range only on PumpsTank | FIXED·TESTED (AirSafetyController trips Overpressure/OutOfRange/Stale/Missing for any source with a configured sensor) |
+| §4.6 Transpose applied twice once several MIDI transports feed the router | FIXED·TESTED (MidiRouter forwards raw notes; RealtimeEngine is the single transpose owner, so no transport can double-apply) |
+| §4.7 Enum values that advertise a distinct mode but share one backend | FIXED·TESTED (validator rejects FlowControlType::SourcePlusFlowServo — plain PWM, no source co-modulation — and VelocityCurve::Custom — no LUT, silently linear — as UNSUPPORTED_BACKEND) |
+| §4.5 watchdogMs validated/serialized but never enforced (a lost NoteOff held the air open forever) | FIXED·TESTED (NoteSequencer force-releases every note once one has sounded longer than maxNoteMs, fed from watchdogMs; cleared by the next NoteOn) |
+| §4.4 (partial) A deferred soft-limit apply was silently reported "saved"/applied | FIXED·TESTED (actuator exposes softLimitApplyPending(); the telemetry snapshot + status JSON carry `soft_limit_pending` per instrument so the client sees the tighter window is not yet in force). The synchronous typed apply-ack still needs the applied-vs-desired split (§4.2/§4.3) — see open list. |
+
+Still open from review #9 — hardware/architecture items that a bench or a larger
+refactor must close, tracked honestly rather than marked done: §3.3 the ISR is
+not yet IRAM-placed and still calls digitalWrite (the l32r constraint — needs
+IRAM + register-level GPIO on a bench); §4.2/§4.3 applied-vs-desired config
+separation with atomic generations and inter-core locking; §4.4 the SYNCHRONOUS
+typed apply-ack (the deferred-soft-limit case is now observable via the snapshot,
+above — a synchronous ack still needs the desired/applied split); §4.5 per-source note ownership (the
+watchdogMs enforcement itself is fixed above); §4.6 wiring the remaining MIDI transports (DIN/BLE/RTP/USB) onto
+MidiRouter (the double-transpose defect itself is fixed above); the servo idle
+detach path (detachIdleMs — the §4.9 safeUs-on-Panic is done, idle-detach is
+not); a real Custom board profile; §6 HTTP size-before-alloc + WS
+fragmentation/Origin; §7 fully-atomic persistence + in-flash LittleFS recovery;
+§8 a formally-safe snapshot; and the web UI wizard/calibration screens. Verdict
+unchanged: **firmware beta / hardware alpha** — bench testing with a physical
+emergency stop only.
+
 ## How to run the software tests
 
 ```sh

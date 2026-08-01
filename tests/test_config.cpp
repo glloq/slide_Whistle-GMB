@@ -7,6 +7,7 @@
 #include "../esp32/esp32_slide_whistle/core/ConfigStore.h"
 #include "../esp32/esp32_slide_whistle/core/Presets.h"
 #include <map>
+#include <cctype>
 
 using namespace swc;
 
@@ -127,6 +128,46 @@ TEST(config_rejects_out_of_range_normalized) {
     c.instruments[0].air.source.max01 = 1.5f;        // not in 0..1
     RuntimeConfig d;
     CHECK(!configFromJson(configToJson(c), d).ok);
+}
+
+// Replace the numeric value that follows "key": in a serialized config, so a
+// test can inject a value the struct itself cannot hold (e.g. a NEGATIVE uint).
+static std::string injectNum(std::string j, const char* key, const std::string& val) {
+    std::string k = std::string("\"") + key + "\":";
+    auto p = j.find(k);
+    if (p == std::string::npos) return j;
+    auto s = p + k.size(), e = s;
+    while (e < j.size() && (std::isdigit((unsigned char)j[e]) || j[e]=='-' || j[e]=='.' ||
+                            j[e]=='e' || j[e]=='E' || j[e]=='+')) ++e;
+    return j.substr(0, s) + val + j.substr(e);
+}
+
+// Review #9 §5: a NEGATIVE ms duration wrapped to a huge uint32_t timeout; it is
+// now rejected pre-narrow (checkedU32). Injected as text since the struct is
+// unsigned and cannot represent it.
+TEST(config_rejects_negative_durations) {
+    RuntimeConfig c = defaultConfig();
+    c.instruments[0].enabled = true;
+    c.instruments[0].motion.type = SlideDriveType::StepDir;
+    std::string j = configToJson(c);
+    for (const char* key : {"watchdogMs", "phaseTimeoutMs", "spinUpMs", "staleTimeoutMs",
+                            "valveOpenTimeoutMs", "prepareTimeoutMs"}) {
+        RuntimeConfig d;
+        CHECK(!configFromJson(injectNum(j, key, "-5"), d).ok);
+    }
+}
+
+// Review #9 §5: a non-finite / wildly-out-of-range float field is rejected
+// (checkedNum's range test is false for NaN/Inf and for absurd magnitudes).
+TEST(config_rejects_nonfinite_or_extreme_floats) {
+    RuntimeConfig c = defaultConfig();
+    c.instruments[0].enabled = true;
+    c.instruments[0].motion.type = SlideDriveType::StepDir;
+    std::string j = configToJson(c);
+    { RuntimeConfig d; CHECK(!configFromJson(injectNum(j, "pidKp", "1e12"), d).ok); }
+    { RuntimeConfig d; CHECK(!configFromJson(injectNum(j, "maxSlewPerMs", "1e9"), d).ok); }
+    { RuntimeConfig d; CHECK(!configFromJson(injectNum(j, "expo", "-3"), d).ok); }
+    { RuntimeConfig d; CHECK(!configFromJson(injectNum(j, "stepsPerMm", "0"), d).ok); }   // must be > 0
 }
 
 // Review #5 §21: servo pulse-width fields are range-checked before narrowing.
@@ -303,7 +344,7 @@ TEST(config_roundtrip_full_fields) {
     so.spinUpMs=250; so.stopDelayMs=600; so.cascadeDelayMs=90;
     so.tankMode = TankRegulationMode::Level; so.tankPwm=false; so.target=70;
     so.requireSensor=true; so.lowThresh=45; so.highThresh=85; so.safetyThresh=110;
-    so.refillTimeoutMs=7000; so.minOffMs=400;
+    so.refillTimeoutMs=7000; so.minOffMs=400; so.activeHigh=false;
     auto& g = i.air.gate;
     g.type = AirGateType::ServoValve; g.pin=27; g.backend=PwmBackend::Gpio; g.pcaChannel=2;
     g.activeHigh=false; g.openTimeoutMs=1500; g.peak01=0.9f; g.peakMs=35; g.hold01=0.35f;
@@ -311,7 +352,7 @@ TEST(config_roundtrip_full_fields) {
     auto& f = i.air.flow;
     f.type = FlowControlType::FlowServo; f.pin=26; f.backend=PwmBackend::Pca9685; f.pcaChannel=7;
     f.min=8; f.nominal=70; f.max=118; f.rest01=0.05f; f.curve=VelocityCurve::Exponential;
-    f.expo=2.6f; f.maxSlewPerMs=0.03f;
+    f.expo=2.6f; f.maxSlewPerMs=0.03f; f.activeHigh=false;
     auto& an = i.air.angle;
     an.enabled=true; an.pin=13; an.backend=PwmBackend::Gpio; an.pcaChannel=1;
     an.rest01=0.4f; an.min01=0.1f; an.nominal01=0.5f; an.max01=0.9f; an.useCc74=false;
@@ -352,6 +393,8 @@ TEST(config_roundtrip_full_fields) {
     CHECK_EQ(o.air.source.pin[2], 18);
     CHECK(o.air.source.tankMode == TankRegulationMode::Level);
     CHECK_EQ(o.air.source.refillTimeoutMs, 7000u);
+    CHECK(!o.air.source.activeHigh);   // polarity round-trips (#9 §4.10)
+    CHECK(!o.air.flow.activeHigh);
     CHECK_NEAR(o.air.gate.hold01, 0.35f, 1e-3);
     CHECK_EQ(o.air.gate.peakMs, 35u);
     CHECK_NEAR(o.air.gate.open01, 0.85f, 1e-3);

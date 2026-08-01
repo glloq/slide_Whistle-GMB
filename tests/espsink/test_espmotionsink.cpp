@@ -69,6 +69,43 @@ int main() {
     driveTicks(sink, 400);
     CHECK(g_stepPulses == 0);
 
+    // Review #9 §3.1 — abortMotion() halts the pulse train: after aborting mid
+    // move, no further pulses are emitted however long the ISR runs, STEP is
+    // left LOW, and the target has collapsed onto the executed count.
+    sink.syncPositionMm(0.0f);
+    sink.writeStepperMm(80.0f);                // target = 6400 steps
+    driveTicks(sink, 40);                      // ~20 steps in
+    sink.abortMotion();
+    CHECK(g_stepLevel == LOW);                 // STEP not left high
+    float held; sink.executedPositionMm(held);
+    g_stepPulses = 0;
+    driveTicks(sink, 2000);
+    CHECK(g_stepPulses == 0);                   // no motion after abort
+    float after; sink.executedPositionMm(after);
+    CHECK(after == held);                       // executed position frozen
+
+    // Review #9 §3.2 — the pulse DIRECTION is latched at the rising edge: a
+    // target reversal between the two ticks of a pulse must still record the step
+    // in the direction the motor physically took (forward), not the new target.
+    sink.syncPositionMm(0.0f);
+    sink.writeStepperMm(1.0f);                  // target forward
+    sink.serviceStepGenTick();                  // rising edge: DIR forward, STEP high
+    CHECK(g_stepLevel == HIGH);
+    sink.writeStepperMm(-1.0f);                 // reverse target mid-pulse
+    sink.serviceStepGenTick();                  // falling edge: must use LATCHED dir
+    CHECK(g_stepLevel == LOW);
+    float posAfter; sink.executedPositionMm(posAfter);
+    CHECK(posAfter > 0.0f);                      // stepped FORWARD (+1), not backward
+
+    // Review #9 §3.2 — an in-flight pulse is always completed even if the target
+    // becomes equal to the executed count mid-pulse (no STEP stuck high).
+    sink.syncPositionMm(0.0f);
+    sink.writeStepperMm(1.0f);
+    sink.serviceStepGenTick();                  // STEP high
+    CHECK(g_stepLevel == HIGH);
+    sink.syncPositionMm(0);                      // sync forces STEP low immediately
+    CHECK(g_stepLevel == LOW);
+
     if (failures == 0) std::printf("==== EspMotionSink backend: all checks passed ====\n");
     else               std::printf("==== EspMotionSink backend: %d FAILURES ====\n", failures);
     return failures ? 1 : 0;

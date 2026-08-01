@@ -54,14 +54,46 @@ public:
         startTimerOnce();
     }
     // Non-blocking: just publish the new target; the ISR walks curSteps_ to it.
-    void setTargetSteps(long t) { targetSteps_ = t; }
-    // Redefine the reference at a homing contact (no motion implied).
-    void syncSteps(long s) { curSteps_ = s; targetSteps_ = s; stepHigh_ = false; }
+    void setTargetSteps(long t) {
+        portENTER_CRITICAL(&mux_);
+        targetSteps_ = t;
+        portEXIT_CRITICAL(&mux_);
+    }
+    // Redefine the reference at a homing contact (no motion implied). Force STEP
+    // low first so a sync mid-pulse cannot leave the pin stuck high (review #9
+    // §3.2), and take the same lock the ISR uses so the multi-field update is
+    // atomic against a concurrent serviceTick().
+    void syncSteps(long s) {
+        portENTER_CRITICAL(&mux_);
+        if (stepHigh_ && stepPin_ >= 0) digitalWrite(stepPin_, LOW);
+        stepHigh_ = false; curSteps_ = s; targetSteps_ = s;
+        portEXIT_CRITICAL(&mux_);
+    }
+    bool active() const { return registered_; }
+    // The shared step timer started successfully (review #9 §3.8). Reported so the
+    // owning sink can refuse Ready when the STEP peripheral does not exist.
+    static bool timerReady() { return s_timer != nullptr; }
+
+    // Emergency abort: stop generating pulses immediately (review #9 §3.1). Drop
+    // STEP low, drop the target onto the current executed count so the ISR has
+    // nothing left to walk, and clear the half-pulse state. The owning sink also
+    // de-energises the driver; this guarantees no further edges are produced even
+    // when there is no Enable pin.
+    void abort() {
+        portENTER_CRITICAL(&mux_);
+        if (stepHigh_ && stepPin_ >= 0) digitalWrite(stepPin_, LOW);
+        stepHigh_ = false; targetSteps_ = curSteps_;
+        portEXIT_CRITICAL(&mux_);
+    }
     long curSteps() const { return curSteps_; }
 
-    // One timer tick for this axis. Rising edge sets DIR + STEP high; the next
-    // tick drops STEP and advances the executed counter. Called from the ISR on
-    // hardware and directly from the unit test.
+    // One timer tick for this axis. Rising edge latches the DIRECTION and raises
+    // STEP; the next tick drops STEP and advances the executed counter USING THE
+    // LATCHED DIRECTION — never a freshly re-read target, so a target reversal
+    // between the two ticks cannot record a step the motor did not take, and an
+    // in-flight pulse is always completed (no STEP stuck high) even if the target
+    // became equal mid-pulse (review #9 §3.2). Called from the ISR on hardware
+    // and directly from the unit test.
     //
     // NOTE (bench work): this is intentionally NOT IRAM_ATTR. Marking it (and the
     // ISR trampoline) IRAM_ATTR triggers the toolchain's "dangerous relocation:
@@ -71,18 +103,22 @@ public:
     // out_w1tc). Running the ISR from flash works while the flash cache is
     // enabled, which is the case here, but is not robust across flash writes.
     void serviceTick() {
-        long tgt = targetSteps_, cur = curSteps_;
-        if (cur == tgt || stepPin_ < 0) return;
-        if (!stepHigh_) {
-            bool dir = (tgt > cur) ^ invertDir_;
-            if (dirPin_ >= 0) digitalWrite(dirPin_, dir ? HIGH : LOW);
-            digitalWrite(stepPin_, HIGH);
-            stepHigh_ = true;
-        } else {
+        if (stepPin_ < 0) return;
+        portENTER_CRITICAL_ISR(&mux_);
+        if (stepHigh_) {                         // ALWAYS complete an in-flight pulse
             digitalWrite(stepPin_, LOW);
             stepHigh_ = false;
-            curSteps_ = cur + ((tgt > cur) ? 1 : -1);
+            curSteps_ += pulseDir_ ? 1 : -1;     // latched direction, not re-read
+        } else {
+            long tgt = targetSteps_, cur = curSteps_;
+            if (cur != tgt) {
+                pulseDir_ = (tgt > cur);         // latch the direction for this pulse
+                if (dirPin_ >= 0) digitalWrite(dirPin_, (pulseDir_ ^ invertDir_) ? HIGH : LOW);
+                digitalWrite(stepPin_, HIGH);
+                stepHigh_ = true;
+            }
         }
+        portEXIT_CRITICAL_ISR(&mux_);
     }
 
 private:
@@ -112,6 +148,8 @@ private:
 
     int  stepPin_ = -1, dirPin_ = -1;
     bool invertDir_ = false, stepHigh_ = false, registered_ = false;
+    bool pulseDir_ = false;                       // latched at the rising edge
+    portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
     volatile long curSteps_ = 0, targetSteps_ = 0;
 };
 
@@ -123,8 +161,12 @@ private:
 // ---------------------------------------------------------------------------
 class EspMotionSink : public IMotionSink {
 public:
-    void begin(const SlideMotionConfig& cfg) {
+    // Returns false if a required output failed to initialise (a servo LEDC
+    // attach failed, or the STEP timer did not start) so the caller can refuse
+    // Ready instead of running an axis that produces no motion (review #9 §3.8).
+    bool begin(const SlideMotionConfig& cfg) {
         cfg_ = cfg;
+        bool ok = true;
         const auto& s = cfg.stepper;
         if (cfg.type == SlideDriveType::StepDir) {
             if (s.stepPin >= 0)   pinMode(s.stepPin, OUTPUT);
@@ -138,11 +180,13 @@ public:
             if (s.endstopMax.pin >= 0)
                 pinMode(s.endstopMax.pin, s.endstopMax.internalPullup ? INPUT_PULLUP : INPUT);
             stepGen_.begin(s.stepPin, s.dirPin, s.invertDir);   // hardware-timer stepping
+            ok = ok && EspStepGen::timerReady();                // STEP peripheral must exist
         }
         if (cfg.type == SlideDriveType::SingleServo || cfg.type == SlideDriveType::DualServo)
-            attachServo(0, cfg.servoA);
+            ok = attachServo(0, cfg.servoA) && ok;
         if (cfg.type == SlideDriveType::DualServo)
-            attachServo(1, cfg.servoB);
+            ok = attachServo(1, cfg.servoB) && ok;
+        return ok;
     }
 
     // Non-blocking: publish the target step count; the hardware-timer ISR walks
@@ -154,6 +198,9 @@ public:
     // Test hook: on hardware the shared timer ISR services every axis; off-device
     // (no timer) the native backend test drives the pulse logic through here.
     void serviceStepGenTick() { stepGen_.serviceTick(); }
+
+    // Halt the pulse generator on an e-stop/fault (review #9 §3.1).
+    void abortMotion() override { stepGen_.abort(); }
 
     void writeServoUs(uint8_t index, uint16_t us) override {
         if (index > 1) return;
@@ -194,10 +241,12 @@ public:
     }
 
 private:
-    void attachServo(uint8_t idx, const ServoMotionConfig& s) {
-        if (s.backend != PwmBackend::Gpio || s.pin < 0) return;   // PCA9685 backend: TODO
+    bool attachServo(uint8_t idx, const ServoMotionConfig& s) {
+        // PCA9685 servo backends are rejected by the validator (UNSUPPORTED); a
+        // GPIO servo must actually attach or the axis has no output (review #9 §3.8).
+        if (s.backend != PwmBackend::Gpio || s.pin < 0) return false;
         PwmConfig p; p.pin = s.pin; p.freqHz = s.freqHz; p.resolution = 16;
-        servo_[idx].attach(p);
+        return servo_[idx].attach(p);
     }
     SlideMotionConfig cfg_;
     EspStepGen stepGen_;
@@ -228,10 +277,13 @@ public:
     float readSensorRaw() override { return sensorPin_ < 0 ? NAN : (float)analogRead(sensorPin_); }
 
     // ---- wiring helpers -----------------------------------------------------
-    void configureSourcePwm(uint8_t i, int pin, uint32_t freq) {
+    // Each helper records a failed LEDC/servo attach in ok_ so configOk() can
+    // veto Ready — a pump/gate/flow with no PWM channel would silently move no
+    // air otherwise (review #9 §3.8).
+    void configureSourcePwm(uint8_t i, int pin, uint32_t freq, bool activeHigh = true) {
         if (i >= 3 || pin < 0) return;
-        PwmConfig p; p.pin = pin; p.freqHz = freq;
-        source_[i].attach(p);
+        PwmConfig p; p.pin = pin; p.freqHz = freq; p.activeHigh = activeHigh;
+        if (!source_[i].attach(p)) ok_ = false;
     }
     void configureSolenoid(int pin, bool activeHigh) {
         solenoidPin_ = pin; solenoidActiveHigh_ = activeHigh;
@@ -239,26 +291,29 @@ public:
         pinMode(pin, OUTPUT);
         digitalWrite(pin, activeHigh ? LOW : HIGH);   // force CLOSED immediately (#8)
     }
-    void configureSolenoidPwm(int pin, uint32_t freq) {
+    void configureSolenoidPwm(int pin, uint32_t freq, bool activeHigh = true) {
         if (pin < 0) return;
-        PwmConfig p; p.pin = pin; p.freqHz = freq;
-        gatePwm_.attach(p); gatePwm_.writeRaw(0);     // closed
+        PwmConfig p; p.pin = pin; p.freqHz = freq; p.activeHigh = activeHigh;
+        if (!gatePwm_.attach(p)) ok_ = false; else gatePwm_.writeRaw(0);   // closed
     }
     void configureGateServo(int pin, uint16_t minUs, uint16_t maxUs) {
-        if (pin >= 0) gateServo_.attach(pin, minUs, maxUs);
+        if (pin >= 0 && !gateServo_.attach(pin, minUs, maxUs)) ok_ = false;
     }
     void configureFlowServo(int pin, uint16_t minUs, uint16_t maxUs) {
-        if (pin >= 0) flowServo_.attach(pin, minUs, maxUs);
+        if (pin >= 0 && !flowServo_.attach(pin, minUs, maxUs)) ok_ = false;
     }
-    void configureFlowPwm(int pin, uint32_t freq) {
+    void configureFlowPwm(int pin, uint32_t freq, bool activeHigh = true) {
         if (pin < 0) return;
-        PwmConfig p; p.pin = pin; p.freqHz = freq;
-        flowPwm_.attach(p);
+        PwmConfig p; p.pin = pin; p.freqHz = freq; p.activeHigh = activeHigh;
+        if (!flowPwm_.attach(p)) ok_ = false;
     }
     void configureAngleServo(int pin, uint16_t minUs, uint16_t maxUs) {
-        if (pin >= 0) angleServo_.attach(pin, minUs, maxUs);
+        if (pin >= 0 && !angleServo_.attach(pin, minUs, maxUs)) ok_ = false;
     }
     void configureSensor(int pin) { sensorPin_ = pin; if (pin >= 0) pinMode(pin, INPUT); }
+
+    // True only if every configured LEDC/servo output attached successfully.
+    bool configOk() const { return ok_; }
 
 private:
     PwmOutput   source_[3];
@@ -266,6 +321,7 @@ private:
     ServoOutput gateServo_, flowServo_, angleServo_; // µs-calibrated servos (#13)
     int  solenoidPin_ = -1, sensorPin_ = -1;
     bool solenoidActiveHigh_ = true;
+    bool ok_ = true;                     // every configured output attached (#3.8)
 };
 
 } // namespace swc

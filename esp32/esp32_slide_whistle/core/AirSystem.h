@@ -50,6 +50,7 @@ struct SourceConfig {
     uint32_t refillTimeoutMs = 5000;     // per fill cycle
     uint32_t minOffMs   = 300;
     bool     requireSensor = true;       // no auto-start if sensor missing
+    bool     activeHigh = true;          // fan/pump PWM polarity (active-low MOSFET/relay, #9 §4.10)
 };
 
 struct GateConfig {
@@ -83,6 +84,7 @@ struct FlowConfig {
     VelocityCurve curve = VelocityCurve::Linear;
     float    expo = 2.0f;                // for Exponential
     float    maxSlewPerMs = 0.02f;       // rate limit
+    bool     activeHigh = true;          // flow PWM polarity (#9 §4.10)
 };
 
 struct AngleConfig {

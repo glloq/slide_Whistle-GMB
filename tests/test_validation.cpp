@@ -252,6 +252,19 @@ TEST(validate_homing_endstop_and_flow_pin_required) {
     CHECK(hasCode(v2.validate(), "PIN_REQUIRED"));
 }
 
+// Review #9 §3.4: a commanded step rate above what EspStepGen can emit
+// (maxSpeedMmS × stepsPerMm > STEP_GEN_MAX_HZ) is rejected.
+TEST(validate_step_rate_ceiling) {
+    RuntimeConfig c = defaultConfig(); c.instrumentCount = 1; c.instruments[0].enabled = true;
+    applyPreset(c.instruments[0], PresetId::StepperSolenoidOnly);
+    // default preset stays under the ceiling
+    { HardwareResourceValidator v; buildClaims(v, c); CHECK(!hasCode(v.validate(), "BOUND_INVALID")); }
+    // 300 mm/s × 80 steps/mm = 24000 > 20000 → rejected
+    c.instruments[0].motion.maxSpeedMmS = 300.0f; c.instruments[0].motion.stepper.stepsPerMm = 80.0f;
+    HardwareResourceValidator v; buildClaims(v, c);
+    CHECK(hasCode(v.validate(), "BOUND_INVALID"));
+}
+
 // Review #8 §13: FlowServoAsValve is not actually wired (the gate servo is left
 // unattached), so selecting it is UNSUPPORTED_BACKEND rather than a silent
 // no-close valve.
@@ -313,4 +326,35 @@ TEST(validate_fan_onoff_claims_ledc) {
     };
     CHECK(hasCode(build(AirSourceType::FanOnOff), "LEDC_EXHAUSTED"));       // 12 > 8
     CHECK(!hasCode(build(AirSourceType::ExternalPassive), "LEDC_EXHAUSTED")); // 8, fan removed
+}
+
+// Review #9 §4.7: an enum value that advertises a distinct mode but silently
+// runs a shared, different implementation must be rejected, not accepted.
+//  - FlowControlType::SourcePlusFlowServo promises source co-modulation + a flow
+//    servo; the sink drives a plain PWM output instead. It must be UNSUPPORTED.
+//  - VelocityCurve::Custom claims a user LUT; shape() returns the linear value.
+//    Selecting it must be UNSUPPORTED rather than silently behaving as Linear.
+// A supported flow (FlowServo + a real curve) must NOT be flagged — that is what
+// makes each half discriminating.
+TEST(validate_flow_mode_aliases_rejected) {
+    auto build = [](FlowControlType t, VelocityCurve curve) {
+        RuntimeConfig c = defaultConfig(); c.instrumentCount = 1;
+        InstrumentConfig& in = c.instruments[0];
+        in = InstrumentConfig{};
+        in.enabled = true; in.midiChannel = 1;
+        in.motion.type = SlideDriveType::Disabled;
+        in.air.source.type = AirSourceType::ExternalPassive;
+        in.air.gate.type = AirGateType::None;
+        in.air.flow.type = t; in.air.flow.backend = PwmBackend::Gpio; in.air.flow.pin = 14;
+        in.air.flow.curve = curve;
+        in.air.sensor.type = AirSensorType::None;
+        HardwareResourceValidator v; buildClaims(v, c);
+        return v.validate();
+    };
+    // supported baseline: real servo flow + implemented curve → no unsupported flag
+    CHECK(!hasCode(build(FlowControlType::FlowServo, VelocityCurve::Quadratic), "UNSUPPORTED_BACKEND"));
+    // aliased flow mode → rejected
+    CHECK(hasCode(build(FlowControlType::SourcePlusFlowServo, VelocityCurve::Linear), "UNSUPPORTED_BACKEND"));
+    // aliased velocity curve → rejected
+    CHECK(hasCode(build(FlowControlType::FlowServo, VelocityCurve::Custom), "UNSUPPORTED_BACKEND"));
 }

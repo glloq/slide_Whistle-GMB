@@ -121,6 +121,10 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
                     v.requirePin(s.endstopMax.pin, false, false, base + ".motion.stepper.endstopMax.pin", own + " endstop2");
                     v.claimPin(s.endstopMin.pin, false, false, base + ".motion.stepper.endstopMin.pin", own + " endstop");
                 }
+                // The commanded step rate must stay within what EspStepGen can
+                // emit (review #9 §3.4) — beyond it the slide silently lags.
+                v.claimBound((long)(in.motion.maxSpeedMmS * s.stepsPerMm), 0,
+                             (long)STEP_GEN_MAX_HZ, base + ".motion.stepRateHz");
                 break;
             }
             case SlideDriveType::SingleServo:
@@ -197,6 +201,19 @@ inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
 
         // --- flow pin ---
         if (in.air.flow.type != FlowControlType::None) {
+            // SourcePlusFlowServo advertises a compound behaviour (modulate the
+            // source AND drive a dedicated flow servo) that no backend implements:
+            // the sink silently drives a plain PWM output instead, so the source
+            // is never co-modulated. Reject the value rather than mislead — a
+            // shared implementation must not pretend to be a distinct mode
+            // (review #9 §4.7).
+            if (in.air.flow.type == FlowControlType::SourcePlusFlowServo)
+                v.markUnsupported(base + ".air.flow.type", "SourcePlusFlowServo (source co-modulation not implemented)");
+            // VelocityCurve::Custom claims a user look-up table but shape() just
+            // returns the linear value — there is no LUT to supply. Selecting it
+            // silently yields Linear; reject it instead of the false promise (§4.7).
+            if (in.air.flow.curve == VelocityCurve::Custom)
+                v.markUnsupported(base + ".air.flow.curve", "Custom velocity curve (no LUT backend)");
             if (in.air.flow.backend == PwmBackend::Pca9685)
                 v.markUnsupported(base + ".air.flow.backend", "PCA9685 flow output");
             else {

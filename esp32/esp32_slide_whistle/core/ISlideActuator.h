@@ -109,6 +109,14 @@ public:
     // commanded position (review #7/#8 §6). Kept backend-agnostic so a future RMT
     // backend is a drop-in.
     virtual bool executedPositionMm(float& mm) const { (void)mm; return false; }
+
+    // Emergency abort of any in-flight motion generation: a step backend must
+    // immediately STOP producing STEP edges and drop its target onto the current
+    // executed position (review #9 §3.1). Called by the actuator on e-stop/fault
+    // so the pulse train halts even when there is no Enable pin — the virtual
+    // position and the physical position can no longer diverge after a Panic.
+    // Default no-op: absolute backends (servos) and plain fakes generate nothing.
+    virtual void abortMotion() {}
     virtual ~IMotionSink() = default;
 };
 
@@ -134,6 +142,14 @@ public:
     // Apply the DYNAMIC (no-restart) motion parameters — speed, accel, soft
     // limits — live. Pins / driver type are hardware and stay restart-only.
     virtual void applyDynamic(const SlideMotionConfig& cfg) = 0;
+
+    // True when the most recent applyDynamic() could NOT take the requested soft
+    // limits live (axis moving, or the current position/target sits outside the
+    // new window) and kept the old ones. The API reports the config "saved", but
+    // the tighter limits are only PENDING until the axis reaches a safe state —
+    // so this must be observable rather than silently claimed applied (review #9
+    // §4.4). Default false for actuators that never defer (servos, disabled).
+    virtual bool softLimitApplyPending() const { return false; }
 
     virtual float currentPositionMm() const = 0;
     virtual float targetPositionMm() const = 0;

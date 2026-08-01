@@ -64,7 +64,7 @@ public:
             fault_ = FaultCode::TargetOutOfRange;
             state_ = MotionState::Fault;
             vel_ = 0.0f; target_ = pos_;
-            if (sink_) sink_->enableDriver(false);
+            if (sink_) { sink_->abortMotion(); sink_->enableDriver(false); }
             return false;
         }
         target_ = clampv(positionMm, cfg_.softMinMm, cfg_.softMaxMm);
@@ -86,7 +86,11 @@ public:
         // it — the EStopped state already records the safety action, and fault()
         // should still report why (review #6 §19).
         if (fault_ == FaultCode::None) fault_ = FaultCode::EmergencyStop;
-        if (sink_) sink_->enableDriver(false);
+        // Halt the step generator BEFORE (and regardless of) de-energising the
+        // driver: without an Enable pin, enableDriver(false) is a no-op and the
+        // pulse train would otherwise keep running after a Panic (review #9 §3.1).
+        if (sink_) { sink_->abortMotion(); sink_->enableDriver(false); }
+        onEstop();   // backend-specific safe output (servos → safeUs, review #9 §4.9)
     }
 
     bool isHomed() const override { return homed_; }
@@ -116,11 +120,20 @@ public:
         const bool idle = (state_ != MotionState::Moving && state_ != MotionState::Homing);
         const bool posInside = pos_ >= c.softMinMm - 1e-3f && pos_ <= c.softMaxMm + 1e-3f;
         const bool tgtInside = target_ >= c.softMinMm - 1e-3f && target_ <= c.softMaxMm + 1e-3f;
+        const bool wantsChange = std::fabs(c.softMinMm - cfg_.softMinMm) > 1e-3f ||
+                                 std::fabs(c.softMaxMm - cfg_.softMaxMm) > 1e-3f;
         if (idle && posInside && tgtInside) {
             cfg_.softMinMm = c.softMinMm;
             cfg_.softMaxMm = c.softMaxMm;
+            softLimitPending_ = false;                 // the change took effect
+        } else {
+            // Kept the old limits though a change was asked for — the tighter
+            // window is only pending until a safe moment (review #9 §4.4).
+            softLimitPending_ = wantsChange;
         }
     }
+
+    bool softLimitApplyPending() const override { return softLimitPending_; }
 
     bool isReadyForAir() const override {
         if (state_ == MotionState::Fault || state_ == MotionState::EStopped) return false;
@@ -150,6 +163,10 @@ protected:
     // Continuous limit / consistency supervision, called every non-homing update.
     // Default: nothing (absolute backends have no endstops). StepDir overrides it.
     virtual void superviseLimits() {}
+    // Backend-specific safe output on e-stop/Panic. Default: nothing (the stepper
+    // is handled by abortMotion + enableDriver). Servos override it to drive to
+    // their configured safeUs so they don't hold the last commanded pose (#9 §4.9).
+    virtual void onEstop() {}
 
     // Latch a motion fault: stop, freeze the target at the current position and
     // de-energise the driver so update() halts and isReadyForAir() reports
@@ -158,7 +175,7 @@ protected:
         if (fault_ == FaultCode::None) fault_ = f;   // keep the first/root cause
         state_ = MotionState::Fault;
         vel_ = 0.0f; target_ = pos_;
-        if (sink_) sink_->enableDriver(false);
+        if (sink_) { sink_->abortMotion(); sink_->enableDriver(false); }
     }
 
     float tickSeconds(uint32_t nowUs) {
@@ -216,6 +233,7 @@ protected:
     uint32_t lastUs_ = 0;
     bool     haveTime_ = false;
     bool     homed_ = false;
+    bool     softLimitPending_ = false;   // a live soft-limit shrink was deferred (§4.4)
     MotionState state_ = MotionState::Uninitialised;
     FaultCode   fault_ = FaultCode::None;
 };
@@ -317,8 +335,21 @@ protected:
                 float d = target_ - pos_;
                 float step = cfg_.stepper.homingSlowMmS * dt;
                 if (std::fabs(d) <= step) {
-                    pos_ = target_; homed_ = true;
-                    hphase_ = HPhase::Done; state_ = MotionState::Idle;
+                    pos_ = target_;
+                    // Declare homed only once the EXECUTED position has also
+                    // reached the offset — the step backend may still be emitting
+                    // pulses after the virtual position arrives, and declaring
+                    // Ready early let a new command replace an offset still in
+                    // flight (review #9 §3.5). Backends without executed feedback
+                    // (servos/fakes) report arrival immediately, unchanged.
+                    float exec;
+                    bool executedArrived = !(sink_ && sink_->executedPositionMm(exec)) ||
+                                           std::fabs(exec - target_) <= toleranceMm();
+                    if (executedArrived) {
+                        homed_ = true; hphase_ = HPhase::Done; state_ = MotionState::Idle;
+                    }
+                    // else: hold pos_ at target; applyOutput() keeps emitting
+                    // pulses until the executed position catches up.
                 } else {
                     pos_ += (d > 0 ? 1.0f : -1.0f) * step;
                 }
@@ -332,21 +363,28 @@ protected:
         pos_ = clampv(pos_, -seekBound, seekBound);
     }
 
-    // Continuous endstop supervision during play/jog/test. An endstop that reads
-    // triggered while the commanded position is well AWAY from that end is
-    // inconsistent (a stuck switch, a wiring fault, or a physical overrun): stop
-    // and fault immediately (review #7/#8 §7). Parked at/near the homed reference
-    // the min switch may legitimately still read triggered, so a margin around
-    // each end suppresses that expected case.
+    // Continuous endstop supervision during play/jog/test (review #7/#8/#9 §3.6).
+    // Three cases per endstop:
+    //   1. triggered FAR from its end        → inconsistent (stuck switch / wiring
+    //                                           fault / overrun)         → fault;
+    //   2. triggered NEAR its end AND the
+    //      commanded motion is INTO the end   → driving into the butée   → fault;
+    //   3. triggered NEAR its end AND moving
+    //      inward (away from the end)         → legitimate               → allow.
+    // The near/far split uses a margin around each end so being parked at the
+    // homed reference (where the switch may still read triggered) is not a fault.
     void superviseLimits() override {
         if (!sink_) return;
         const auto& s = cfg_.stepper;
         const float margin = s.homeBackoffMm + toleranceMm() + 0.5f;
-        if (s.endstopMin.pin >= 0 && sink_->readEndstop(false) && pos_ > margin)
-            latchFault(FaultCode::EndstopInconsistent);
-        else if (s.endstopMax.pin >= 0 && sink_->readEndstop(true) &&
-                 pos_ < cfg_.travelMm - margin)
-            latchFault(FaultCode::EndstopInconsistent);
+        const float tol = toleranceMm();
+        if (s.endstopMin.pin >= 0 && sink_->readEndstop(false)) {
+            if (pos_ > margin)                  latchFault(FaultCode::EndstopInconsistent); // far
+            else if (target_ < pos_ - tol)      latchFault(FaultCode::EndstopInconsistent); // driving into min
+        } else if (s.endstopMax.pin >= 0 && sink_->readEndstop(true)) {
+            if (pos_ < cfg_.travelMm - margin)  latchFault(FaultCode::EndstopInconsistent); // far
+            else if (target_ > pos_ + tol)      latchFault(FaultCode::EndstopInconsistent); // driving into max
+        }
     }
 
     void enterPhase(HPhase p, uint32_t nowUs) { hphase_ = p; phaseStartUs_ = nowUs; havePhaseTime_ = true; }
@@ -395,6 +433,9 @@ protected:
     void homingStep(float, uint32_t) override {
         pos_ = 0.0f; target_ = 0.0f; vel_ = 0.0f; homed_ = true; state_ = MotionState::Idle;
     }
+    // On Panic drive the servo to its configured safe pulse instead of leaving it
+    // holding the last commanded position (review #9 §4.9).
+    void onEstop() override { if (sink_) sink_->writeServoUs(0, cfg_.servoA.safeUs); }
     int hphase_ = 0;
 };
 
@@ -421,6 +462,12 @@ protected:
     }
     void homingStep(float, uint32_t) override {
         pos_ = 0.0f; target_ = 0.0f; vel_ = 0.0f; homed_ = true; state_ = MotionState::Idle;
+    }
+    // Both servos to their safe pulse on Panic (review #9 §4.9).
+    void onEstop() override {
+        if (!sink_) return;
+        sink_->writeServoUs(0, cfg_.servoA.safeUs);
+        if (cfg_.servoBEnabled) sink_->writeServoUs(1, cfg_.servoB.safeUs);
     }
 };
 

@@ -17,10 +17,13 @@
 // --- observation hooks used by the test ---
 inline int  g_stepPin    = -1;   // the pin whose rising edges we count
 inline long g_stepPulses = 0;    // number of HIGH writes to g_stepPin
+inline int  g_stepLevel  = 0;    // current level of g_stepPin
 inline int  g_endstopLevel = 0;  // value returned by digitalRead()
 
 inline void pinMode(int, int) {}
-inline void digitalWrite(int pin, int val) { if (pin == g_stepPin && val == HIGH) ++g_stepPulses; }
+inline void digitalWrite(int pin, int val) {
+    if (pin == g_stepPin) { if (val == HIGH && g_stepLevel == LOW) ++g_stepPulses; g_stepLevel = val; }
+}
 inline int  digitalRead(int) { return g_endstopLevel; }
 inline void delayMicroseconds(unsigned) {}
 inline int  analogRead(int) { return 0; }
@@ -34,6 +37,8 @@ typedef int portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0
 inline void portENTER_CRITICAL(portMUX_TYPE*) {}
 inline void portEXIT_CRITICAL(portMUX_TYPE*) {}
+inline void portENTER_CRITICAL_ISR(portMUX_TYPE*) {}
+inline void portEXIT_CRITICAL_ISR(portMUX_TYPE*) {}
 
 // --- hardware timer (both arduino-esp32 2.x and 3.x signatures) ---
 #define IRAM_ATTR
