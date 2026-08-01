@@ -69,12 +69,23 @@ public:
             if (in->actuator()) in->actuator()->update(nowUs);
             if (in->air())      in->air()->update(nowMs);
             in->update(nowMs, nowUs);
+            // Clear an instrument's diagnostic lock once the diagnostic has
+            // actually finished — the axis is no longer homing/moving and no
+            // TestAir is running — so musical events resume (review #8 §8).
+            uint8_t slot = in->id();
+            if (slot < MAX_INSTRUMENTS && diag_[slot]) {
+                bool moving = in->actuator() &&
+                    (in->actuator()->state() == MotionState::Moving ||
+                     in->actuator()->state() == MotionState::Homing);
+                bool testing = testAir_[slot].phase != TestAirPhase::Idle;
+                if (!moving && !testing) diag_[slot] = false;
+            }
         }
     }
 
     void panicAll(uint32_t nowMs) {
         if (q_) q_->clear();
-        for (uint8_t i = 0; i < MAX_INSTRUMENTS; ++i) testAir_[i].phase = TestAirPhase::Idle;  // cancel all tests
+        for (uint8_t i = 0; i < MAX_INSTRUMENTS; ++i) { testAir_[i].phase = TestAirPhase::Idle; diag_[i] = false; }  // cancel tests + diag locks
         for (uint8_t i = 0; i < count_; ++i) if (inst_[i]) inst_[i]->panic(nowMs);
     }
 
@@ -197,6 +208,20 @@ private:
     // Re-arm only makes sense when something is actually faulted/e-stopped.
     // Without this guard a Rearm sent from Ready during a note would clear the
     // air and force a re-home mid-play (review #7 §5).
+    // A musical event (NoteOn/CC/PitchBend) must be refused while the instrument
+    // is running a diagnostic, mirroring the diagnostic-vs-note exclusion the
+    // other way round (review #8 §8). Keyed by stable id().
+    bool inDiagnostic(Instrument* in) const {
+        if (!in) return false;
+        uint8_t slot = in->id();
+        return slot < MAX_INSTRUMENTS && diag_[slot];
+    }
+    void markDiagnostic(Instrument* in) {
+        if (!in) return;
+        uint8_t slot = in->id();
+        if (slot < MAX_INSTRUMENTS) diag_[slot] = true;
+    }
+
     bool instrumentNeedsRearm(Instrument* in) {
         if (!in) return false;
         if (auto* a = in->actuator())
@@ -224,7 +249,8 @@ private:
                 int note = transposedOrDrop(c.a);
                 if (note < 0) break;
                 for (uint8_t i = 0; i < count_; ++i)
-                    if (inst_[i] && inst_[i]->acceptsChannel(c.channel) && inst_[i]->acceptsNote(uint8_t(note)))
+                    if (inst_[i] && !inDiagnostic(inst_[i]) &&
+                        inst_[i]->acceptsChannel(c.channel) && inst_[i]->acceptsNote(uint8_t(note)))
                         inst_[i]->noteOn(uint8_t(note), c.b, nowMs);
                 break;
             }
@@ -238,7 +264,7 @@ private:
             }
             case CommandType::ControlChange:
                 for (uint8_t i = 0; i < count_; ++i)
-                    if (inst_[i] && inst_[i]->acceptsChannel(c.channel)) {
+                    if (inst_[i] && !inDiagnostic(inst_[i]) && inst_[i]->acceptsChannel(c.channel)) {
                         if (c.a == 0xFF) inst_[i]->aftertouch(c.b, nowMs);
                         else             inst_[i]->controlChange(c.a, c.b, nowMs);
                     }
@@ -246,7 +272,7 @@ private:
             case CommandType::PitchBend: {
                 float semis = (float(c.i16) / 8192.0f) * bendRangeSemis_;
                 for (uint8_t i = 0; i < count_; ++i)
-                    if (inst_[i] && inst_[i]->acceptsChannel(c.channel))
+                    if (inst_[i] && !inDiagnostic(inst_[i]) && inst_[i]->acceptsChannel(c.channel))
                         inst_[i]->pitchBend(semis, nowMs);
                 break;
             }
@@ -269,7 +295,7 @@ private:
                 // wrong physical flute once disabled ones are compacted (#3 §6).
                 Instrument* in = byId(c.instrument);
                 if (in && instrumentBusy(in)) { ack(c, ExecResult::Rejected); break; }
-                if (in && in->actuator()) { in->actuator()->clearFault(); in->actuator()->requestHoming(); ack(c, ExecResult::Accepted); }
+                if (in && in->actuator()) { in->actuator()->clearFault(); in->actuator()->requestHoming(); markDiagnostic(in); ack(c, ExecResult::Accepted); }
                 else ack(c, ExecResult::Rejected);
                 break;
             }
@@ -296,6 +322,7 @@ private:
                 if (in && instrumentBusy(in)) { ack(c, ExecResult::Rejected); break; }
                 if (in && in->actuator()) {
                     bool ok = in->actuator()->requestPositionMm(in->actuator()->currentPositionMm() + float(c.i16));
+                    if (ok) markDiagnostic(in);
                     ack(c, ok ? ExecResult::Accepted : ExecResult::Rejected);
                 } else ack(c, ExecResult::Rejected);
                 break;
@@ -306,6 +333,7 @@ private:
                 if (in && instrumentBusy(in)) { ack(c, ExecResult::Rejected); break; }
                 if (in && in->actuator()) {
                     bool ok = in->actuator()->requestPositionMm(float(c.a));
+                    if (ok) markDiagnostic(in);
                     ack(c, ok ? ExecResult::Accepted : ExecResult::Rejected);
                 } else ack(c, ExecResult::Rejected);
                 break;
@@ -325,6 +353,7 @@ private:
                     ts.startMs = nowMs;
                     ts.phase = TestAirPhase::Prepare;
                     in->air()->prepareNote(ts.req);
+                    markDiagnostic(in);
                     ack(c, ExecResult::Accepted);
                 } else ack(c, ExecResult::Rejected);
                 break;
@@ -357,6 +386,7 @@ private:
     int8_t             transpose_ = 0;
     const RuntimeConfig* live_ = nullptr;       // for ApplyDynamicConfig
     TestAirState       testAir_[MAX_INSTRUMENTS];                   // per-instrument TestAir FSM
+    bool               diag_[MAX_INSTRUMENTS] = {false};           // per-instrument diagnostic lock (#8 §8)
     ExecAck            lastAck_{};                                  // last direct-command ack
     // Blocked by default: the RT task drains the queue on its very first tick,
     // before MainApp's lifecycle code sets the gate. Starting unblocked let a
