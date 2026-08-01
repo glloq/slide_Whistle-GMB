@@ -320,8 +320,21 @@ protected:
                 float d = target_ - pos_;
                 float step = cfg_.stepper.homingSlowMmS * dt;
                 if (std::fabs(d) <= step) {
-                    pos_ = target_; homed_ = true;
-                    hphase_ = HPhase::Done; state_ = MotionState::Idle;
+                    pos_ = target_;
+                    // Declare homed only once the EXECUTED position has also
+                    // reached the offset — the step backend may still be emitting
+                    // pulses after the virtual position arrives, and declaring
+                    // Ready early let a new command replace an offset still in
+                    // flight (review #9 §3.5). Backends without executed feedback
+                    // (servos/fakes) report arrival immediately, unchanged.
+                    float exec;
+                    bool executedArrived = !(sink_ && sink_->executedPositionMm(exec)) ||
+                                           std::fabs(exec - target_) <= toleranceMm();
+                    if (executedArrived) {
+                        homed_ = true; hphase_ = HPhase::Done; state_ = MotionState::Idle;
+                    }
+                    // else: hold pos_ at target; applyOutput() keeps emitting
+                    // pulses until the executed position catches up.
                 } else {
                     pos_ += (d > 0 ? 1.0f : -1.0f) * step;
                 }
@@ -335,21 +348,28 @@ protected:
         pos_ = clampv(pos_, -seekBound, seekBound);
     }
 
-    // Continuous endstop supervision during play/jog/test. An endstop that reads
-    // triggered while the commanded position is well AWAY from that end is
-    // inconsistent (a stuck switch, a wiring fault, or a physical overrun): stop
-    // and fault immediately (review #7/#8 §7). Parked at/near the homed reference
-    // the min switch may legitimately still read triggered, so a margin around
-    // each end suppresses that expected case.
+    // Continuous endstop supervision during play/jog/test (review #7/#8/#9 §3.6).
+    // Three cases per endstop:
+    //   1. triggered FAR from its end        → inconsistent (stuck switch / wiring
+    //                                           fault / overrun)         → fault;
+    //   2. triggered NEAR its end AND the
+    //      commanded motion is INTO the end   → driving into the butée   → fault;
+    //   3. triggered NEAR its end AND moving
+    //      inward (away from the end)         → legitimate               → allow.
+    // The near/far split uses a margin around each end so being parked at the
+    // homed reference (where the switch may still read triggered) is not a fault.
     void superviseLimits() override {
         if (!sink_) return;
         const auto& s = cfg_.stepper;
         const float margin = s.homeBackoffMm + toleranceMm() + 0.5f;
-        if (s.endstopMin.pin >= 0 && sink_->readEndstop(false) && pos_ > margin)
-            latchFault(FaultCode::EndstopInconsistent);
-        else if (s.endstopMax.pin >= 0 && sink_->readEndstop(true) &&
-                 pos_ < cfg_.travelMm - margin)
-            latchFault(FaultCode::EndstopInconsistent);
+        const float tol = toleranceMm();
+        if (s.endstopMin.pin >= 0 && sink_->readEndstop(false)) {
+            if (pos_ > margin)                  latchFault(FaultCode::EndstopInconsistent); // far
+            else if (target_ < pos_ - tol)      latchFault(FaultCode::EndstopInconsistent); // driving into min
+        } else if (s.endstopMax.pin >= 0 && sink_->readEndstop(true)) {
+            if (pos_ < cfg_.travelMm - margin)  latchFault(FaultCode::EndstopInconsistent); // far
+            else if (target_ > pos_ + tol)      latchFault(FaultCode::EndstopInconsistent); // driving into max
+        }
     }
 
     void enterPhase(HPhase p, uint32_t nowUs) { hphase_ = p; phaseStartUs_ = nowUs; havePhaseTime_ = true; }

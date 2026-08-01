@@ -415,6 +415,62 @@ TEST(stepper_endstop_during_play_faults) {
     CHECK(!act.isReadyForAir());
 }
 
+// Review #9 §3.5: homing must not be declared complete until the EXECUTED
+// position (from the step backend) has also reached the offset — not just the
+// virtual pos_. With a bounded-step backend the executed count lags, so a naive
+// "virtual arrived" check would report homed early.
+TEST(stepper_homing_waits_for_executed_offset) {
+    LagSink sink; sink.stepsPerMm = 80; sink.maxPerCall = 8;   // ~0.1 mm/tick executed
+    auto c = stepperCfg(); c.stepper.stepsPerMm = 80;
+    c.stepper.homeOffsetMm = 5.0f;               // park 5 mm off the switch
+    // Move to the offset FASTER than the backend can emit (0.5 mm/tick virtual vs
+    // 0.1 mm/tick executed) so the executed position genuinely lags at the moment
+    // the virtual position arrives — that is the case the fix guards.
+    c.stepper.homingSlowMmS = 500.0f;
+    c.stepper.phaseTimeoutMs = 20000;
+    StepDirSlideActuator act(&sink);
+    act.begin(c); act.requestHoming();
+    uint32_t t = 0;
+    for (int k = 0; k < 20000 && !act.isHomed(); ++k) { t += 1000; act.update(t); }
+    CHECK(act.isHomed());
+    float exec; sink.executedPositionMm(exec);
+    CHECK_NEAR(exec, 5.0f, 0.2f);                // executed truly reached the offset
+}
+
+// Review #9 §3.6: a move directed INTO an active endstop near the butée must
+// stop immediately, while a move AWAY from it (inward) is allowed.
+TEST(stepper_endstop_blocks_move_into_butee) {
+    // Driving into an active MIN endstop near the min end → fault.
+    {
+        EndstopSink sink;
+        auto c = stepperCfg(); c.stepper.endstopMin.pin = 34; c.stepper.homeBackoffMm = 3;
+        c.stepper.homeOffsetMm = 2.0f;           // parked at 2 mm, inside the margin
+        StepDirSlideActuator act(&sink);
+        act.begin(c); act.requestHoming();
+        uint32_t t = pump(act, 0, 3000);
+        CHECK(act.isHomed()); CHECK_NEAR(act.currentPositionMm(), 2.0f, 0.3f);
+        sink.minTrig = true;                     // force the min switch active at 2 mm
+        CHECK(act.requestPositionMm(0.5f));      // command DOWN, toward the min butée
+        t += 1000; act.update(t);
+        CHECK(act.state() == MotionState::Fault);
+        CHECK(act.fault() == FaultCode::EndstopInconsistent);
+    }
+    // Moving inward with the same switch active is NOT faulted on that tick.
+    {
+        EndstopSink sink;
+        auto c = stepperCfg(); c.stepper.endstopMin.pin = 34; c.stepper.homeBackoffMm = 3;
+        c.stepper.homeOffsetMm = 2.0f;
+        StepDirSlideActuator act(&sink);
+        act.begin(c); act.requestHoming();
+        uint32_t t = pump(act, 0, 3000);
+        CHECK(act.isHomed());
+        sink.minTrig = true;
+        CHECK(act.requestPositionMm(2.5f));      // command UP, inward
+        t += 1000; act.update(t);
+        CHECK(act.fault() == FaultCode::None);   // inward move allowed
+    }
+}
+
 // Review #6: applyDynamic changes speed/accel/soft-limits live (not pins/type).
 TEST(actuator_apply_dynamic_soft_limits) {
     FakeSink sink; sink.endstopAtMm = 0.0f;
