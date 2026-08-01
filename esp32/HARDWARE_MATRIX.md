@@ -443,6 +443,8 @@ each with a test that fails without the change:
 | §3.7 forceSafeOutputs drove pins before validating them | FIXED (each pin checked against the board profile — exists / not flash-reserved / not input-only — before pinMode/digitalWrite) — compiles in CI |
 | §3.8 Hardware-init failures could still reach Ready | FIXED (EspMotionSink::begin + EspAirSink report attach/timer success; configureSinks returns their AND; a failed instrument is skipped so setup stays SafeConfigOnly; failed RT-task creation also drops to SafeConfigOnly) — compiles in CI |
 | §5 Durations negative→huge; floats non-finite | FIXED·TESTED (checkedU32 rejects negative/absurd ms durations; checkedNum requires finite+in-range floats across motion/source/gate/flow/angle/sensor/seq) |
+| §4.9 Servos held last pose after Panic | FIXED·TESTED (Single/DualServo drive to their configured safeUs on e-stop) |
+| §4.10 Output polarity only on the simple solenoid | FIXED·TESTED (activeHigh on source + flow round-trips; propagated to fan/pump/PWM-solenoid/flow PWM; a change forces restart) |
 
 Still open from review #9 — hardware/architecture items that a bench or a larger
 refactor must close, tracked honestly rather than marked done: §3.3 the ISR is
@@ -452,13 +454,13 @@ separation with atomic generations and inter-core locking; §4.4 surfacing a
 refused soft-limit apply as a typed ack; §4.5 per-source note ownership +
 watchdogMs; §4.6 the MIDI transports (DIN/BLE/RTP/USB) + the double-transpose
 guard once they attach to MidiRouter; §4.7 mode aliases that share one backend;
-§4.8 global overpressure/SensorMissing for non-tank sources; §4.9 servos to
-safeUs + detach on Panic; §4.10 output polarity for SolenoidPwm/pumps/fans/flow;
-§5 remaining negative-duration/finiteness validation and a real Custom board
-profile; §6 HTTP size-before-alloc + WS fragmentation/Origin; §7 fully-atomic
-persistence + in-flash LittleFS recovery; §8 a formally-safe snapshot; and the
-web UI wizard/calibration screens. Verdict unchanged: **firmware beta / hardware
-alpha** — bench testing with a physical emergency stop only.
+§4.8 global overpressure/SensorMissing for non-tank sources; the servo idle
+detach path (detachIdleMs — the §4.9 safeUs-on-Panic is done, idle-detach is
+not); a real Custom board profile; §6 HTTP size-before-alloc + WS
+fragmentation/Origin; §7 fully-atomic persistence + in-flash LittleFS recovery;
+§8 a formally-safe snapshot; and the web UI wizard/calibration screens. Verdict
+unchanged: **firmware beta / hardware alpha** — bench testing with a physical
+emergency stop only.
 
 ## How to run the software tests
 
