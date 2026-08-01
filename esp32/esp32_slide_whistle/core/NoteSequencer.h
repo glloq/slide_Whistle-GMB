@@ -126,8 +126,14 @@ public:
 
     // ---- real-time tick ---------------------------------------------------
     void update(uint32_t nowMs, uint32_t nowUs) {
-        // continuous vibrato LFO while playing
-        if (vibratoDepth_ > 1e-4f && (phase_ == SeqPhase::Playing || phase_ == SeqPhase::Positioning))
+        // Continuous vibrato LFO ONLY while Playing. Applying it during
+        // Positioning re-issued requestPositionMm() every tick, which flipped the
+        // actuator back to Moving, so isReadyForAir() never became true and a note
+        // pressed while a modulation-wheel vibrato was already active timed out
+        // without ever opening the air (review #9 §4.1). The slide still moves to
+        // the base note position during Positioning; the LFO modulates around it
+        // only once the note is actually sounding.
+        if (vibratoDepth_ > 1e-4f && phase_ == SeqPhase::Playing)
             applyPosition(nowMs);
 
         if (phase_ == SeqPhase::Positioning && act_ && air_) {

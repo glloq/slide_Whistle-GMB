@@ -381,6 +381,35 @@ TEST(seq_prepare_timeout_never_opens_late) {
     CHECK_EQ(air.started_, 0);                        // air never opened late
 }
 
+// Review #9 §4.1: a note pressed while a modulation-wheel vibrato is already
+// active must still start. The continuous LFO must not re-position the slide
+// during Positioning (which kept flipping the actuator to Moving so
+// isReadyForAir never became true and the note timed out without opening air).
+TEST(seq_vibrato_active_before_note_still_opens) {
+    FakeMotionSink m;                                  // readEndstop: mm <= 0
+    StepDirSlideActuator act(&m);
+    SlideMotionConfig mc; mc.type = SlideDriveType::StepDir;
+    mc.travelMm = 100; mc.softMaxMm = 100; mc.maxSpeedMmS = 200; mc.accelMmS2 = 2000;
+    mc.stepper.stepsPerMm = 80; mc.stepper.homingFastMmS = 200;
+    mc.stepper.phaseTimeoutMs = 100000; mc.stepper.homeBackoffMm = 2;
+    act.begin(mc);
+    AirSystem air; FakeAirSink2 s; air.begin(simpleAir(), &s);
+    NoteMap map; for (int n = 48; n <= 84; ++n) map.setPoint((uint8_t)n, (n-48)*2.0f, 60);
+    SequencerConfig cfg; cfg.prepareTimeoutMs = 400; cfg.vibratoRateHz = 10.0f;
+    NoteSequencer seq; seq.begin(&act, &air, &map, cfg);
+    uint32_t us = 0;
+    act.requestHoming();
+    for (int k = 0; k < 3000 && !act.isHomed(); ++k) { us += 1000; act.update(us); }
+    CHECK(act.isHomed());
+    seq.setVibrato(50.0f, us / 1000);                  // ~0.5 semitone vibrato depth, before the note
+    seq.noteOn(60, 100, us / 1000);
+    for (int k = 0; k < 1500 && !s.gateOpen; ++k) {
+        us += 1000; act.update(us); air.setNow(us / 1000); air.update(us / 1000); seq.update(us / 1000, us);
+    }
+    CHECK(s.gateOpen);                                 // the note opened despite active vibrato
+    CHECK(seq.phase() == SeqPhase::Playing);
+}
+
 // Review #3 §5.1: a note with no usable position mapping must never be played —
 // the sequencer must not enter Positioning/Playing or open air, and the note is
 // dropped from the stack rather than left dangling.
