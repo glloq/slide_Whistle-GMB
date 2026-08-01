@@ -91,6 +91,14 @@ public:
         return e.normallyClosed ? !triggered : triggered;
     }
 
+    // Re-define the executed-step counter to the mm reference the actuator just
+    // established at a homing contact, so the next writeStepperMm() commands zero
+    // motion instead of a phantom correction back to the pre-home count
+    // (review #8 §1 — the base-class default no-op left curSteps_ untouched).
+    void syncPositionMm(float mm) override {
+        curSteps_ = lroundf(mm * cfg_.stepper.stepsPerMm);
+    }
+
 private:
     void attachServo(uint8_t idx, const ServoMotionConfig& s) {
         if (s.backend != PwmBackend::Gpio || s.pin < 0) return;   // PCA9685 backend: TODO
