@@ -65,6 +65,17 @@ public:
 private:
     // Accumulate POST body across chunks, then dispatch once complete.
     void handle(AsyncWebServerRequest* r, uint8_t* data, size_t len, size_t idx, size_t total) {
+        // §6: refuse an oversized body BEFORE buffering it. On the first chunk
+        // `total` is the declared Content-Length; guard the running size too so a
+        // chunked upload with no length can't grow the heap past the cap either.
+        const size_t cap = router_ ? router_->maxBodyBytes() : 16384;
+        const size_t projected = (total ? total : idx + len);
+        if (httpBodyExceedsLimit(projected, cap)) {
+            if (r->_tempObject) { delete static_cast<std::string*>(r->_tempObject); r->_tempObject = nullptr; }
+            r->send(413, "application/json",
+                    "{\"ok\":false,\"error\":{\"code\":\"BODY_TOO_LARGE\",\"message\":\"request body exceeds limit\"}}");
+            return;
+        }
         if (total && data) {
             if (!r->_tempObject) r->_tempObject = new std::string();
             auto* body = static_cast<std::string*>(r->_tempObject);

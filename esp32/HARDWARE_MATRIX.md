@@ -451,6 +451,7 @@ each with a test that fails without the change:
 | §4.5 watchdogMs validated/serialized but never enforced (a lost NoteOff held the air open forever) | FIXED·TESTED (NoteSequencer force-releases every note once one has sounded longer than maxNoteMs, fed from watchdogMs; cleared by the next NoteOn) |
 | §4.4 A deferred soft-limit apply was silently reported "saved"/applied | FIXED·TESTED (actuator exposes softLimitApplyPending() → per-instrument `soft_limit_pending`; combined with the §4.2/§4.3 generation pair below a client POSTs, then polls until `config_applied_gen == config_desired_gen` to know the RT core applied it, and reads `soft_limit_pending` to see whether the tighter window actually took) |
 | §4.2/§4.3 The whole RuntimeConfig was rewritten in place on the network core while the RT core read it inside ApplyDynamicConfig — a ~10 KB torn read across cores, with no way to tell a saved change had landed | FIXED·TESTED (new ConfigHandoff seqlock: the network core publishes the desired config, the RT core copies a whole-old-or-whole-new snapshot into its own applied_ buffer; a monotonic generation drives `config_desired_gen`/`config_applied_gen`/`config_in_sync` in the status JSON) |
+| §6 (size-before-alloc) The web adapter buffered the whole POST body into heap before the 413 check — a large Content-Length was a heap-exhaustion DoS | FIXED (WebServerAdapter refuses on the first chunk when the declared/running size passes maxBodyBytes(), via the shared httpBodyExceedsLimit() rule) — rule + accessor UNIT-TESTED, the early-reject itself compiles in CI |
 
 Still open from review #9 — hardware/architecture items that a bench or a larger
 refactor must close, tracked honestly rather than marked done: §3.3 the ISR is
@@ -459,8 +460,9 @@ IRAM + register-level GPIO on a bench); §4.5 per-source note ownership (the
 watchdogMs enforcement itself is fixed above); §4.6 wiring the remaining MIDI transports (DIN/BLE/RTP/USB) onto
 MidiRouter (the double-transpose defect itself is fixed above); the servo idle
 detach path (detachIdleMs — the §4.9 safeUs-on-Panic is done, idle-detach is
-not); a real Custom board profile; §6 HTTP size-before-alloc + WS
-fragmentation/Origin; §7 fully-atomic persistence + in-flash LittleFS recovery;
+not); a real Custom board profile; §6 WS frame reassembly / fragmentation limits
+(the HTTP size-before-alloc half is fixed above; Origin is already enforced in
+ApiRouter); §7 fully-atomic persistence + in-flash LittleFS recovery;
 §8 a formally-safe snapshot; and the web UI wizard/calibration screens. Verdict
 unchanged: **firmware beta / hardware alpha** — bench testing with a physical
 emergency stop only.

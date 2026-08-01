@@ -79,6 +79,20 @@ TEST(api_body_too_large) {
     CHECK_EQ(r.status, 413);
 }
 
+// Review #9 §6: the platform web adapter must be able to refuse an oversized
+// upload BEFORE buffering it into heap. That decision is the shared
+// httpBodyExceedsLimit() rule (fed the declared Content-Length), and the cap is
+// exposed via maxBodyBytes(); both are exercised here so the boundary (a body
+// exactly at the cap is allowed, one byte over is refused) can't silently drift.
+TEST(api_body_limit_rule_and_accessor) {
+    Rig g; g.begin(); g.api.setMaxBodyBytes(64);
+    CHECK_EQ((int)g.api.maxBodyBytes(), 64);
+    CHECK(!httpBodyExceedsLimit(0, 64));      // empty ok
+    CHECK(!httpBodyExceedsLimit(64, 64));     // exactly at the cap ok
+    CHECK(httpBodyExceedsLimit(65, 64));      // one over → refuse
+    CHECK(httpBodyExceedsLimit(200000, 64));  // a huge declared length → refuse early
+}
+
 TEST(api_bad_content_type) {
     Rig g; g.begin();
     ApiReply r = g.req("POST", "/api/v1/config", "{}", g.adminTok, "text/plain");

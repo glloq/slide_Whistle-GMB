@@ -170,6 +170,13 @@ inline bool configNeedsRestart(const RuntimeConfig& oo, const RuntimeConfig& nn)
     return false;
 }
 
+// §6: one rule, shared by the platform web adapter (which must refuse an
+// oversized upload BEFORE buffering it into heap — a big Content-Length is a
+// trivial heap-exhaustion DoS on a 320 KB device) and the tests. `have` is the
+// declared Content-Length on the first chunk, or the running accumulated size on
+// a chunked upload with no length. Refuse once it passes the cap.
+inline bool httpBodyExceedsLimit(size_t have, size_t cap) { return have > cap; }
+
 class ApiRouter {
 public:
     void begin(AuthManager* auth, ConfigStore* store, RuntimeConfig* live,
@@ -182,6 +189,9 @@ public:
     // Optional: without it (portable API tests) the reply semantics are unchanged.
     void setConfigHandoff(ConfigHandoff* h) { handoff_ = h; }
     void setMaxBodyBytes(size_t n) { maxBody_ = n; }
+    // Body-size cap, exposed so the platform web adapter can refuse an oversized
+    // upload BEFORE buffering the whole thing into heap (review #9 §6).
+    size_t maxBodyBytes() const { return maxBody_; }
     bool restartRequired() const { return restartRequired_; }
     bool restartRequested() const { return restartRequested_; }
     void clearRestartRequested() { restartRequested_ = false; }
