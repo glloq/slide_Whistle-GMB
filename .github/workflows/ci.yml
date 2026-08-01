@@ -47,6 +47,17 @@ jobs:
           #define portMUX_INITIALIZER_UNLOCKED 0
           inline void portENTER_CRITICAL(portMUX_TYPE*){}
           inline void portEXIT_CRITICAL(portMUX_TYPE*){}
+          // hardware timer — mirror both the 2.x and 3.x arduino-esp32 signatures
+          // so EspStepGen syntax-checks under either -DESP_ARDUINO_VERSION_MAJOR.
+          #define IRAM_ATTR
+          struct hw_timer_t;
+          inline hw_timer_t* timerBegin(unsigned char,unsigned short,bool){return 0;}
+          inline void timerAttachInterrupt(hw_timer_t*,void(*)(),bool){}
+          inline void timerAlarmWrite(hw_timer_t*,unsigned long long,bool){}
+          inline void timerAlarmEnable(hw_timer_t*){}
+          inline hw_timer_t* timerBegin(unsigned int){return 0;}
+          inline void timerAttachInterrupt(hw_timer_t*,void(*)()){}
+          inline void timerAlarm(hw_timer_t*,unsigned long long,bool,unsigned long long){}
           EOF
           for V in "300 -DESP_ARDUINO_VERSION_MAJOR=3" "200"; do
             echo "== Arduino-ESP32 $V =="

@@ -25,6 +25,41 @@ struct FakeSink : IMotionSink {
     void syncPositionMm(float mm) override { ++syncCount; lastSyncMm = mm; }
 };
 
+// Sink that models a step backend emitting a BOUNDED number of pulses per call,
+// so the executed position trails the commanded one during a fast move — used to
+// exercise air-gating on the executed position.
+struct LagSink : IMotionSink {
+    float commandedMm = 0; long curSteps = 0;
+    float stepsPerMm = 80.0f; long maxPerCall = 8;
+    void writeStepperMm(float mm) override {
+        commandedMm = mm;
+        long target = lroundf(mm * stepsPerMm);
+        long delta = target - curSteps;
+        long steps = delta >= 0 ? delta : -delta;
+        if (steps > maxPerCall) steps = maxPerCall;
+        curSteps += (delta > 0 ? steps : -steps);
+    }
+    void writeServoUs(uint8_t, uint16_t) override {}
+    void enableDriver(bool) override {}
+    bool readEndstop(bool) override { return commandedMm <= 0.0f; }   // homing only
+    void syncPositionMm(float mm) override { curSteps = lroundf(mm * stepsPerMm); }
+    bool executedPositionMm(float& mm) const override { mm = float(curSteps) / stepsPerMm; return true; }
+};
+
+// Sink with independently forceable min/max endstops (plus a homing-side trip),
+// for continuous endstop supervision during play.
+struct EndstopSink : IMotionSink {
+    float commandedMm = 0; bool minTrig = false, maxTrig = false; bool driverOn = false;
+    void writeStepperMm(float mm) override { commandedMm = mm; }
+    void writeServoUs(uint8_t, uint16_t) override {}
+    void enableDriver(bool on) override { driverOn = on; }
+    bool readEndstop(bool useMax) override {
+        if (useMax) return maxTrig;
+        return minTrig || commandedMm <= 0.0f;   // min also trips at the home ref
+    }
+    void syncPositionMm(float) override {}
+};
+
 // Sink whose MAX endstop trips once the position rises to/above a threshold,
 // for exercising homeTowardZero=false.
 struct MaxHomeSink : IMotionSink {
@@ -300,6 +335,81 @@ TEST(stepper_homing_toward_max_reference) {
     CHECK_NEAR(sink.lastSyncMm, 100.0f, 1e-4);          // reference defined at travelMm
     CHECK_NEAR(act.currentPositionMm(), 95.0f, 0.8);    // parked 5 mm inward, not at 0
     CHECK(act.requestPositionMm(20.0f));                // an inward target is accepted
+}
+
+// Review #8 §5: on a fast reversal (velocity still positive, new target to the
+// left and close) the profile must DECELERATE the opposing velocity, never
+// accelerate it further in the wrong direction.
+TEST(stepper_reversal_does_not_accelerate_wrong_way) {
+    FakeSink sink; sink.endstopAtMm = 0.0f;
+    auto c = stepperCfg(); c.softMaxMm = 100; c.maxSpeedMmS = 200; c.accelMmS2 = 1000;
+    StepDirSlideActuator act(&sink);
+    act.begin(c); act.requestHoming(); pump(act, 0, 3000);
+    // Build a rightward velocity toward 60 mm.
+    CHECK(act.requestPositionMm(60.0f));
+    uint32_t t = 4000;
+    while (act.velocityMmS() < 80.0f && t < 4000 + 2000) { t += 1000; act.update(t); }
+    CHECK(act.velocityMmS() > 0.0f);                 // moving right
+    float vBefore = act.velocityMmS();
+    float posAt = act.currentPositionMm();
+    // Command a target just to the LEFT (close) — a reversal.
+    CHECK(act.requestPositionMm(posAt - 0.5f));
+    t += 1000; act.update(t);                         // one integration step
+    // The (still positive) velocity must have DECREASED, not grown.
+    CHECK(act.velocityMmS() < vBefore);
+    // And over the next few steps it keeps dropping toward/through zero, it does
+    // not run away toward vmax.
+    float vPrev = act.velocityMmS();
+    for (int i = 0; i < 5; ++i) { t += 1000; act.update(t); CHECK(act.velocityMmS() <= vPrev + 1e-3f); vPrev = act.velocityMmS(); }
+}
+
+// Review #7/#8 §6: air must be gated on the EXECUTED position. While the step
+// backend is still emitting the last bounded batch of pulses, the commanded
+// pos_ can already equal the target (state Holding) yet the slide has not
+// physically arrived — isReadyForAir() must stay false until the executed
+// position catches up.
+TEST(stepper_air_gating_waits_for_executed_position) {
+    LagSink sink; sink.stepsPerMm = 80; sink.maxPerCall = 8;   // ~0.1 mm/tick executed
+    auto c = stepperCfg(); c.stepper.stepsPerMm = 80; c.maxSpeedMmS = 200; c.accelMmS2 = 2000;
+    StepDirSlideActuator act(&sink);
+    act.begin(c); act.requestHoming();
+    uint32_t t = pump(act, 0, 3000);         // continuous clock from here on
+    CHECK(act.isHomed());
+    CHECK(act.requestPositionMm(60.0f));
+    // Run until the profile has settled (pos == target, not moving).
+    for (int i = 0; i < 4000 && act.isMoving(); ++i) { t += 1000; act.update(t); }
+    CHECK_NEAR(act.currentPositionMm(), 60.0f, 0.5f);
+    float exec; sink.executedPositionMm(exec);
+    CHECK(exec < 60.0f - 1.0f);              // executed still trailing
+    CHECK(!act.isReadyForAir());             // so air must NOT be allowed yet
+    // Keep ticking (applyOutput keeps emitting pulses) until executed arrives.
+    for (int i = 0; i < 4000 && !act.isReadyForAir(); ++i) { t += 1000; act.update(t); }
+    sink.executedPositionMm(exec);
+    CHECK_NEAR(exec, 60.0f, 0.2f);
+    CHECK(act.isReadyForAir());              // now the slide has physically arrived
+}
+
+// Review #7/#8 §7: endstops are supervised continuously, not only during
+// homing. An endstop that reads triggered mid-travel is inconsistent → the axis
+// stops, faults EndstopInconsistent and de-energises the driver.
+TEST(stepper_endstop_during_play_faults) {
+    EndstopSink sink;
+    auto c = stepperCfg(); c.stepper.endstopMin.pin = 34; c.stepper.homeBackoffMm = 3;
+    StepDirSlideActuator act(&sink);
+    act.begin(c); act.requestHoming();
+    uint32_t t = pump(act, 0, 3000);
+    CHECK(act.isHomed());
+    CHECK(act.requestPositionMm(40.0f));
+    t = pump(act, t, 2000);
+    CHECK_NEAR(act.currentPositionMm(), 40.0f, 1.0f);
+    CHECK(act.fault() == FaultCode::None);      // healthy mid-travel
+    // Force the MIN endstop while parked at 40 mm — physically impossible → fault.
+    sink.minTrig = true;
+    t += 1000; act.update(t);
+    CHECK(act.state() == MotionState::Fault);
+    CHECK(act.fault() == FaultCode::EndstopInconsistent);
+    CHECK(!sink.driverOn);                       // driver de-energised
+    CHECK(!act.isReadyForAir());
 }
 
 // Review #6: applyDynamic changes speed/accel/soft-limits live (not pins/type).

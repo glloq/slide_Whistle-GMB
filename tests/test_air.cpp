@@ -14,7 +14,8 @@ struct FakeAirSink : IAirSink {
     bool  gateOpen = false;
     float gatePwm = -1, flow = -1, angle = -1;
     float sensorRaw = NAN;   // set to a number to simulate a present sensor
-    void setSourceLevel(uint8_t i, float v) override { if (i < MAX_PUMPS) src[i] = v; }
+    int   srcNonZeroWrites = 0;   // count of setSourceLevel(_, >0) — catches Fault-state pulses
+    void setSourceLevel(uint8_t i, float v) override { if (i < MAX_PUMPS) src[i] = v; if (v > 0.0f) ++srcNonZeroWrites; }
     void setGateOpen(bool o) override { gateOpen = o; }
     void setGatePwm(float v) override { gatePwm = v; }
     void setFlow(float v) override { flow = v; }
@@ -102,6 +103,47 @@ TEST(pump_direct_cascade) {
     CHECK(s.src[0] > 0.0f); CHECK_NEAR(s.src[1], 0.0f, 1e-3);   // staggered
     p.run(r, 250); CHECK(s.src[2] > 0.0f);
     CHECK(p.ready());
+}
+
+// Review #8 §2: safeState() must clear the RUN state, not only the outputs —
+// otherwise the next update() (e.g. the first tick after Rearm) re-asserts the
+// pumps with no new note.
+TEST(pump_direct_no_autorestart_after_safe_state) {
+    FakeAirSink s; AirConfig c;
+    c.source.type = AirSourceType::PumpsDirect; c.source.pumpCount = 2; c.source.min01 = 0.3f;
+    PumpDirectSource p; p.begin(c, &s);
+    AirNoteRequest r; r.velocity = 127;
+    p.prepare(r, 0); p.run(r, 200);
+    CHECK(s.src[0] > 0.0f);              // running
+    p.safeState();                       // Panic
+    CHECK_NEAR(s.src[0], 0.0f, 1e-3);    // outputs off
+    s.srcNonZeroWrites = 0;
+    for (uint32_t t = 300; t < 600; ++t) p.update(t);   // ticks after "Rearm"
+    CHECK(s.srcNonZeroWrites == 0);      // pumps never restart on their own
+    CHECK_NEAR(s.src[0], 0.0f, 1e-3);
+}
+
+// Review #8 §3: once the air system is in Fault it must stop running the source
+// entirely — no per-tick re-assertion of a level (which at 1 kHz is a pulse
+// train on the pump) — and the safety trip must persist.
+TEST(airsystem_fault_state_is_fully_halted) {
+    FakeAirSink s;
+    AirConfig c;
+    c.source.type = AirSourceType::PumpsDirect; c.source.pumpCount = 1; c.source.min01 = 0.4f;
+    c.gate.type = AirGateType::SolenoidSimple;
+    c.flow.type = FlowControlType::FlowServo; c.flow.maxSlewPerMs = 1.0f;
+    c.valveOpenTimeoutMs = 50;                     // force a fault via valve timeout
+    AirSystem a; a.begin(c, &s);
+    AirNoteRequest r; r.velocity = 100;
+    a.setNow(0); a.startNote(r);
+    for (uint32_t t = 1; t <= 120; ++t) { a.setNow(t); a.update(t); }
+    CHECK(a.state() == AirState::Fault);
+    CHECK(a.fault() == FaultCode::ValveTimeout);
+    s.srcNonZeroWrites = 0;
+    for (uint32_t t = 121; t < 600; ++t) { a.setNow(t); a.update(t); }
+    CHECK(s.srcNonZeroWrites == 0);                // no source pulses while faulted
+    CHECK(a.state() == AirState::Fault);           // trip persists
+    CHECK(a.fault() == FaultCode::ValveTimeout);
 }
 
 TEST(pump_tank_no_sensor_no_autostart) {
@@ -271,38 +313,39 @@ TEST(sensor_stable_value_not_stale) {
     CHECK(sensor.fault() == FaultCode::None);
 }
 
-// Review #7 §20: a reading pinned to the exact same value for far longer than
-// the timeout (20×) is a stuck/failed sensor — it must become stale/faulted so
-// the safety layer can act, not silently pass as valid forever.
-TEST(sensor_frozen_becomes_stale) {
+// Review #8 §4: a genuinely stable reading is legitimate (settled tank, quiet
+// digital sensor) — it must NOT become stale/faulted from lack of variation
+// alone. frozen() stays a pure diagnostic.
+TEST(sensor_stable_value_stays_valid_even_when_frozen) {
     FakeAirSink s; s.sensorRaw = 50;
     AirConfig c; c.sensor.type = AirSensorType::PressureAnalog;
     c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
-    c.sensor.staleTimeoutMs = 100;                          // frozen window = 2000 ms
+    c.sensor.staleTimeoutMs = 100;                          // frozen diag window = 2000 ms
     AirSensor sensor; sensor.begin(c, &s);
-    for (uint32_t t = 1; t < 1500; ++t) sensor.update(t);   // still within the frozen window
-    CHECK(sensor.valid());
-    CHECK(sensor.fault() == FaultCode::None);
-    for (uint32_t t = 1500; t < 2200; ++t) sensor.update(t);// now past 20× the timeout
-    CHECK(sensor.frozen());
-    CHECK(!sensor.valid());                                  // frozen ⇒ not valid
-    CHECK(sensor.fault() == FaultCode::SensorStale);        // and reachable now
+    for (uint32_t t = 1; t < 3000; ++t) sensor.update(t);   // constant reading, long time
+    CHECK(sensor.frozen());                                 // diagnostic may flag it
+    CHECK(sensor.valid());                                  // but it is still VALID
+    CHECK(sensor.fault() == FaultCode::None);               // no fault from stability
 }
 
-// Review #7 §20: a frozen sensor trips the AirSafetyController (it acts on
-// SensorStale), so a stuck pressure reading no longer passes silently.
-TEST(safety_trips_on_frozen_sensor) {
+// Review #8 §4: "stale" means no FRESH sample. Losing the sensor (NaN reads)
+// past the timeout is what makes it stale and trips the safety layer.
+TEST(sensor_stale_on_lost_samples_trips_safety) {
     FakeAirSink s; s.sensorRaw = 50;
     AirConfig c; c.sensor.type = AirSensorType::PressureAnalog;
     c.sensor.rawMin=0; c.sensor.rawMax=100; c.sensor.physMin=0; c.sensor.physMax=100; c.sensor.physHi=200;
     c.sensor.staleTimeoutMs = 100;
     AirSensor sensor; sensor.begin(c, &s);
     AirSafetyController safety; safety.begin(c);
+    for (uint32_t t = 1; t < 300; ++t) sensor.update(t);    // healthy fresh samples
+    CHECK(sensor.valid());
+    s.sensorRaw = NAN;                                       // sensor lost (no fresh data)
     bool tripped = false;
-    for (uint32_t t = 1; t < 2300; ++t) {
+    for (uint32_t t = 300; t < 700; ++t) {
         sensor.update(t);
         if (safety.check(t, FaultCode::None, FaultCode::None, sensor)) { tripped = true; break; }
     }
+    CHECK(sensor.fault() == FaultCode::SensorStale);
     CHECK(tripped);
     CHECK(safety.fault() == FaultCode::SensorStale);
 }

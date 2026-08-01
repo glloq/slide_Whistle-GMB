@@ -335,7 +335,7 @@ order, each with a test that fails without the change:
 
 | Item | Status |
 |------|--------|
-| §1 Homing zero not pushed to the step counter | FIXED·TESTED (IMotionSink::syncPositionMm; EspMotionSink resets curSteps_ at contact) |
+| §1 Homing zero not pushed to the step counter | INTERFACE-ONLY IN #7, COMPLETED IN #8 (the #7 commit added syncPositionMm to the interface + fakes but did NOT override it in EspMotionSink; the real backend override + a native backend test landed in review #8 §1) |
 | §1 Homing toward max used pos_=0 | FIXED·TESTED (max contact defined as travelMm, then moves inward by offset) |
 | §3 endstopMax pin not configured / homing endstop optional | FIXED·TESTED (EspMotionSink configures both pins; validator requires the homing-side endstop) |
 | §4 Command gate applied after the drain / server before RT task | FIXED (gate set before engine.tick(); engine starts blocked; server started after the RT task) — compiles in CI |
@@ -366,6 +366,64 @@ section over a full copy); plus the Phase-4/5 backends and UI (PCA9685/ToF/
 digital sensors, MIDI DIN/BLE/RTP/USB, Wi-Fi station, OTA/rollback, full
 wizard/calibration screens, config-driven keyboard). These now fail validation
 (UNSUPPORTED_BACKEND) instead of silently reaching Ready.
+
+## Eighth review response (backend sync, air safety, motion, exclusivity)
+
+Review #8 correctly caught that review #7's headline fix was interface-only. The
+software-provable items were closed here, each test-backed, and the earlier
+overclaim is corrected above:
+
+| Item | Status |
+|------|--------|
+| §1 EspMotionSink::syncPositionMm never overridden | FIXED·TESTED (real backend override + a standalone Arduino-stub test that drives the actual EspMotionSink and proves zero phantom steps) |
+| §2 Pump/fan auto-restart after Rearm | FIXED·TESTED (source safeState()/resetFault() clear running_/req_/fill state, not only outputs) |
+| §3 Air kept computing in Fault (pulse train) | FIXED·TESTED (update() halts fully when faulted/e-stopped via forceOutputsSafe, keeping the trip latched) |
+| §4 Stale-value "frozen⇒stale" false faults | FIXED·TESTED (stale = lost fresh samples; a stable reading stays valid; frozen() is a diagnostic; 64-bit product) |
+| §5 Profile accelerated the wrong way on reversal | FIXED·TESTED (brake only while moving toward target; otherwise cancel the opposing velocity first) |
+| §8 Diagnostics exclusive only one way | FIXED·TESTED (per-instrument diagnostic lock also refuses NoteOn/CC/PitchBend) |
+| §13 FlowServoAsValve accepted but closes no valve | FIXED·TESTED (UNSUPPORTED_BACKEND; preset repointed at a real ServoValve) |
+| §19 soft-limits/levels unvalidated; timeout overflow | FIXED·TESTED (BOUND_INVALID for soft limits within travel + ordering; source min01≤max01; 64-bit homing timeout) |
+
+Also fixed the test harness: header edits now force a rebuild (previously only
+.cpp changes did), so header-only changes can no longer be validated against a
+stale binary.
+
+Still open from review #8 — the hardware/architecture blockers that keep this
+**firmware beta / hardware alpha**, mostly unchanged and not closable without a
+bench or a larger refactor: §6/§7 the RMT/GPTimer stepper with an authoritative
+executed-step position, tracking-error supervision, and continuous dual-endstop
+monitoring *during play* (the §1 counter-sync and §5 profile fix are correct
+partial steps, but the position stays open-loop); §9/§10/§11 separated
+applied-vs-desired config with atomic generations, an immutable dynamic snapshot
+carried on the command, and inter-core locking of `RuntimeConfig`; §12 surfacing
+a refused soft-limit apply as a Rejected/PartiallyApplied ack (today applyDynamic
+returns void); §14 the remaining mode aliases that share one backend
+(FanOnOff/FanPwm, tank regulation modes); §15 propagating LEDC/servo attach
+failures into the startup validator; §16 output polarity for
+SolenoidPwm/pumps/fans/flow; §17 global overpressure/SensorMissing/OutOfRange
+handling for non-tank sources; §18 driving servos to safeUs + detach on Panic;
+§20 fully-atomic config persistence with checksum-verified temp; §21 an
+independent Panic channel; §22 HTTP size-before-alloc, WS fragmentation/Origin,
+per-source note ownership + watchdogMs; §23 a formally-safe snapshot; §24 a real
+in-flash LittleFS recovery page; plus the Phase-4/5 backends and UI. These are
+tracked honestly rather than marked done.
+
+## Executed-step position + endstop supervision (the §6/§7 headline blocker)
+
+The long-standing blocker was the open-loop virtual position: the actuator
+decided "arrived" from the commanded `pos_` while the ESP sink emits only a
+bounded batch of step pulses per call, so air could open before the slide
+physically arrived; and endstops were read only during homing. The portable
+**architecture** for both is now in place and natively tested — what remains is
+the hardware peripheral itself:
+
+| Item | Status |
+|------|--------|
+| Air gating on the executed (not commanded) position | FIXED·TESTED (IMotionSink::executedPositionMm; isReadyForAir waits for the emitted-pulse position to reach target; servos/fakes opt out and fall back to commanded) |
+| Backend executed-position feedback | FIXED·TESTED (EspMotionSink derives it from curSteps_; standalone Arduino-stub test asserts it trails then converges) |
+| Continuous endstop supervision during play/jog/test | FIXED·TESTED (StepDir superviseLimits() faults EndstopInconsistent + stops + de-energises on an inconsistent trigger; margin avoids a false fault at the homed reference; MainApp's 1 kHz anyActuatorFault→panic closes the air) |
+| RMT/GPTimer hardware step generator | IMPLEMENTED · COMPILED · NOT BENCH-VERIFIED — EspStepGen replaces the blocking delayMicroseconds busy-wait with a shared hw_timer_t ISR (40 kHz) that walks each axis to its target and maintains the authoritative curSteps_; writeStepperMm() is now non-blocking. The universal/S3 PlatformIO builds compile it against the real arduino-esp32 2.x timer API and the CI syntax-check covers 2.x+3.x; the pulse-emission LOGIC is unit-tested off-device. What still needs a bench: real ISR cadence, IRAM-safety of digitalWrite in the ISR, and actual step output on a driver. |
+| Closed-loop tracking-error / stall detection | NOT ATTEMPTED (honestly): an open-loop stepper has no feedback that pulses produced real motion, so a physical stall is undetectable without an encoder — claiming a "tracking-error fault" would be false. Documented, not faked. |
 
 ## How to run the software tests
 

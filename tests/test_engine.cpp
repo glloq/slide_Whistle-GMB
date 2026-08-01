@@ -586,6 +586,48 @@ TEST(engine_diagnostics_exclusive_during_motion) {
     CHECK_NEAR(act.targetPositionMm(), 60.0f, 0.01f);        // Jog did not move the target
 }
 
+// Review #8 §8: diagnostics must be exclusive BOTH ways. A NoteOn arriving in
+// the same batch as (or during) a Home/diagnostic on that instrument is refused
+// — it must not slip past the sequencer while the axis is homing. Once the
+// diagnostic finishes, notes resume.
+TEST(engine_note_refused_during_diagnostic) {
+    struct MSink : IMotionSink { float mm=0; void writeStepperMm(float v) override{mm=v;}
+        void writeServoUs(uint8_t,uint16_t) override{} void enableDriver(bool) override{}
+        bool readEndstop(bool) override{return mm<=0.0f;} } m;
+    StepDirSlideActuator act(&m);
+    SlideMotionConfig mc; mc.type = SlideDriveType::StepDir; mc.travelMm=100; mc.softMaxMm=100;
+    mc.maxSpeedMmS=200; mc.accelMmS2=2000; mc.stepper.stepsPerMm=80;
+    mc.stepper.homingFastMmS=200; mc.stepper.phaseTimeoutMs=100000; mc.stepper.homeBackoffMm=2;
+    // One continuous microsecond clock throughout so the actuator's profile
+    // integrator never sees a spurious dt spike.
+    uint32_t us = 0;
+    AirSystem air; FASink s; air.begin(air2(), &s);
+    NoteMap map; for (int n=48;n<=84;++n) map.setPoint(uint8_t(n),(n-48)*2.0f,60);
+    Instrument in; in.begin(0, &act, &air, &map, icfg(1,48,84));
+    Instrument* insts[] = {&in};
+    CommandQueue<32> q; RealtimeEngine<32> eng; eng.begin(insts, 1, &q); eng.setCommandsBlocked(false);
+    // Home the instrument through the engine first (Home is a diagnostic; drive
+    // it to completion so the axis is homed and idle).
+    Command h0{CommandType::Home}; h0.instrument = 0; h0.seq = 1; q.push(h0);
+    for (int k = 0; k < 6000 && !act.isHomed(); ++k) { us += 1000; eng.tick(us/1000, us); }
+    CHECK(act.isHomed());
+    // Same batch: a second Home puts the axis back into Homing; the NoteOn behind
+    // it must be refused (diagnostic lock), not slip through.
+    Command h{CommandType::Home}; h.instrument = 0; h.seq = 2; q.push(h);
+    Command on{CommandType::NoteOn}; on.channel = 1; on.a = 60; on.b = 100; q.push(on);
+    us += 1000; eng.tick(us/1000, us);
+    CHECK(act.state() == MotionState::Homing);
+    CHECK(!s.gateOpen);                                  // NoteOn was refused
+    CHECK_EQ(in.sequencer().activeNoteOr(), -1);
+    // Let homing finish; the diagnostic lock then clears.
+    for (int k = 0; k < 6000 && act.state() == MotionState::Homing; ++k) { us += 1000; eng.tick(us/1000, us); }
+    CHECK(act.isHomed());
+    // A fresh NoteOn now plays (enough ticks for the slide to travel + air open).
+    Command on2{CommandType::NoteOn}; on2.channel = 1; on2.a = 60; on2.b = 100; q.push(on2);
+    for (int k = 0; k < 1000 && !s.gateOpen; ++k) { us += 1000; eng.tick(us/1000, us); }
+    CHECK(s.gateOpen);
+}
+
 // Review #7 §5: Rearm is only valid when something is actually faulted. Sent
 // from a clean (Ready) instrument it is Rejected; after a Panic it is Accepted.
 TEST(engine_rearm_requires_fault) {

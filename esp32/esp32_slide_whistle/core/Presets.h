@@ -98,8 +98,12 @@ inline void applyPreset(InstrumentConfig& i, PresetId p) {
             i.air.flow.type   = FlowControlType::FlowServo; i.air.flow.pin = pins::FLOW;
             break;
         case PresetId::StepperFlowServoAsValve:
+            // Flow-servo-as-valve sharing is not implemented (a separate gate
+            // servo would be left unattached), so this preset uses a real servo
+            // valve on its own pin plus the flow servo (review #8 §13). The enum
+            // value remains but validates as UNSUPPORTED if selected directly.
             configureStepper(i);
-            i.air.gate.type   = AirGateType::FlowServoAsValve; i.air.gate.pin = pins::FLOW;
+            i.air.gate.type   = AirGateType::ServoValve; i.air.gate.pin = pins::GATE;
             i.air.flow.type   = FlowControlType::FlowServo; i.air.flow.pin = pins::FLOW;
             break;
         case PresetId::StepperFanPwmFlow:

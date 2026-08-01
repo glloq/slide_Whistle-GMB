@@ -138,27 +138,29 @@ public:
         if (!haveFirst_) { firstMs_ = nowMs; haveFirst_ = true; }
         float raw = sink_ ? sink_->readSensorRaw() : NAN;
         if (std::isnan(raw)) {
-            // Transient bad read: keep trying. Declare the sensor ABSENT only
-            // after readings have been missing longer than the timeout (measured
-            // from the last good sample, or from boot if none ever arrived), and
-            // recover automatically once a real value returns (review #15).
+            // No FRESH sample this tick (read failure / comms timeout). "stale"
+            // means exactly this — no new data — NOT the mere absence of physical
+            // change (review #8 §4). Once fresh samples have been missing longer
+            // than the timeout the reading is stale; if none EVER arrived the
+            // sensor is absent (missing). Both recover once a real value returns.
             uint32_t ref = haveTime_ ? lastGoodMs_ : firstMs_;
-            if (elapsed_u32(nowMs, ref) > c_.staleTimeoutMs) present_ = false;
+            if (elapsed_u32(nowMs, ref) > c_.staleTimeoutMs) {
+                if (haveTime_) stale_ = true;     // had data, now none → stale
+                else           present_ = false;  // never had data → missing
+            }
             return;   // no fresh sample this tick — do not fabricate one
         }
         present_ = true;                          // recovered / present
         lastGoodMs_ = nowMs; haveTime_ = true;    // a fresh sample arrived
+        stale_ = false;                           // fresh data → not stale
         if (std::isnan(filt_)) filt_ = raw;
         else filt_ = filt_ + c_.filterAlpha * (raw - filt_);
-        // "frozen" is a DISTINCT diagnostic (long window) — a perfectly stable
-        // reading is NOT stale over a normal timeout (review #14). But a reading
-        // pinned to the exact same value for a very long time (20× the timeout)
-        // is a stuck/failed sensor: mark it stale so fault() surfaces SensorStale
-        // and the AirSafetyController acts on it — previously frozen_ was computed
-        // but drove nothing and SensorStale was unreachable (review #7 §20).
+        // "frozen" is a DISTINCT diagnostic only — a perfectly stable reading is
+        // legitimate (a settled tank, a low-noise digital sensor), so it does NOT
+        // fault the air system (review #8 §4 reverses review #7 §20). Kept for
+        // telemetry; 64-bit product avoids the staleTimeoutMs*20 overflow.
         if (std::isnan(lastRaw_) || std::fabs(raw - lastRaw_) > 0.5f) { lastRaw_ = raw; lastChangeMs_ = nowMs; }
-        frozen_ = elapsed_u32(nowMs, lastChangeMs_) > (c_.staleTimeoutMs * 20u);
-        stale_  = frozen_;                         // a frozen reading is treated as stale
+        frozen_ = elapsed_u32(nowMs, lastChangeMs_) > (uint64_t)c_.staleTimeoutMs * 20u;
         float phys = c_.physMin + (filt_ - c_.rawMin) / (c_.rawMax - c_.rawMin) *
                      (c_.physMax - c_.physMin);
         if (c_.invert) phys = c_.physMax - (phys - c_.physMin);
@@ -230,7 +232,12 @@ public:
         }
     }
     bool ready() const override { return ready_; }
+    // A Panic/e-stop must clear the RUN state, not only the output — otherwise
+    // update() re-asserts a level after Rearm with no new note (review #8 §2).
+    void safeState() override { reset(); BaseSource::safeState(); }
+    void resetFault() override { BaseSource::resetFault(); reset(); }
 private:
+    void reset() { running_ = false; idling_ = false; ready_ = false; }
     uint32_t preparedMs_ = 0, idleStartMs_ = 0;
     bool running_ = false, idling_ = false, ready_ = false;
 };
@@ -259,7 +266,13 @@ public:
         if (sink_) for (uint8_t i=0;i<MAX_PUMPS;++i) sink_->setSourceLevel(i, 0.0f);
     }
     bool ready() const override { return started_ >= clampv<uint8_t>(c_.pumpCount,1,MAX_PUMPS); }
+    // Without this a Panic zeroed the pump outputs but left running_=true and the
+    // last req_, so the first update() after Rearm restarted the pumps with no
+    // new note (review #8 §2).
+    void safeState() override { reset(); BaseSource::safeState(); }
+    void resetFault() override { BaseSource::resetFault(); reset(); }
 private:
+    void reset() { running_ = false; started_ = 0; req_ = AirNoteRequest{}; }
     uint32_t startMs_ = 0; uint8_t started_ = 0; bool running_ = false;
     AirNoteRequest req_;
 };
@@ -273,6 +286,9 @@ public:
     void idle(uint32_t nowMs) override { regulate(nowMs); }
     void update(uint32_t nowMs) override { if (!extSensor_) sensor_.update(nowMs); regulate(nowMs); }
     bool ready() const override { return regulatedReady_ && fault_ == FaultCode::None; }
+    // Clear the regulation state on a Panic too, so update()/regulate() cannot
+    // resume filling after Rearm without a fresh evaluation (review #8 §2).
+    void safeState() override { filling_ = false; regulatedReady_ = false; pidI_ = 0.0f; havePidTime_ = false; BaseSource::safeState(); }
     void resetFault() override { fault_ = FaultCode::None; filling_ = false; regulatedReady_ = false; pidI_ = 0.0f; havePidTime_ = false; }
 private:
     AirSensor* activeSensor() { return extSensor_ ? extSensor_ : &sensor_; }
