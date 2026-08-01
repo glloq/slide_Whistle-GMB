@@ -442,6 +442,7 @@ each with a test that fails without the change:
 | §4.1 Vibrato before a note blocked the note start | FIXED·TESTED (LFO applied only while Playing, not during Positioning) |
 | §3.7 forceSafeOutputs drove pins before validating them | FIXED (each pin checked against the board profile — exists / not flash-reserved / not input-only — before pinMode/digitalWrite) — compiles in CI |
 | §3.8 Hardware-init failures could still reach Ready | FIXED (EspMotionSink::begin + EspAirSink report attach/timer success; configureSinks returns their AND; a failed instrument is skipped so setup stays SafeConfigOnly; failed RT-task creation also drops to SafeConfigOnly) — compiles in CI |
+| §5 Durations negative→huge; floats non-finite | FIXED·TESTED (checkedU32 rejects negative/absurd ms durations; checkedNum requires finite+in-range floats across motion/source/gate/flow/angle/sensor/seq) |
 
 Still open from review #9 — hardware/architecture items that a bench or a larger
 refactor must close, tracked honestly rather than marked done: §3.3 the ISR is
