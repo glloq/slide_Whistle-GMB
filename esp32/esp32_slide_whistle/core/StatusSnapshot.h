@@ -24,6 +24,7 @@ struct InstrumentStatus {
     uint8_t  motionState = 0;   // MotionState
     uint8_t  airState = 0;      // AirState
     uint8_t  fault = 0;         // FaultCode of the actuator (0 = none)
+    bool     softLimitPending = false;  // a saved soft-limit change is deferred (§4.4)
 };
 
 struct StatusSnapshot {

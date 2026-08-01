@@ -387,6 +387,7 @@ private:
             is.fault = a ? uint8_t(a->fault()) : 0;
             is.airState = in->air() ? uint8_t(in->air()->state()) : 0;
             is.activeNote = int16_t(in->sequencer().activeNoteOr(-1));
+            is.softLimitPending = a && a->softLimitApplyPending();   // §4.4
         }
         snap_.publish();
     }
@@ -422,6 +423,7 @@ private:
                 o.set("moving", is.moving);
                 o.set("note", (int)is.activeNote);
                 o.set("fault", (int)is.fault);
+                o.set("soft_limit_pending", is.softLimitPending);   // §4.4: saved but deferred
                 arr.arr.push_back(o);
             }
             v.set("instruments", arr);

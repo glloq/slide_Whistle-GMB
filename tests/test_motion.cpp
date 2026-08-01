@@ -525,3 +525,28 @@ TEST(actuator_apply_dynamic_soft_limit_shrink_refused) {
     act.applyDynamic(c3);
     CHECK(!act.requestPositionMm(95.0f));             // 95 now beyond the new max
 }
+
+// Review #9 §4.4: a soft-limit change that applyDynamic() had to defer must not
+// be silently reported as applied — the actuator exposes a "pending" flag so the
+// client (via the telemetry snapshot) sees the tighter window is not in force yet.
+TEST(actuator_apply_dynamic_soft_limit_pending_is_observable) {
+    FakeSink sink; sink.endstopAtMm = 0.0f;
+    StepDirSlideActuator act(&sink);
+    auto c = stepperCfg(); c.softMaxMm = 100;
+    act.begin(c); act.requestHoming(); pump(act, 0, 3000);
+    CHECK(!act.softLimitApplyPending());              // nothing deferred yet
+    CHECK(act.requestPositionMm(80.0f));
+    pump(act, 4000, 3000);
+    CHECK_NEAR(act.currentPositionMm(), 80.0f, 1.0f); // settled at 80, idle
+    // Shrink to [0,50]: 80 is outside → deferred, and it must be OBSERVABLE.
+    auto c2 = c; c2.softMaxMm = 50;
+    act.applyDynamic(c2);
+    CHECK(act.softLimitApplyPending());               // the deferral is surfaced
+    // A later shrink that DOES contain the current position applies and clears it.
+    auto c3 = c; c3.softMaxMm = 90;
+    act.applyDynamic(c3);
+    CHECK(!act.softLimitApplyPending());              // took effect → no longer pending
+    // Re-applying the SAME limits (no change) is not a pending deferral either.
+    act.applyDynamic(c3);
+    CHECK(!act.softLimitApplyPending());
+}

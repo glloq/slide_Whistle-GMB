@@ -120,11 +120,20 @@ public:
         const bool idle = (state_ != MotionState::Moving && state_ != MotionState::Homing);
         const bool posInside = pos_ >= c.softMinMm - 1e-3f && pos_ <= c.softMaxMm + 1e-3f;
         const bool tgtInside = target_ >= c.softMinMm - 1e-3f && target_ <= c.softMaxMm + 1e-3f;
+        const bool wantsChange = std::fabs(c.softMinMm - cfg_.softMinMm) > 1e-3f ||
+                                 std::fabs(c.softMaxMm - cfg_.softMaxMm) > 1e-3f;
         if (idle && posInside && tgtInside) {
             cfg_.softMinMm = c.softMinMm;
             cfg_.softMaxMm = c.softMaxMm;
+            softLimitPending_ = false;                 // the change took effect
+        } else {
+            // Kept the old limits though a change was asked for — the tighter
+            // window is only pending until a safe moment (review #9 §4.4).
+            softLimitPending_ = wantsChange;
         }
     }
+
+    bool softLimitApplyPending() const override { return softLimitPending_; }
 
     bool isReadyForAir() const override {
         if (state_ == MotionState::Fault || state_ == MotionState::EStopped) return false;
@@ -224,6 +233,7 @@ protected:
     uint32_t lastUs_ = 0;
     bool     haveTime_ = false;
     bool     homed_ = false;
+    bool     softLimitPending_ = false;   // a live soft-limit shrink was deferred (§4.4)
     MotionState state_ = MotionState::Uninitialised;
     FaultCode   fault_ = FaultCode::None;
 };

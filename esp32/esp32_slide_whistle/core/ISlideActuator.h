@@ -143,6 +143,14 @@ public:
     // limits — live. Pins / driver type are hardware and stay restart-only.
     virtual void applyDynamic(const SlideMotionConfig& cfg) = 0;
 
+    // True when the most recent applyDynamic() could NOT take the requested soft
+    // limits live (axis moving, or the current position/target sits outside the
+    // new window) and kept the old ones. The API reports the config "saved", but
+    // the tighter limits are only PENDING until the axis reaches a safe state —
+    // so this must be observable rather than silently claimed applied (review #9
+    // §4.4). Default false for actuators that never defer (servos, disabled).
+    virtual bool softLimitApplyPending() const { return false; }
+
     virtual float currentPositionMm() const = 0;
     virtual float targetPositionMm() const = 0;
     virtual MotionState state() const = 0;
