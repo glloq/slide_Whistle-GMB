@@ -1,2 +1,3 @@
 run_tests
 run_espsink
+gmb_descriptor_dump

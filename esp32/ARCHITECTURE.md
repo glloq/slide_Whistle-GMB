@@ -84,6 +84,29 @@ A `noteOff` received while still **Positioning** cancels the pending air open
 sustain, pitch bend and e-stops both actuator and air, and no deferred command
 can reopen the air (correction #15).
 
+## Control plane — General-Midi-Boop v2
+
+A third plane sits alongside the network and real-time cores: the **control
+plane**, which answers General-Midi-Boop's recognition protocol. It runs on the
+Arduino loop task and owns no hardware.
+
+```
+DIN UART bytes ─► MidiStreamParser ─┬─► channel voice ─► MidiRouter ─► CommandQueue ─► RealtimeEngine
+                                    └─► GMB SysEx     ─► GmbMidiBridge ─► GmbSysExService
+                                                              │
+                                   GET /gmb/descriptor.json ───┴─► the SAME published document
+```
+
+GMB is deliberately **not** inside `MidiRouter`: the SysEx path holds no
+reference to the command queue, so a parser bug cannot synthesise a note. The
+capability descriptor is derived from the active `RuntimeConfig` / `NoteMap` /
+`CcMap` — there is no second, hand-maintained profile — and it is rebuilt only on
+the existing *successful* configuration-activation path, so a rejected write can
+never move what the device advertises.
+
+Full description, wire examples and the honest list of limitations:
+**[GMB_PROTOCOL.md](GMB_PROTOCOL.md)**.
+
 ## Concurrency rules honoured by the core
 
 - no `delay()` / `vTaskDelay()` inside a hardware sequence;

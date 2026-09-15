@@ -255,6 +255,10 @@ test("config: network / MIDI-transport / angle changes need restart (#4)", () =>
   // a pure tuning change stays dynamic
   const tune = JSON.parse(JSON.stringify(base)); tune.midi.transpose = 3;
   assert.equal(configNeedsRestart(base, tune), false);
+  // The DIN UART pins are bring-up: the port is opened once at boot.
+  const dinPin = structuredClone(base);
+  dinPin.midi = { ...(dinPin.midi || {}), dinRxPin: 4 };
+  assert.equal(configNeedsRestart(base, dinPin), true);
 });
 test("config: unsaved tracker", () => {
   const t = new UnsavedTracker({ a: 1 });

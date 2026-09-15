@@ -45,6 +45,24 @@ Solénoïde avec PWM intelligent et machine à états avancée.
 
 ---
 
+### 🔌 [Version ESP32 — contrôleur universel](esp32/)
+
+Un firmware ESP32 unique qui pilote une ou plusieurs flûtes, **entièrement
+configurable depuis une page web** (mécanisme de coulisse et chaîne d'air), sans
+recompilation.
+
+Il implémente aussi la **reconnaissance automatique General-Midi-Boop v2** : le
+contrôleur répond au handshake GMB et sert un descripteur de capacités dérivé de
+sa configuration active — plus de saisie manuelle des capacités dans GMB.
+
+> ⚠️ Non validé sur matériel. Voir l'état réel, fonction par fonction, dans
+> [esp32/HARDWARE_MATRIX.md](esp32/HARDWARE_MATRIX.md).
+
+👉 **[Architecture →](esp32/ARCHITECTURE.md)** ·
+**[Protocole GMB v2 →](esp32/GMB_PROTOCOL.md)**
+
+---
+
 ## 🎼 Fonctionnalités communes
 
 | Fonctionnalité | Description |

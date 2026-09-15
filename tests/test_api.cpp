@@ -330,3 +330,55 @@ TEST(api_rate_limit_exempts_safety) {
     // All Sound Off (cc 120) too
     CHECK_EQ(g.req("POST", "/api/v1/command", "{\"type\":\"cc\",\"a\":120,\"b\":0}").status, 202);
 }
+
+// --- config-activation hook (the GMB descriptor rebuild trigger) -------------
+
+TEST(api_config_activation_seq_moves_only_on_a_successful_apply) {
+    Rig g; g.begin();
+    const uint32_t seq0 = g.api.configActivationSeq();
+
+    // A rejected write must NOT move the counter: the published GMB descriptor
+    // can therefore never move on a bad POST.
+    CHECK_EQ(g.req("POST", "/api/v1/config", "{not json", g.adminTok).status, 400);
+    CHECK_EQ(g.api.configActivationSeq(), seq0);
+    CHECK_EQ(g.req("POST", "/api/v1/config", "{\"schemaVersion\":99}", g.adminTok).status, 400);
+    CHECK_EQ(g.api.configActivationSeq(), seq0);
+    // A structurally valid config that fails HARDWARE validation (an enabled
+    // stepper instrument with no pins) is rejected too.
+    RuntimeConfig bad = defaultConfig();
+    bad.instruments[0].enabled = true;
+    bad.instruments[0].motion.type = SlideDriveType::StepDir;   // pins still -1
+    CHECK_EQ(g.req("POST", "/api/v1/config", configToJson(bad), g.adminTok).status, 400);
+    CHECK_EQ(g.api.configActivationSeq(), seq0);
+
+    // A valid, persisted, activated config moves it exactly once.
+    RuntimeConfig ok = defaultConfig();
+    std::snprintf(ok.device.name, sizeof(ok.device.name), "%s", "Atelier");
+    ApiReply r = g.req("POST", "/api/v1/config", configToJson(ok), g.adminTok);
+    CHECK_EQ(r.status, 200);
+    CHECK_EQ(g.api.configActivationSeq(), seq0 + 1);
+    CHECK(std::string(g.live.device.name) == "Atelier");
+}
+
+TEST(api_config_activation_reports_whether_a_restart_is_still_needed) {
+    Rig g; g.begin();
+    // A dynamic-only change (device name) does not need a reboot.
+    RuntimeConfig dyn = defaultConfig();
+    std::snprintf(dyn.device.name, sizeof(dyn.device.name), "%s", "Atelier");
+    CHECK_EQ(g.req("POST", "/api/v1/config", configToJson(dyn), g.adminTok).status, 200);
+    CHECK(!g.api.lastActivationNeededRestart());
+
+    // A DIN UART pin is transport bring-up: it only reaches the hardware after a
+    // reboot, so the activation is flagged and GMB gets RESTART_REQUIRED.
+    RuntimeConfig hw = dyn;
+    hw.midi.dinRxPin = 4;
+    CHECK_EQ(g.req("POST", "/api/v1/config", configToJson(hw), g.adminTok).status, 200);
+    CHECK(g.api.lastActivationNeededRestart());
+}
+
+TEST(api_factory_reset_activates_a_config) {
+    Rig g; g.begin();
+    const uint32_t seq0 = g.api.configActivationSeq();
+    CHECK_EQ(g.req("POST", "/api/v1/factory-reset", "", g.adminTok).status, 200);
+    CHECK_EQ(g.api.configActivationSeq(), seq0 + 1);
+}

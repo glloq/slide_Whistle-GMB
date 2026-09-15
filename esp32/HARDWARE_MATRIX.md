@@ -46,6 +46,33 @@ Markers:
 | `AuthManager` | IMPLEMENTED · TESTED IN SOFTWARE | generated admin token, sessions+expiry, criticality gate, Origin allow-list, rate limiter, connection cap, AP password |
 | `ApiRouter` (/api/v1 dispatch) | IMPLEMENTED · TESTED IN SOFTWARE | auth/origin/rate gate, size/content-type, transactional apply, restart_required, enqueue-only control |
 | `InstrumentRuntime` (config→objects) | IMPLEMENTED · TESTED IN SOFTWARE | selects actuator+air from config, rebuild switches mechanism, safe state |
+| `MidiStreamParser` | IMPLEMENTED · TESTED IN SOFTWARE | running status, velocity-0 NoteOff, real-time bytes, bounded SysEx |
+| `MidiTransportBridge` | IMPLEMENTED · TESTED IN SOFTWARE | the two-plane split: notes → queue, SysEx → GMB only |
+
+## General-Midi-Boop v2 control plane (`core/gmb/`)
+
+See **[GMB_PROTOCOL.md](GMB_PROTOCOL.md)** for the full description.
+
+| Subsystem | Status | Notes |
+|-----------|--------|-------|
+| `GmbProtocol` (constants + 7-bit codecs) | IMPLEMENTED · TESTED IN SOFTWARE | 32/21/14-bit little-endian, boundary-tested |
+| `GmbIdentity` (model, firmware, instance-id fold) | IMPLEMENTED · TESTED IN SOFTWARE | hash, not truncation; never 0 |
+| `GmbCapabilities` (snapshot from `RuntimeConfig`) | IMPLEMENTED · TESTED IN SOFTWARE | strict non-clamping note resolution, channel merge, overlap-aware polyphony |
+| `GmbDescriptor` (ASCII-only serializer) | IMPLEMENTED · TESTED IN SOFTWARE | `\uXXXX` escaping incl. surrogate pairs; one serializer for SysEx + HTTP |
+| `GmbRevision` (signature + tracker) | IMPLEMENTED · TESTED IN SOFTWARE | canonical-descriptor hash drives the bump; 3 digests drive the change flags |
+| `GmbSysEx` (frame codec + strict parse) | IMPLEMENTED · TESTED IN SOFTWARE | exact 24/12-byte frames, direction + 7-bit + length checks |
+| `GmbSysExService` (pinned 0x10 transfer) | IMPLEMENTED · TESTED IN SOFTWARE | unique-index tracking, retries, idle timeout, token bucket |
+| `GmbMidiBridge` (transport-neutral routing) | IMPLEMENTED · TESTED IN SOFTWARE | one staged request, reply on the originating port |
+| `GmbRuntime` (facade) | IMPLEMENTED · TESTED IN SOFTWARE | `begin()` / `onConfigurationActivated()` |
+| Descriptor conformance vs GMB's own validator | TESTED IN SOFTWARE | C++ port + `node --test` port of `DescriptorProtocol.js` |
+| `espGmbInstanceId()` (eFuse MAC) | IMPLEMENTED · **NOT TESTED — REQUIRES HARDWARE** | uniqueness across two real boards |
+| `EspGmbRevisionStore` (NVS `Preferences`) | IMPLEMENTED · **NOT TESTED — REQUIRES HARDWARE** | namespace `swgmb`, never in `config.json` |
+| `DinMidiPort` (UART2 MIDI in/out) | IMPLEMENTED (structure) · COMPILES in CI · **NOT TESTED — REQUIRES HARDWARE** | the baseline bidirectional transport |
+| `GET /gmb/descriptor.json` | IMPLEMENTED (structure) · COMPILES in CI · **NOT TESTED — REQUIRES HARDWARE** | read-only, flag bit 0 only when genuinely reachable |
+| End-to-end discovery vs a real GMB install | **NOT TESTED — REQUIRES HARDWARE** | |
+| BLE-MIDI / RTP-MIDI / USB-MIDI GMB ports | **BLOCKED / TODO** | `IGmbMidiPort` is ready; the transport bring-up is not |
+| `excite.latency_ms` (acoustic onset) | **BLOCKED / TODO** | deliberately omitted until a real measurement exists |
+| Transpose-aware note semantics | PARTIAL — documented limitation | needs a General-Midi-Boop host change (see GMB_PROTOCOL.md §10) |
 
 ## Firmware / web integration (next phases)
 
@@ -64,6 +91,8 @@ Markers:
 | Async web-server adapter (`WebServerAdapter`) + universal sketch | IMPLEMENTED (structure) · EXPERIMENTAL · NOT TESTED — REQUIRES HARDWARE — now COMPILES in CI (universal WROOM + S3 + LittleFS image, hard-failing job) |
 | WebSocket keyboard + differential status push — Section 13 | PARTIAL (WS command path scaffolded) · TODO diff push |
 | forceSafeOutputs pin map, BLE/rtpMIDI bring-up, lock-free status snapshot | TODO |
+| DIN MIDI in/out + GMB control plane on the control-plane loop (`MainApp::loop`) | IMPLEMENTED (structure) · COMPILES in CI · NOT TESTED — REQUIRES HARDWARE |
+| ESP32 platform layer syntax-checked natively (both Arduino-ESP32 API generations, both boards) | IMPLEMENTED · part of `make -C tests` |
 
 ## Universal web UI (`esp32/webui/`)
 

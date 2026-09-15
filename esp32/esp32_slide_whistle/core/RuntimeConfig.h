@@ -48,6 +48,13 @@ struct MidiConfig {
     bool din = true, ble = true, rtp = false, usb = false;   // usb only on S2/S3
     bool webKeyboard = true;
     int8_t transpose = 0;
+    // DIN UART pins. Both default to UNASSIGNED (-1) for the same reason every
+    // actuator pin does: a hardcoded board-specific pin could drive a GPIO the
+    // user wired to something else. DIN input needs dinRxPin; a MIDI OUT
+    // (dinTxPin) is what makes the bus bidirectional, and therefore what makes
+    // automatic General-Midi-Boop discovery possible at all.
+    int8_t dinRxPin = -1;
+    int8_t dinTxPin = -1;
 };
 
 struct InstrumentConfig {
@@ -97,6 +104,15 @@ inline void claimServo(HardwareResourceValidator& v, const ServoMotionConfig& s,
 inline void buildClaims(HardwareResourceValidator& v, const RuntimeConfig& c) {
     v.reset();
     v.setBoard(c.device.board == BoardKind::Esp32S3 ? BoardProfile::s3() : BoardProfile::wroom());
+    // --- DIN MIDI UART pins ---
+    // Claimed (not required) so DIN stays optional: -1 simply means "not wired".
+    // RX is an input, so an input-only GPIO is legal for it; TX is an output and
+    // the validator rejects an input-only pin there. Both go through the SAME
+    // collision check as every actuator pin.
+    if (c.midi.din) {
+        v.claimPin(c.midi.dinRxPin, false, false, "midi.dinRxPin", "MIDI DIN RX");
+        v.claimPin(c.midi.dinTxPin, true,  false, "midi.dinTxPin", "MIDI DIN TX");
+    }
     for (uint8_t n = 0; n < c.instrumentCount && n < MAX_INSTRUMENTS; ++n) {
         const InstrumentConfig& in = c.instruments[n];
         if (!in.enabled) continue;
