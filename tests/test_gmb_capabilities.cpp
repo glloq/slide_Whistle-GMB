@@ -599,3 +599,10 @@ TEST(gmb_descriptors_satisfy_the_gmb_validator_rules) {
         }
     }
 }
+
+TEST(gmb_an_empty_device_name_falls_back_instead_of_publishing_a_blank) {
+    RuntimeConfig c = makeConfig({ makeFlute(1, 60, 72) }, "");
+    const GmbSnapshot s = buildSnapshot(inputFor(c));
+    CHECK_EQ_STR(s.identity.deviceName, "Slide Whistle");
+    CHECK(!contains(descriptorFor(c), "\"name\":\"\""));
+}

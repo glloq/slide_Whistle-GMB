@@ -475,6 +475,9 @@ inline GmbSnapshot buildSnapshot(const GmbBuildInput& in) {
     if (!in.config) { snap.instruments.push_back(placeholder()); return snap; }
     const RuntimeConfig& c = *in.config;
     snap.identity.deviceName = std::string(c.device.name);
+    // `device.name` is a display label; an empty one would render as "" and give
+    // the host nothing to show. Fall back rather than publish a blank.
+    if (snap.identity.deviceName.empty()) snap.identity.deviceName = "Slide Whistle";
     const int transpose = int(c.midi.transpose);
 
     // --- collect the enabled physical flutes, bucketed by descriptor channel --
