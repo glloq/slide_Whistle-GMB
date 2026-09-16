@@ -21,6 +21,7 @@
 #include "AuthManager.h"
 #include "ConfigStore.h"
 #include "CommandQueue.h"
+#include "ConfigHandoff.h"
 #include "Presets.h"
 
 namespace swc {
@@ -169,13 +170,28 @@ inline bool configNeedsRestart(const RuntimeConfig& oo, const RuntimeConfig& nn)
     return false;
 }
 
+// §6: one rule, shared by the platform web adapter (which must refuse an
+// oversized upload BEFORE buffering it into heap — a big Content-Length is a
+// trivial heap-exhaustion DoS on a 320 KB device) and the tests. `have` is the
+// declared Content-Length on the first chunk, or the running accumulated size on
+// a chunked upload with no length. Refuse once it passes the cap.
+inline bool httpBodyExceedsLimit(size_t have, size_t cap) { return have > cap; }
+
 class ApiRouter {
 public:
     void begin(AuthManager* auth, ConfigStore* store, RuntimeConfig* live,
                ICommandSink* sink, IEntropy* entropy, IStatusSource* status) {
         auth_ = auth; store_ = store; live_ = live; sink_ = sink; entropy_ = entropy; status_ = status;
     }
+    // Cross-core config handoff (review #9 §4.2/§4.3). When set, a dynamic-only
+    // apply is published here so the RT core copies a whole, consistent config out
+    // of it — instead of the RT core reading `*live_` while this core rewrites it.
+    // Optional: without it (portable API tests) the reply semantics are unchanged.
+    void setConfigHandoff(ConfigHandoff* h) { handoff_ = h; }
     void setMaxBodyBytes(size_t n) { maxBody_ = n; }
+    // Body-size cap, exposed so the platform web adapter can refuse an oversized
+    // upload BEFORE buffering the whole thing into heap (review #9 §6).
+    size_t maxBodyBytes() const { return maxBody_; }
     bool restartRequired() const { return restartRequired_; }
     bool restartRequested() const { return restartRequested_; }
     void clearRestartRequested() { restartRequested_ = false; }
@@ -302,8 +318,12 @@ private:
         if (rr) {
             restartRequired_ = true;       // hardware change: needs reboot
         } else if (sink_) {
-            // Dynamic-only change: tell the RT task to apply it. Only claim it is
-            // applied if it actually made it onto the queue (review #5).
+            // Dynamic-only change: publish the whole config to the cross-core
+            // handoff FIRST (so the RT core copies a consistent snapshot, never a
+            // struct we are mid-writing, review #9 §4.2/§4.3), THEN tell the RT
+            // task to apply it. Only claim it is applied if the command actually
+            // made it onto the queue (review #5).
+            if (handoff_) handoff_->publish(cand);
             Command c{}; c.type = CommandType::ApplyDynamicConfig;
             dynQueued = sink_->push(c);
             // Queue full → record a REAL pending apply that servicePending()
@@ -421,6 +441,7 @@ private:
     AuthManager*   auth_ = nullptr;
     ConfigStore*   store_ = nullptr;
     RuntimeConfig* live_ = nullptr;
+    ConfigHandoff* handoff_ = nullptr;   // cross-core config publish (#4.2/#4.3)
     ICommandSink*  sink_ = nullptr;
     IEntropy*      entropy_ = nullptr;
     IStatusSource* status_ = nullptr;
