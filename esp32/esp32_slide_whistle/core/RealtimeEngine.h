@@ -22,6 +22,12 @@
 
 namespace swc {
 
+// Pitch-bend range the engine applies to an incoming 14-bit bend. It is a single
+// named constant so the GMB descriptor derives `pitch_bend.range_semitones` from
+// the value the runtime REALLY uses; should the range ever become configurable,
+// both sides move together instead of drifting apart.
+static constexpr float DEFAULT_PITCH_BEND_RANGE_SEMITONES = 2.0f;
+
 // Execution acknowledgement for a direct command (Home/Jog/Test/Rearm). The API
 // returns only "queued"; this lets a client confirm the RT task actually acted
 // on the command — in particular that it was NOT silently dropped for an unknown
@@ -38,9 +44,10 @@ class RealtimeEngine {
 public:
     void begin(Instrument** instruments, uint8_t count, CommandQueue<QN>* queue) {
         inst_ = instruments; count_ = count; q_ = queue;
-        bendRangeSemis_ = 2.0f;
+        bendRangeSemis_ = DEFAULT_PITCH_BEND_RANGE_SEMITONES;
     }
     void setPitchBendRange(float semis) { bendRangeSemis_ = semis; }
+    float pitchBendRange() const { return bendRangeSemis_; }
     // Global MIDI transpose (semitones). Applied to NoteOn/NoteOff at the single
     // convergence point for every source, since the real path is the command
     // queue, not MidiRouter (review #5 §12). MainApp sets it from config.midi.
@@ -403,7 +410,7 @@ private:
     Instrument**       inst_ = nullptr;
     uint8_t            count_ = 0;
     CommandQueue<QN>*  q_ = nullptr;
-    float              bendRangeSemis_ = 2.0f;
+    float              bendRangeSemis_ = DEFAULT_PITCH_BEND_RANGE_SEMITONES;
     int8_t             transpose_ = 0;
     const ConfigHandoff* handoff_ = nullptr;    // cross-core config source (#4.2/#4.3)
     RuntimeConfig      applied_{};              // RT-private copy of the applied config

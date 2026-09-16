@@ -42,6 +42,9 @@ const CONFIG_HW_PATHS = [
   "network.apEnabled", "network.apSsid", "network.requireAuth",
   "network.disableApWhenConnected", "network.allowedOrigin",
   "midi.din", "midi.ble", "midi.rtp", "midi.usb", "midi.webKeyboard",
+  // The DIN UART is opened once at boot, so changing its pins only reaches
+  // the hardware after a reboot (mirrors configNeedsRestart in ApiRouter.h).
+  "midi.dinRxPin", "midi.dinTxPin",
 ];
 
 function get(obj, path) {

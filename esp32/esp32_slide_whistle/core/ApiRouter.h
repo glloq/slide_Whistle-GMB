@@ -15,6 +15,7 @@
 #ifndef SWC_CORE_APIROUTER_H
 #define SWC_CORE_APIROUTER_H
 
+#include <atomic>
 #include <cstring>
 
 #include "ApiResponse.h"
@@ -136,9 +137,12 @@ inline bool configNeedsRestart(const RuntimeConfig& oo, const RuntimeConfig& nn)
         std::strcmp(on.apSsid, nnw.apSsid) != 0 ||
         std::strcmp(on.allowedOrigin, nnw.allowedOrigin) != 0) return true;
     // MIDI TRANSPORT enable flags need bring-up at boot (transpose stays dynamic).
+    // The DIN UART pins are bring-up too: the port is opened once at boot, so a
+    // pin change only reaches the hardware after a reboot.
     const auto& om = oo.midi; const auto& nm = nn.midi;
     if (om.din != nm.din || om.ble != nm.ble || om.rtp != nm.rtp ||
-        om.usb != nm.usb || om.webKeyboard != nm.webKeyboard) return true;
+        om.usb != nm.usb || om.webKeyboard != nm.webKeyboard ||
+        om.dinRxPin != nm.dinRxPin || om.dinTxPin != nm.dinTxPin) return true;
     for (uint8_t i = 0; i < nn.instrumentCount && i < MAX_INSTRUMENTS; ++i) {
         const InstrumentConfig& a = oo.instruments[i];
         const InstrumentConfig& b = nn.instruments[i];
@@ -195,6 +199,15 @@ public:
     bool restartRequired() const { return restartRequired_; }
     bool restartRequested() const { return restartRequested_; }
     void clearRestartRequested() { restartRequested_ = false; }
+
+    // Monotonic counter, bumped ONLY when a configuration has been validated,
+    // persisted AND made live (applyCandidate / factory reset). It is the single
+    // hook the GMB control plane watches to rebuild its descriptor: a rejected
+    // or failed write never moves it, so a bad POST can never move the published
+    // descriptor. `lastActivationNeededRestart()` tells the watcher whether the
+    // change still needs a reboot to reach the hardware.
+    uint32_t configActivationSeq() const { return configActivationSeq_.load(std::memory_order_acquire); }
+    bool lastActivationNeededRestart() const { return lastActivationRestart_; }
 
     // Retry a dynamic-config apply that couldn't be queued earlier (queue full).
     // Called from the network loop AND at the start of every request so the
@@ -290,6 +303,7 @@ private:
         if (!store_->factoryReset(d)) return reply(500, apiErr("PERSIST_FAILED", "could not write default config"));
         bool rr = configNeedsRestart(*live_, d);
         *live_ = d; restartRequired_ = restartRequired_ || rr;
+        markConfigActivated(rr);
         JsonValue data = JsonValue::makeObj(); data.set("restart_required", rr);
         return reply(200, apiOk(data));
     }
@@ -314,6 +328,7 @@ private:
         if (!store_->save(cand)) return reply(500, apiErr("PERSIST_FAILED", "could not persist config"));
         bool rr = configNeedsRestart(*live_, cand);
         *live_ = cand;
+        markConfigActivated(rr);
         bool dynQueued = false;
         if (rr) {
             restartRequired_ = true;       // hardware change: needs reboot
@@ -433,6 +448,13 @@ private:
         return "unauth";
     }
 
+    // Publish the activation AFTER *live_ has been updated, with a release store
+    // so a watcher that observes the new counter also observes the new config.
+    void markConfigActivated(bool restartRequired) {
+        lastActivationRestart_ = restartRequired;
+        configActivationSeq_.fetch_add(1, std::memory_order_release);
+    }
+
     bool ctJson(const ApiRequest& r) const { return r.contentType.find("application/json") != std::string::npos; }
     // returns true if body parsed; out.type stays Null on failure
     bool parseJson(const ApiRequest& r, JsonValue& out) { return jsonParse(r.body, out, nullptr); }
@@ -450,6 +472,8 @@ private:
     bool           restartRequested_ = false;
     bool           dynApplyPending_ = false;   // a dynamic apply awaiting queue space
     uint32_t       cmdSeq_ = 0;     // monotonic id stamped on each enqueued command
+    std::atomic<uint32_t> configActivationSeq_{0};
+    bool           lastActivationRestart_ = false;
 };
 
 } // namespace swc

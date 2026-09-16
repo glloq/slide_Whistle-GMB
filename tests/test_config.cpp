@@ -487,3 +487,88 @@ TEST(config_air_servo_us_roundtrip) {
     CHECK_EQ(d.instruments[0].air.flow.servoMinUs, 900);
     CHECK_EQ(d.instruments[0].air.angle.servoMaxUs, 1900);
 }
+
+// --- DIN MIDI UART pins (added for GMB's bidirectional transport) -----------
+
+TEST(config_din_pins_roundtrip_and_default_unassigned) {
+    // The factory default must leave both pins UNASSIGNED, like every other pin:
+    // a hardcoded board-specific default could drive a GPIO the user wired to
+    // something else.
+    RuntimeConfig d = defaultConfig();
+    CHECK_EQ(d.midi.dinRxPin, -1);
+    CHECK_EQ(d.midi.dinTxPin, -1);
+
+    RuntimeConfig c = defaultConfig();
+    c.midi.dinRxPin = 4;
+    c.midi.dinTxPin = 17;
+    RuntimeConfig back;
+    ConfigDecodeResult r = configFromJson(configToJson(c), back);
+    CHECK(r.ok);
+    CHECK(r.checksumOk);
+    CHECK_EQ(back.midi.dinRxPin, 4);
+    CHECK_EQ(back.midi.dinTxPin, 17);
+}
+
+TEST(config_din_pins_are_rejected_not_clamped_when_out_of_range) {
+    RuntimeConfig out;
+    const char* tooHigh = "{\"schemaVersion\":4,\"midi\":{\"dinRxPin\":99},\"instrumentCount\":1}";
+    const char* tooLow  = "{\"schemaVersion\":4,\"midi\":{\"dinTxPin\":-2},\"instrumentCount\":1}";
+    CHECK(!configFromJson(tooHigh, out).ok);
+    CHECK(!configFromJson(tooLow, out).ok);
+}
+
+TEST(config_din_rx_and_tx_must_differ) {
+    RuntimeConfig c = defaultConfig();
+    c.midi.dinRxPin = 17;
+    c.midi.dinTxPin = 17;
+    CHECK(!validateStructural(c).empty());
+    c.midi.dinTxPin = 18;
+    CHECK(validateStructural(c).empty());
+    // Both unassigned is fine — DIN simply is not wired.
+    c.midi.dinRxPin = c.midi.dinTxPin = -1;
+    CHECK(validateStructural(c).empty());
+}
+
+TEST(config_din_pins_take_part_in_the_global_gpio_check) {
+    RuntimeConfig c = defaultConfig();
+    c.midi.din = true;
+    c.midi.dinRxPin = 34;      // input-only GPIO: legal for RX
+    c.midi.dinTxPin = 17;
+    HardwareResourceValidator v1; buildClaims(v1, c);
+    CHECK(!HardwareResourceValidator::hasErrors(v1.validate()));
+
+    // ... but NOT for TX, which is an output.
+    c.midi.dinTxPin = 35;
+    HardwareResourceValidator v2; buildClaims(v2, c);
+    CHECK(HardwareResourceValidator::hasErrors(v2.validate()));
+
+    // A pin already claimed by an instrument collides.
+    c.midi.dinTxPin = 17;
+    c.instruments[0].enabled = true;
+    c.instruments[0].motion.type = SlideDriveType::StepDir;
+    c.instruments[0].motion.stepper.stepPin = 17;       // same pin as DIN TX
+    c.instruments[0].motion.stepper.dirPin = 26;
+    c.instruments[0].motion.stepper.endstopMin.pin = 36;
+    HardwareResourceValidator v3; buildClaims(v3, c);
+    CHECK(HardwareResourceValidator::hasErrors(v3.validate()));
+
+    // With DIN disabled the pins are not claimed at all.
+    c.midi.din = false;
+    HardwareResourceValidator v4; buildClaims(v4, c);
+    bool collides = false;
+    for (const auto& i : v4.validate())
+        if (i.code == "GPIO_CONFLICT") collides = true;
+    CHECK(!collides);
+}
+
+TEST(config_v3_migration_leaves_din_pins_unassigned) {
+    // A legacy export knows nothing about DIN pins; migration must not invent
+    // one, it must leave the transport unwired until the user assigns it.
+    const char* legacy = "{\"instruments\":[{\"ch\":1,\"nMin\":48,\"nMax\":84}]}";
+    RuntimeConfig out;
+    ConfigDecodeResult r = configFromJson(legacy, out);
+    CHECK(r.ok);
+    CHECK(r.migrated);
+    CHECK_EQ(out.midi.dinRxPin, -1);
+    CHECK_EQ(out.midi.dinTxPin, -1);
+}

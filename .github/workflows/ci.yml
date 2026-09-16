@@ -13,6 +13,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build & run portable core tests
         run: make -C tests
+      # The checked-in GMB descriptor example is generated from the real
+      # capability builder; regenerating it must be a no-op.
+      - name: GMB descriptor fixture is up to date
+        run: |
+          make -C tests fixture
+          git diff --exit-code tests/fixtures/gmb_descriptor_reference.json
       # The suite fails CI if the default config has a GPIO collision, if any
       # preset is missing/invalid, or if a safety invariant regresses
       # (Sections 18 & 19).
@@ -106,6 +112,12 @@ jobs:
             echo "checking $f"; node --check "$f"; done
       - name: Universal UI logic tests (node --test)
         run: node --test tests/js/ui.test.mjs
+      # Checks the descriptor this firmware publishes against faithful ports of
+      # General-Midi-Boop's OWN consumer rules (validateDescriptor,
+      # assembleChunks, parseGmbHandshake), so a change that the real host would
+      # reject fails here rather than on a bench.
+      - name: GMB descriptor conformance (node --test)
+        run: node --test tests/js/gmb-descriptor.test.mjs
 
   clang-format:
     name: clang-format (informational)

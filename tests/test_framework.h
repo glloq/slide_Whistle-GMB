@@ -88,4 +88,15 @@ inline int run_all() {
         }                                                                     \
     } while (0)
 
+// String equality with a readable failure message (std::string / const char*).
+#define CHECK_EQ_STR(a, b)                                                    \
+    do {                                                                      \
+        ++::swctest::checks();                                                 \
+        std::string _sa = (a); std::string _sb = (b);                         \
+        if (_sa != _sb)                                                       \
+            ::swctest::report_fail(__FILE__, __LINE__,                        \
+                std::string("CHECK_EQ_STR(" #a ", " #b ")\n      got: ") + _sa + \
+                std::string("\n      want: ") + _sb);                          \
+    } while (0)
+
 #endif // SWC_TEST_FRAMEWORK_H

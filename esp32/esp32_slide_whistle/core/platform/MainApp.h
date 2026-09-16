@@ -7,6 +7,12 @@
  *   Core 1 (rt)  : deterministic vTaskDelayUntil loop → RealtimeEngine.tick()
  *                  (drains the queue, ticks actuators/air/sequencers).
  *
+ * The Arduino loop task additionally runs the CONTROL PLANE: it drains the DIN
+ * MIDI UART (channel voice → MidiRouter → the same command queue; SysEx → the
+ * GMB bridge) and services General-Midi-Boop discovery. Nothing there touches a
+ * GPIO: descriptor rendering, hashing and NVS access stay well away from the
+ * real-time actuator task, and GMB never actuates anything.
+ *
  * Boot is safe-by-construction (Section 12): critical outputs are forced to a
  * safe state, config is loaded + validated, instruments are built de-energised,
  * and only a validated, homed system reaches READY.
@@ -18,6 +24,8 @@
 #if defined(ARDUINO)
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <WiFi.h>
 #include <Preferences.h>
 #include <ESPAsyncWebServer.h>
@@ -30,9 +38,11 @@
 #include "../ApiRouter.h"
 #include "../RealtimeEngine.h"
 #include "../InstrumentRuntime.h"
+#include "../MidiRouter.h"
 #include "../StatusSnapshot.h"
 #include "EspSinks.h"
 #include "EspEntropy.h"
+#include "EspGmb.h"
 #include "WebServerAdapter.h"
 
 namespace swc {
@@ -104,6 +114,27 @@ public:
         router_.begin(&auth_, &store_, &config_, &sink_, &entropy_, &status_);
         router_.setConfigHandoff(&handoff_);
 
+        // --- General-Midi-Boop control plane -------------------------------
+        // The instance id comes from the eFuse MAC, so it survives reboots and
+        // configuration changes and differs between boards. The revision record
+        // lives in NVS, never in config.json.
+        gmbDocMux_ = xSemaphoreCreateMutex();
+        gmb_.begin(gmbInput(cfgOk), &gmbStore_);
+        gmbConfigSeq_ = router_.configActivationSeq();
+        publishGmbHttpDoc();
+        // DIN MIDI: the baseline BIDIRECTIONAL transport. It opens only when the
+        // user assigned an RX pin; discovery additionally needs the TX pin, and
+        // the push-notification flag follows that automatically.
+        //
+        // Gated on cfgOk on purpose. buildClaims() claims the DIN pins, so a
+        // validated config is what PROVES the TX pin is not also an actuator pin
+        // — and driving a MIDI byte stream onto a solenoid gate or a stepper STEP
+        // input would be a real hazard, not a cosmetic one. On an invalid config
+        // the controller stays reachable over the AP, where the descriptor still
+        // reports `configured: false`.
+        if (cfgOk && din_.begin(config_.midi, &midiRouter_, &gmb_.bridge()))
+            gmb_.bridge().registerPort(&din_);
+
         startNetwork();
 
         // 5. runnable config → home before declaring READY (#10). If not
@@ -128,6 +159,11 @@ public:
     void loop() {
         ws_.cleanupClients();
         router_.servicePending();   // retry a queued-full dynamic apply (#4 §P1)
+        // Control plane. DIN bytes become queue commands (never direct
+        // actuation) and GMB SysEx is answered here, off the real-time task.
+        din_.poll();
+        gmb_.service(millis());
+        serviceGmbConfigActivation();
         // Restart is owned by the RT task: enqueue a SafeRestart command, then
         // wait for the RT task to reach a safe state before rebooting — the
         // network task never touches the actuators directly (review #4 §P0).
@@ -143,7 +179,9 @@ public:
             delay(200);          // let the safe-state writes settle / clients flush
             ESP.restart();
         }
-        delay(5);
+        // A live DIN input needs a tighter cadence than the 5 ms housekeeping
+        // tick: at 31250 baud a 5 ms pause is ~15 bytes of added note latency.
+        delay(din_.isOpen() ? 1 : 5);
     }
 
 private:
@@ -303,6 +341,56 @@ private:
 #endif
     }
 
+    // --- General-Midi-Boop control plane ------------------------------------
+
+    // Everything GMB announces is derived from the ACTIVE configuration; there
+    // is no second, hand-maintained profile anywhere.
+    gmb::GmbBuildInput gmbInput(bool configValid) {
+        gmb::GmbBuildInput in;
+        in.config      = &config_;
+        in.configValid = configValid;
+        in.identity.instanceId = espGmbInstanceId();
+        in.identity.deviceName = std::string(config_.device.name);
+        // The range the engine REALLY applies, not a hardcoded 2.
+        in.pitchBendRangeSemitones = engine_.pitchBendRange();
+        return in;
+    }
+
+    // Re-validate the live configuration exactly as setup() did, so an
+    // instrument that is enabled but sits on an invalid config is announced as
+    // unconfigured rather than with fabricated capabilities.
+    bool liveConfigValid() {
+        HardwareResourceValidator v; buildClaims(v, config_);
+        if (HardwareResourceValidator::hasErrors(v.validate())) return false;
+        return !fsRecovery_;
+    }
+
+    // Copy the published descriptor into the buffer the async web server reads.
+    // A mutex (not a spinlock) because both sides copy a std::string.
+    void publishGmbHttpDoc() {
+        const std::string& doc = gmb_.descriptorJson();
+        if (gmbDocMux_ && xSemaphoreTake(gmbDocMux_, portMAX_DELAY) == pdTRUE) {
+            gmbHttpDoc_ = doc;
+            xSemaphoreGive(gmbDocMux_);
+        } else {
+            gmbHttpDoc_ = doc;
+        }
+    }
+
+    // Rebuild the descriptor when — and ONLY when — a configuration has been
+    // validated, persisted and activated. A rejected POST never bumps the
+    // counter, so it can never move the published descriptor.
+    void serviceGmbConfigActivation() {
+        const uint32_t seq = router_.configActivationSeq();
+        if (seq == gmbConfigSeq_) return;
+        gmbConfigSeq_ = seq;
+        const bool restartNeeded = router_.lastActivationNeededRestart();
+        // A no-op save returns false here: no revision bump, no NVS write and no
+        // block 0x11 notification.
+        if (gmb_.onConfigurationActivated(gmbInput(liveConfigValid()), restartNeeded))
+            publishGmbHttpDoc();
+    }
+
     void startNetwork() {
         if (config_.network.apEnabled) {
             uint32_t r[2] = { esp_random(), esp_random() };
@@ -312,8 +400,23 @@ private:
         // TODO: station mode + rtpMIDI + BLE-MIDI bring-up
     }
     void startWebServer() {
+        // Read-only GMB descriptor endpoint. It serves a COPY of the very bytes
+        // block 0x10 transfers — one serializer, one published document — so
+        // handshake descriptor_size, Content-Length and the reassembled SysEx
+        // payload always agree.
+        web_.setGmbDescriptorProvider([this](std::string& out) {
+            if (gmbDocMux_ && xSemaphoreTake(gmbDocMux_, pdMS_TO_TICKS(50)) != pdTRUE) return false;
+            out = gmbHttpDoc_;
+            if (gmbDocMux_) xSemaphoreGive(gmbDocMux_);
+            return !out.empty();
+        });
         web_.begin(&server_, &ws_, &router_, &auth_, &MainApp::millisNow);
         server_.begin();
+        // Announce handshake flag bit 0 only when the endpoint is genuinely
+        // reachable. Station mode is not implemented yet, so the AP is the only
+        // way in: with the AP disabled there is no HTTP route and the flag stays
+        // clear rather than sending GMB to an address that answers nothing.
+        gmb_.setHttpDescriptorAvailable(config_.network.apEnabled);
     }
 
     // Deterministic real-time loop — fixed period, no blocking (correction #3).
@@ -460,6 +563,14 @@ private:
     StatusSrc        status_{};
     SnapshotPublisher snap_;
     ConfigHandoff    handoff_;   // atomic desired→applied config handoff (§4.2/§4.3)
+
+    MidiRouter<QUEUE_LEN>   midiRouter_{queue_};
+    gmb::GmbRuntime         gmb_;
+    EspGmbRevisionStore     gmbStore_;
+    DinMidiPort<QUEUE_LEN>  din_;
+    SemaphoreHandle_t       gmbDocMux_ = nullptr;
+    std::string             gmbHttpDoc_;
+    uint32_t                gmbConfigSeq_ = 0;
 
     EspMotionSink    motion_[MAX_INSTRUMENTS];
     EspAirSink       air_[MAX_INSTRUMENTS];

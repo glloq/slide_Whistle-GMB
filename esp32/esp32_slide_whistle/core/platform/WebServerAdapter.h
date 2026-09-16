@@ -11,6 +11,7 @@
 
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
+#include <functional>
 #include <map>
 #include "../ApiRouter.h"
 #include "../AuthManager.h"
@@ -19,9 +20,41 @@ namespace swc {
 
 class WebServerAdapter {
 public:
+    // Supplies the CURRENTLY PUBLISHED GMB descriptor. It must hand back a copy
+    // of the very bytes the SysEx block 0x10 transfer serves — one serializer,
+    // one published document — and it must do so under whatever lock the owner
+    // uses, because this runs on the async server task. Returns false when no
+    // descriptor is published (level 0), which answers 404.
+    using GmbDescriptorProvider = std::function<bool(std::string&)>;
+
+    // Register BEFORE begin(); the route is only added when a provider is set,
+    // so a build without GMB exposes no extra surface at all.
+    void setGmbDescriptorProvider(GmbDescriptorProvider p) { gmbDoc_ = std::move(p); }
+
     void begin(AsyncWebServer* server, AsyncWebSocket* ws, ApiRouter* router,
                AuthManager* auth, uint32_t (*nowMs)()) {
         server_ = server; ws_ = ws; router_ = router; auth_ = auth; now_ = nowMs;
+
+        // GMB capability descriptor (General-Midi-Boop SYSEX_IDENTITY.md §7
+        // step 5). READ-ONLY metadata: GET only, no token, no side effect, and
+        // no path into the command queue — it can never move hardware. It is
+        // deliberately OUTSIDE /api/v1 so it inherits none of the control
+        // endpoints' auth surface and weakens none of it either.
+        if (gmbDoc_) {
+            server_->on("/gmb/descriptor.json", HTTP_GET, [this](AsyncWebServerRequest* r) {
+                std::string doc;
+                if (!gmbDoc_ || !gmbDoc_(doc) || doc.empty()) {
+                    r->send(404, "application/json",
+                            "{\"ok\":false,\"error\":{\"code\":\"NO_DESCRIPTOR\",\"message\":\"no descriptor published\"}}");
+                    return;
+                }
+                // Content-Length comes from the same byte count the handshake
+                // announced as descriptor_size and that block 0x10 reassembles.
+                auto* resp = r->beginResponse(200, "application/json", doc.c_str());
+                resp->addHeader("Cache-Control", "no-store");
+                r->send(resp);
+            });
+        }
 
         // REST: register EACH concrete route (ESPAsyncWebServer matches exact
         // paths, not prefixes — a single "/api/v1" would never match the
@@ -135,6 +168,7 @@ private:
     ApiRouter*       router_ = nullptr;
     AuthManager*     auth_ = nullptr;
     uint32_t (*now_)() = nullptr;
+    GmbDescriptorProvider gmbDoc_;
     std::map<uint32_t, std::string> wsTokens_;   // WS client id → session token
 public:
     AsyncWebSocket* ws() { return ws_; }

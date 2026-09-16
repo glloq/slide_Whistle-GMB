@@ -14,6 +14,14 @@ capteur de pression** intégré, et une interface web complète.
 > fonction, dans **[HARDWARE_MATRIX.md](HARDWARE_MATRIX.md)**. Tests natifs :
 > `make -C tests`.
 
+> 🔌 **Reconnaissance automatique General-Midi-Boop (v2).** Le firmware universel
+> répond au handshake GMB et sert un descripteur de capacités dérivé de sa
+> configuration active — protocole, transports, descripteur et limites connues
+> dans **[GMB_PROTOCOL.md](GMB_PROTOCOL.md)**. La découverte automatique exige un
+> MIDI **bidirectionnel** : DIN IN + OUT (broches `midi.dinRxPin` /
+> `midi.dinTxPin`), ou l'endpoint HTTP `GET /gmb/descriptor.json`. Non validé sur
+> matériel.
+
 ---
 
 ## 🏗 Architecture

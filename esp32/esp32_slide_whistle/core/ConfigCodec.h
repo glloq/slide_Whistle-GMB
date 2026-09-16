@@ -527,6 +527,10 @@ inline std::string validateStructural(const RuntimeConfig& c) {
     }
     // USB MIDI is impossible on a classic WROOM
     if (c.midi.usb && c.device.board == BoardKind::Esp32Wroom) return "USB MIDI unavailable on WROOM";
+    // One UART cannot use the same GPIO for RX and TX. buildClaims() would flag
+    // the collision too, but catching it structurally keeps the error precise.
+    if (c.midi.dinRxPin >= 0 && c.midi.dinRxPin == c.midi.dinTxPin)
+        return "midi.dinRxPin and midi.dinTxPin must differ";
     return "";
 }
 
@@ -548,6 +552,8 @@ inline std::string configToJson(const RuntimeConfig& c) {
     mi.set("din", c.midi.din); mi.set("ble", c.midi.ble); mi.set("rtp", c.midi.rtp);
     mi.set("usb", c.midi.usb); mi.set("webKeyboard", c.midi.webKeyboard);
     mi.set("transpose", (int)c.midi.transpose);
+    mi.set("dinRxPin", (int)c.midi.dinRxPin);
+    mi.set("dinTxPin", (int)c.midi.dinTxPin);
     root.set("midi", mi);
     root.set("instrumentCount", (int)c.instrumentCount);
     JsonValue arr = JsonValue::makeArr();
@@ -619,6 +625,15 @@ inline ConfigDecodeResult configFromJson(const std::string& text, RuntimeConfig&
             long tr = mi->int_or("transpose", cfg.midi.transpose);
             if (tr < -64 || tr > 63) { r.error = "midi.transpose out of -64..63"; return r; }
             cfg.midi.transpose = (int8_t)tr;
+            // DIN UART pins: -1 = unassigned, otherwise a plausible GPIO number.
+            // Rejected (not clamped) out of range, like every other pin field, so
+            // a malformed config never silently becomes a different pin.
+            long rx = mi->int_or("dinRxPin", cfg.midi.dinRxPin);
+            long tx = mi->int_or("dinTxPin", cfg.midi.dinTxPin);
+            if (rx < -1 || rx > 48) { r.error = "midi.dinRxPin out of -1..48"; return r; }
+            if (tx < -1 || tx > 48) { r.error = "midi.dinTxPin out of -1..48"; return r; }
+            cfg.midi.dinRxPin = (int8_t)rx;
+            cfg.midi.dinTxPin = (int8_t)tx;
         }
         // Reject an out-of-range instrumentCount rather than silently clamping
         // it (review #6 §14) — a clamp would hide a malformed config.
